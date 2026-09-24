@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { type Backends, initPlan, newTask, planPath, updatePlan, registryPath, saveWorker } from '@crewboard/core'
+import { type Backends, initPlan, newTask, planPath, updatePlan, registryPath, saveWorker, workerSettingsProblem } from '@crewboard/core'
 import { resolvedWorkers } from '../src/host/actions.js'
 import { OrchestraService, type Watcher } from '../src/host/service.js'
 import type { OrchestraSnapshot } from '../src/shared/types.js'
@@ -134,5 +134,40 @@ describe('OrchestraService', () => {
     for (let i = 0; i < 3; i++) await svc.refresh()
     expect(svc.snapshot().repos[0]).toMatchObject({ degraded: true, hasPlan: true, errorCode: 'plan_incompatible' })
     expect((await readdir(join(root, '.orchestration'))).filter((name) => name.includes('.corrupt-'))).toEqual([])
+  })
+})
+
+describe('broken worker settings never hide the repositories (B07)', () => {
+  it.each([
+    ['routing without its classes', JSON.stringify({ version: 1, profiles: {}, aliases: {}, routing: { classes: {}, disabled: {} } }), 'incomplete'],
+    ['a file that is not JSON', '{ "version": 1, routing', 'unreadable'],
+  ])('%s: every repository is listed and the snapshot carries the problem', async (_name, content, code) => {
+    const [a, b] = [await repo('A'), await repo('B')]
+    const home = await mkdtemp(join(tmpdir(), 'orch-broken-workers-'))
+    await mkdir(join(home, '.config', 'crewboard'), { recursive: true })
+    await writeFile(join(home, '.config', 'crewboard', 'profiles.json'), content)
+    const env = { HOME: home }
+    const svc = new OrchestraService({ config: { repos: [a, b], refreshMs: 60_000 }, backendsFor: () => idle, now: () => NOW, env, workersFor: () => resolvedWorkers(env, home), workerSettingsFor: () => workerSettingsProblem(env, home) })
+    const seen: OrchestraSnapshot[] = []
+    svc.subscribe((s) => seen.push(s))
+    await svc.refresh()
+    expect(svc.snapshot().repos.map((r) => r.goal)).toEqual(['A', 'B'])
+    expect(seen.at(-1)?.repos).toHaveLength(2)
+    expect(svc.snapshot().workerSettings).toMatchObject({ code })
+    if (code === 'incomplete') {
+      // Missing classes fall back to the defaults, so routing and the worker list still resolve.
+      expect(svc.snapshot().workerSettings).toMatchObject({ classes: ['code', 'design', 'review', 'research'] })
+      expect(svc.snapshot().repos[0]?.effectiveRouting?.routing.code.length).toBeGreaterThan(0)
+      expect(svc.snapshot().workers.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('a sound settings file carries no problem', async () => {
+    const a = await repo('A')
+    const home = await mkdtemp(join(tmpdir(), 'orch-sound-workers-'))
+    const env = { HOME: home }
+    const svc = new OrchestraService({ config: { repos: [a], refreshMs: 60_000 }, backendsFor: () => idle, now: () => NOW, env, workersFor: () => resolvedWorkers(env, home), workerSettingsFor: () => workerSettingsProblem(env, home) })
+    await svc.refresh()
+    expect(svc.snapshot().workerSettings).toBeUndefined()
   })
 })

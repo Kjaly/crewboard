@@ -99,7 +99,7 @@ describe('example plan', () => {
     const detail = await getTaskDetail(root, 'build', backends, nodeExec)
     expect(detail.status).toBe('in_review')
     expect(detail.report?.text).toContain('Checks: pnpm test passed')
-    expect(detail.verdict.kind).toBe('result')
+    expect(detail.verdict?.kind).toBe('result')
     expect(detail.changedFiles).toEqual(['welcome.md', 'welcome.png'])
     expect(detail.contract?.text).toContain('Review checklist')
     expect(detail.events.length).toBeGreaterThan(2)

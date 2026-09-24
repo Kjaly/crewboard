@@ -1,6 +1,6 @@
 {
   "name": "dsh-crewboard",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Orchestra panel and orchestra_* tools for DeepSeek Harness: plans, workers, supervision",
   "license": "MIT",
   "author": "Anton Varlamkin",

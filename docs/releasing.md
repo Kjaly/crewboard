@@ -15,7 +15,7 @@ A maintainer can release by updating both package versions together, merging the
 
 ## Before the first public release
 
-- Set the date of the `0.3.0` entry in [CHANGELOG.md](../CHANGELOG.md) to the tag date. Its introduction already says that the public history starts at this snapshot and that 0.1.0 and 0.2.0 were internal.
+- Set the date of the `0.4.0` entry in [CHANGELOG.md](../CHANGELOG.md) to the tag date. Its introduction already says that the public history starts at this snapshot and that 0.1.0 and 0.2.0 were internal.
 - Capture the screenshots listed in `scripts/check-docs.mjs` into `docs/assets/` from a live dsh host with demo data, then run `node scripts/check-docs.mjs --strict`. `pnpm lint` only reports missing screenshots as pending.
 - In a disposable dsh profile, install the packed plugin and confirm the steps marked "verify in your dsh" in [plugin setup](en/plugin-setup.md): the sidebar entry, the `repos` setting location, and the native confirmation dialog.
 - Enable GitHub private vulnerability reporting, which [SECURITY.md](../SECURITY.md) names as the reporting channel, and test it.
@@ -28,4 +28,4 @@ These are proposals for the GitHub repository settings of `Kjaly/crewboard`; the
 - **Website:** `https://www.npmjs.com/package/crewboard`
 - **Topics:** `ai-coding-agents`, `agent-orchestration`, `coding-agents`, `developer-tools`, `git-worktrees`, `deepseek-harness`, `cli`, `typescript`. Add a topic only if the released code matches it.
 - **Social preview:** a 1280×640 crop of the real graph and sidebar with the product name; no invented numbers.
-- **Release notes for v0.3.0:** one sentence of user value, install commands for both packages, three to five capabilities from the changelog, prerequisites (Node.js 24+, Git, dsh for the screen), known limits (macOS-only native confirmation, some CLI messages Russian only), and the migration note for `orch` and `~/.config/dsh-orchestra/`.
+- **Release notes for v0.4.0:** one sentence of user value, install commands for both packages, three to five capabilities from the changelog, prerequisites (Node.js 24+, Git, dsh for the screen), known limits (macOS-only native confirmation, some CLI messages Russian only), and the migration note for `orch` and `~/.config/dsh-orchestra/`.

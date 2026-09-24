@@ -13,7 +13,7 @@ import { makeRepo, makeTask } from './helpers.js'
 afterEach(() => { cleanup(); sessionStorage.clear(); window.history.replaceState(null, '', '#'); vi.restoreAllMocks() })
 const start = Date.parse('2026-09-23T12:00:00Z')
 const records: LedgerRecord[] = Array.from({ length: 550 }, (_, i) => ({ stepId: `step:${i + 1}`, index: i + 1, kind: i === 549 ? 'problem' : 'tool', label: i === 549 ? 'last failure' : `Read file-${i}.ts`, startedAt: start + i * 1000, durationMs: i === 549 ? null : 100, isError: i === 549, turn: Math.floor(i / 100) + 1, input: `file-${i}.ts`, ...(i === 549 ? { output: 'permission denied' } : {}) }))
-const trace: Trajectory = { start, end: start + 550_000, turns: [1, 2, 3, 4, 5, 6].map((index) => ({ index, start: start + (index - 1) * 100_000, end: start + index * 100_000 })), spans: [], records, totals: { turns: 6, toolCalls: 549, toolMs: 54900, modelMs: 0, durationMs: 550_000 }, cost: { runId: 'run_test', agent: 'dsh', durationSec: 550, tokens: { input: 1000, output: 200, cacheRead: 300, reasoning: 0 }, usd: .04 }, outcome: 'failed', humanWaitMs: 9000 }
+const trace: Trajectory = { start, end: start + 550_000, turns: [1, 2, 3, 4, 5, 6].map((index) => ({ index, start: start + (index - 1) * 100_000, end: start + index * 100_000 })), spans: [], records, totals: { turns: 6, toolCalls: 549, toolMs: 54900, modelMs: 0, durationMs: 550_000 }, cost: { runId: 'run_test', agent: 'dsh', durationSec: 550, tokens: { input: 1000, output: 200, cacheRead: 300, reasoning: 0 }, cashUsd: { value: .04, currency: 'USD', source: 'test' } }, outcome: 'failed', humanWaitMs: 9000 }
 
 it('opens a long run as a virtual ledger with totals, search, and full record inspection', async () => {
   setLang('en')
@@ -84,6 +84,17 @@ it('I10 resolves a run and step link beyond the first page', async () => {
   await waitFor(() => expect(screen.getByLabelText('Record inspector').textContent).toContain('last failure'))
   await waitFor(() => expect(document.activeElement?.getAttribute('data-step-id')).toBe('step:550'))
   expect(request).toHaveBeenCalledWith(repo.root, 'a', 'run_test', { seek: 'step:550' })
+})
+
+it('I10 focuses a linked step even when a frame arrives before the list scrolls to it', async () => {
+  // A busy browser can run an animation frame before React renders the scrolled window around the step.
+  vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => { callback(0); return 0 })
+  const repo = makeRepo([makeTask({ id: 'a' })])
+  window.history.replaceState(null, '', formatRoute({ repo: repo.root, plan: repo.planId ?? '_', view: 'review', task: 'a', tab: 'review-run', run: 'run_test', step: 'step:550' }))
+  const paged: Trajectory = { ...trace, records: records.slice(0, 100), totalSteps: 550, nextCursor: 'step:100' }
+  vi.spyOn(api, 'trace').mockResolvedValue({ ok: true, value: { ...paged, records: [records[549]!], nextCursor: null } })
+  render(<LedgerView trace={paged} repo={repo} target={{ taskId: 'a', taskTitle: 'Task', run: { runId: 'run_test', agent: 'dsh', startedAt: new Date(start).toISOString() } }} actions={() => null} />)
+  await waitFor(() => expect(document.activeElement?.getAttribute('data-step-id')).toBe('step:550'))
 })
 
 it('keeps ledger search complete when only the first page was initially loaded', async () => {

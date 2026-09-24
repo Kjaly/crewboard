@@ -8,7 +8,22 @@ import { type Spring, clamp, project, rubber, settled, snap, spring, springStep 
 
 export type Box = { minX: number; minY: number; maxX: number; maxY: number }
 
+/** The zoom-out floor for a plan that already fits: any further out is empty canvas. */
 const MIN_SCALE = 0.35
+/** The floor a huge plan may push the camera down to — below it a card is under a pixel tall. */
+const FLOOR_SCALE = 0.05
+/** The margin the whole plan keeps from the canvas edge at the zoom-out floor and in Overview. */
+export const OVERVIEW_PADDING = 24
+/** Screen room Overview keeps left of the plan for the far view's lane names (see lane-labels.ts). */
+export const LABEL_GUTTER = 132
+/**
+ * Below this scale a card's 12 px title renders under ~7 px — not text any more, only grey noise —
+ * so the graph switches to its far level of detail: blocks coloured by state, lane names at a
+ * constant screen size. The level carries a little hysteresis so a pinch resting on the threshold
+ * does not make the cards flicker between the two levels.
+ */
+export const DETAIL_SCALE = 0.6
+const DETAIL_HYSTERESIS = 0.02
 /** Fit defends a readable size before everything visible: the node title is 12 px, and
    below this scale it renders under the 11 px readability floor. */
 const FIT_MIN_SCALE = 11 / 12
@@ -20,6 +35,30 @@ const FOCUS_RESPONSE = 0.45
 export const LENS_RESPONSE = 0.24
 /** Only pointer movement this close to the release counts as a flick. */
 const FLICK_WINDOW_MS = 100
+
+/**
+ * The scale at which a box fills the viewport inside `padding`, whatever its readability, with the
+ * lane-name gutter kept free on the left.
+ */
+function wholeScale(box: Box, viewport: { width: number; height: number }, padding: number): number {
+  const w = Math.max(1, box.maxX - box.minX)
+  const h = Math.max(1, box.maxY - box.minY)
+  return Math.min(Math.max(1, viewport.width - padding * 2 - LABEL_GUTTER) / w, Math.max(1, viewport.height - padding * 2) / h)
+}
+
+/**
+ * How far out the camera may zoom: far enough to see the whole plan with a small margin, never
+ * below FLOOR_SCALE, and never above MIN_SCALE — a small plan keeps today's room to zoom out.
+ * Derived on every call, so a plan or a window that changed size moves the floor with it.
+ */
+export function zoomFloor(box: Box, viewport: { width: number; height: number }): number {
+  return clamp(wholeScale(box, viewport, OVERVIEW_PADDING), FLOOR_SCALE, MIN_SCALE)
+}
+
+/** The level of detail for a scale, given the level on screen now (the hysteresis needs it). */
+export function detailLevel(scale: number, current: 'near' | 'far' = 'near'): 'near' | 'far' {
+  return scale < DETAIL_SCALE + (current === 'far' ? DETAIL_HYSTERESIS : -DETAIL_HYSTERESIS) ? 'far' : 'near'
+}
 
 export type Camera = ReturnType<typeof createCamera>
 /** A place the camera can return to: where it was, how close, and whether the reader had placed it. */
@@ -38,6 +77,8 @@ export function createCamera() {
   let content: Box = { minX: 0, minY: 0, maxX: 960, maxY: 600 }
   let drag: { ox: number; oy: number } | null = null
   let touched = false
+  /** The framing an untouched camera repeats when the window or the plan changes size. */
+  let framing: 'fit' | 'overview' = 'fit'
   let history: Array<{ x: number; y: number; t: number }> = []
 
   /**
@@ -66,14 +107,16 @@ export function createCamera() {
   }
 
   /** One fit for whole-plan and «only these nodes»: the box is the only difference. */
-  const fitInto = (box: Box, reduced: boolean, padding: number, speed = FOCUS_RESPONSE) => {
+  const fitInto = (box: Box, reduced: boolean, padding: number, speed = FOCUS_RESPONSE, whole = false) => {
     const w = Math.max(1, box.maxX - box.minX)
     const h = Math.max(1, box.maxY - box.minY)
     const availW = Math.max(1, viewport.width - padding * 2)
     const availH = Math.max(1, viewport.height - padding * 2)
-    const next = clamp(availW / w, FIT_MIN_SCALE, 1)
+    const next = whole ? clamp(wholeScale(box, viewport, padding), FLOOR_SCALE, 1) : clamp(availW / w, FIT_MIN_SCALE, 1)
     response = speed
-    const nx = w * next <= availW ? (viewport.width - w * next) / 2 - box.minX * next : padding - box.minX * next
+    // The whole-plan frame centres the plan in what is left of the width after the lane-name gutter.
+    const gutter = whole ? LABEL_GUTTER : 0
+    const nx = w * next <= availW - gutter ? padding + gutter + (availW - gutter - w * next) / 2 - box.minX * next : padding + gutter - box.minX * next
     const ny = h * next <= availH ? (viewport.height - h * next) / 2 - box.minY * next : padding - box.minY * next
     targetX = nx
     targetY = ny
@@ -90,6 +133,10 @@ export function createCamera() {
     get scale() {
       return sc.x
     },
+    /** The current zoom-out floor — see `zoomFloor`. */
+    get minScale() {
+      return zoomFloor(content, viewport)
+    },
     get dragging() {
       return drag !== null
     },
@@ -103,6 +150,10 @@ export function createCamera() {
     /** World point under a viewport point — used by zoom and by node dragging. */
     toWorld(px: number, py: number): { x: number; y: number } {
       return { x: (px - x.x) / sc.x, y: (py - y.x) / sc.x }
+    },
+    /** Viewport point over a world point — places the far view's hover card. */
+    toScreen(wx: number, wy: number): { x: number; y: number } {
+      return { x: wx * sc.x + x.x, y: wy * sc.x + y.x }
     },
     setViewport(width: number, height: number): void {
       viewport = { width, height }
@@ -151,7 +202,7 @@ export function createCamera() {
       y.x = clamp(y.x + dy, l.minY, l.maxY)
     },
     zoomAt(px: number, py: number, factor: number): void {
-      const next = clamp(sc.x * factor, MIN_SCALE, MAX_SCALE)
+      const next = clamp(sc.x * factor, Math.min(sc.x, zoomFloor(content, viewport)), MAX_SCALE)
       if (next === sc.x) return
       touched = true
       const wx = (px - x.x) / sc.x
@@ -172,7 +223,22 @@ export function createCamera() {
      */
     fit(reduced: boolean, padding = 48): void {
       touched = false
+      framing = 'fit'
       fitInto(content, reduced, padding)
+    },
+    /**
+     * Overview (O): the whole plan on screen, however small that makes the cards — the graph
+     * switches to blocks below DETAIL_SCALE, so the picture stays legible as a map of the plan.
+     */
+    overview(reduced: boolean, padding = OVERVIEW_PADDING): void {
+      touched = false
+      framing = 'overview'
+      fitInto(content, reduced, padding, FOCUS_RESPONSE, true)
+    },
+    /** Repeat the last framing (Fit or Overview) for a camera the reader has not moved since. */
+    refit(reduced: boolean): void {
+      if (framing === 'overview') this.overview(reduced)
+      else this.fit(reduced)
     },
     /** A lens aims the same fit at its matches — and a deliberate move, so `touched`. */
     fitBox(box: Box, reduced: boolean, padding = 48, speed = FOCUS_RESPONSE): void {
@@ -226,6 +292,29 @@ export function createCamera() {
       }
       targetX = nx
       targetY = ny
+    },
+    /**
+     * A block clicked in the far view: fly to that task at a readable scale, centred. The same
+     * spring as every other scripted move, so a gesture can take the camera back mid-flight.
+     */
+    zoomTo(box: Box, reduced: boolean, scale = 1): void {
+      touched = true
+      response = FOCUS_RESPONSE
+      const next = clamp(scale, FIT_MIN_SCALE, MAX_SCALE)
+      const cx = (box.minX + box.maxX) / 2
+      const cy = (box.minY + box.maxY) / 2
+      const nx = viewport.width / 2 - cx * next
+      const ny = viewport.height / 2 - cy * next
+      if (reduced) {
+        snap(x, nx)
+        snap(y, ny)
+        snap(sc, next)
+        targetX = targetY = targetS = null
+        return
+      }
+      targetX = nx
+      targetY = ny
+      targetS = next
     },
     /** Double click: bring a task and its neighbours into view without changing the zoom. */
     focus(box: Box, reduced: boolean): void {

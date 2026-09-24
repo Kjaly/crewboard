@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Recipe } from '@crewboard/core'
 import type { OrchestraRepoSnapshot } from '../shared/types.js'
-import { api } from './api.js'
+import { api, type WelcomeWorkerStatus } from './api.js'
 import { t, useLang } from './i18n.js'
 import { openSession } from './layout.js'
 import { SpecPicker, type SpecMode } from './spec-picker.js'
@@ -9,7 +9,7 @@ import { SpecPicker, type SpecMode } from './spec-picker.js'
 const DEFAULT_RECIPE: Recipe = { setup: [], env: { unset: [] }, timeoutSec: 300 }
 export function Welcome({ repo, onPreset, onExample, onDraft, onWorkers }: { repo?: OrchestraRepoSnapshot; onPreset(): void; onExample(): void; onDraft(id: string): void; onWorkers(): void }) {
   useLang()
-  const [workers, setWorkers] = useState<Array<{ id: string; label: string; status: 'ready' | 'sign_in' | 'missing' }>>([])
+  const [workers, setWorkers] = useState<Array<{ id: string; label: string; status: WelcomeWorkerStatus }>>([])
   const [recipe, setRecipe] = useState<Recipe | null>(null)
   const [suggested, setSuggested] = useState<Recipe>(DEFAULT_RECIPE)
   const [editing, setEditing] = useState(false)

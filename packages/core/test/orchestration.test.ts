@@ -92,6 +92,17 @@ describe('orchestration', () => {
     expect(await code('zzz')).toBe('unknown_task')
   })
 
+  it('V-B19/start-refused refuses Start while the worker of a run whose supervisor died still lives', async () => {
+    const root = await repoWithPlan()
+    const backends = fakeBackends()
+    const backend = await backends.forAgent('dsh')
+    backend.status = async () => ({ status: 'running', terminal: false, exitCode: null, orphan: { workerPid: 4242 } })
+    const refused = await launchTask({ root, taskId: 'b', agent: 'dsh', skipPreflight: true, backends, exec: nodeExec, env: {}, home: root, now: () => NOW, lang: 'en' }).catch((e: unknown) => e)
+    expect(refused).toBeInstanceOf(LaunchError)
+    expect(refused).toMatchObject({ code: 'orphan_alive', vars: { pid: 4242 } })
+    expect((refused as LaunchError).message).toContain('4242')
+  })
+
   it('steers and stops the last run and records the steer note', async () => {
     const root = await repoWithPlan()
     const calls: string[] = []

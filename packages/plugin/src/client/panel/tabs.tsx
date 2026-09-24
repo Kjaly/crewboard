@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { TaskDetail, TaskSnapshot, Trajectory, WorkerInfo } from '../../shared/types.js'
 import { identityLabel, workerIdentity } from '../provider.js'
 import { api } from '../api.js'
-import { clock } from '../summary.js'
+import { clock, failureText } from '../summary.js'
 import { t, useLang } from '../i18n.js'
 import { noteText } from '../note-text.js'
 import type { TraceTarget } from './trace.js'
@@ -38,6 +38,8 @@ const groupLabel = (kind: Event['kind'], n: number) => {
 export function FeedTab({ detail }: { detail: TaskDetail | null }) {
   useLang()
   if (!detail) return <p className="orc-meta">{t('panel.tabs.feedLoading')}</p>
+  // The orchestrator's own work (rt1) has no run to follow: its account is the report in the overview.
+  if (detail.kind === 'root' && detail.runs.length === 0) return <p className="orc-meta">{t('panel.tabs.ownWork')}</p>
   if (detail.kind === 'decision' && detail.runs.length === 0) {
     const accepted = detail.notes.filter((n) => n.type === 'accept').at(-1)
     return (
@@ -48,7 +50,8 @@ export function FeedTab({ detail }: { detail: TaskDetail | null }) {
       </p>
     )
   }
-  if (detail.events.length === 0) return <p className="orc-meta">{t('panel.tabs.noEvents')}</p>
+  // A finished run with no events here did work all the same (B12): its steps are in the run ledger.
+  if (detail.events.length === 0) return <p className="orc-meta">{t(detail.runs.at(-1)?.finishedAt ? 'panel.tabs.noEventsFinished' : 'panel.tabs.noEvents')}</p>
   return (
     <ul className="orc-feed">
       {groupEvents(detail.events).map((group, i) => (
@@ -65,7 +68,7 @@ export function FeedTab({ detail }: { detail: TaskDetail | null }) {
             </details>
           ) : group.kind === 'action' || group.kind === 'file' ? (
             <span className="orc-feed__tool-label" title={group.events[0]?.text}>{group.events[0]?.text}</span>
-          ) : <span className="orc-ev__text">{group.kind === 'steer' ? <strong>{t('panel.tabs.yourSteer')} · </strong> : null}{group.events[0]?.text}</span>}
+          ) : <span className="orc-ev__text">{group.kind === 'steer' ? <strong>{t('panel.tabs.yourSteer')} · </strong> : null}{group.events[0]?.reason ? failureText(group.events[0].reason) : group.events[0]?.text}</span>}
         </li>
       ))}
     </ul>

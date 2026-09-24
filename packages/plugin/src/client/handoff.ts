@@ -16,6 +16,8 @@ const handoffTask = (task: TaskSnapshot): HandoffTask => ({
   kind: task.kind,
   ...(task.worker ? { worker: task.worker } : {}),
   ...(task.blockedBy.length ? { blockedBy: task.blockedBy } : {}),
+  ...(task.preparing ? { preparing: true } : {}),
+  ...(task.byOrchestrator ? { byOrchestrator: true } : {}),
 })
 
 export function taskHandoff(repo: RepoSnapshot, task: TaskSnapshot): string {

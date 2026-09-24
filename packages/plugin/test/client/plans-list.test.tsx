@@ -212,17 +212,25 @@ describe('draft review in the screen', () => {
     act(() => { FakeEventSource.last?.emit('snapshot', snapshot) })
   }
 
+  /**
+   * Waits on the button's text, then checks its role once. While the screen still renders, every mutation drops jsdom's
+   * style cache and each `getByRole` poll recomputes styles for the whole screen against the full stylesheet (~0.25 s
+   * a poll at load 45, ~0.8 s at load 60): four failed polls used up the timeout before the draft showed.
+   */
+  const approveShown = async () => {
+    await screen.findByText('Утвердить как план', {}, { timeout: 5000 })
+    expect(screen.getByRole('button', { name: 'Утвердить как план' })).toBeTruthy()
+  }
+
   it('restores draft review from its route after reload', async () => {
     window.history.replaceState(null, '', formatRoute({ repo: ROOT, plan: 'main', view: 'graph', draft: 'next' }))
     mountDraft()
     orchestraStore.startRouting()
-    // Restoring a route waits for the snapshot and the draft; a loaded full run needs more than 1 s.
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Утвердить как план' })).toBeTruthy(), { timeout: 5000 })
+    await approveShown()
     cleanup()
     mountDraft()
     orchestraStore.startRouting()
-    // Restoring a route waits for the snapshot and the draft; a loaded full run needs more than 1 s.
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Утвердить как план' })).toBeTruthy(), { timeout: 5000 })
+    await approveShown()
     window.history.replaceState(null, '', '/')
   })
 

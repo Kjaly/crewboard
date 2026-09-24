@@ -68,4 +68,14 @@ describe('вердикт задачи', () => {
     expect(facts.find((fact) => fact.sourceLine === 2)?.text).toBeUndefined()
     expect(verdictOf(detail()).facts.find((fact) => fact.sourceLine === 1)?.text).toBe('Тесты: 230 пройдены')
   })
+  it('не называет ссылку на проверки сырым заголовком markdown (rt1)', () => {
+    const text = 'Результат: получен\n\n## Checks\n- [x] pnpm test passed'
+    const fact = verdictOf(detail({ report: { runId: 'run_1', text, source: 'orchestrator', truncated: false } })).facts.find((f) => f.code === 'tests')
+    expect(fact).toMatchObject({ code: 'tests', sourceLine: 2 })
+    expect(fact?.text).toBeUndefined()
+  })
+  it('показывает строку проверок без разметки списка', () => {
+    const fact = verdictOf(detail({ report: { runId: 'run_1', text: 'Результат: получен\n- [x] **pnpm test** passed', source: 'final', truncated: false } })).facts.find((f) => f.code === 'tests')
+    expect(fact?.text).toBe('pnpm test passed')
+  })
 })

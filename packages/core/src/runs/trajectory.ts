@@ -18,7 +18,7 @@ export type Trajectory = {
   retainedRange?: { firstStepId: string | null; lastStepId: string | null; startedAt?: number | null; endedAt?: number | null; from: number; to: number; total: number }
   completeness?: 'complete' | 'partial' | 'live'
   cost?: RunCost
-  outcome?: 'completed' | 'failed' | 'cancelled'
+  outcome?: 'completed' | 'failed' | 'cancelled' | 'incomplete'
   reviewOutcome?: 'accepted' | 'awaiting' | 'returned'
   evidenceCapturedAt?: string
   humanWaitMs?: number

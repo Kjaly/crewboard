@@ -1,11 +1,19 @@
 import * as z from '../util/zod.js'
 
-export const TASK_KINDS = ['implement', 'review', 'research', 'decision'] as const
+/**
+ * `root` (rt1) is the orchestrator's own work — integration on a stand, starting processes, the owner's
+ * database: never handed to a worker, started with `start`, finished with `verify --done`, accepted by a person.
+ */
+export const TASK_KINDS = ['implement', 'review', 'research', 'decision', 'root'] as const
 /** Which worker list a task is routed to (see routing/routing.ts). */
 export const TASK_CLASSES = ['code', 'design', 'review', 'research'] as const
 export type TaskClass = (typeof TASK_CLASSES)[number]
-/** Statuses stored in plan.json. `running` and `blocked` are only derived (see graph.ts). */
-export const STORED_STATUSES = ['backlog', 'ready', 'in_review', 'accepted', 'rejected', 'superseded'] as const
+/**
+ * Statuses stored in plan.json. `running` and `blocked` are only derived (see graph.ts). `dropped` (w1f): a
+ * person closed the task as no longer needed — terminal, never ready again. Strict like every status (see
+ * below): an older build would read it as open work and schedule it, so it refuses the plan instead.
+ */
+export const STORED_STATUSES = ['backlog', 'ready', 'in_review', 'accepted', 'rejected', 'superseded', 'dropped'] as const
 
 const TASK_ID = /^[a-z0-9][a-z0-9-]*$/
 
@@ -55,7 +63,13 @@ function tolerate<S extends z.core.$ZodType>(label: string, fields: Tolerated, s
  */
 const kept = <T extends z.core.$ZodLooseShape>(shape: T) => z.looseObject(shape) as unknown as z.ZodMiniObject<z.core.util.Writeable<T>, z.core.$strip>
 
-const OUTCOMES = ['completed', 'failed', 'cancelled'] as const
+/**
+ * `incomplete` (bg1): the worker process finished cleanly, but its copy has uncommitted changes and its answer
+ * carries no result claim — it stopped mid-work, it did not hand anything in. Strict like the rest: an older build
+ * reading it as `completed` would put unfinished work in review, so it refuses the plan instead.
+ */
+const OUTCOMES = ['completed', 'failed', 'cancelled', 'incomplete'] as const
+export const INCOMPLETE_REASONS = ['no_report', 'no_claim'] as const
 const BILLING_MODES = ['api', 'subscription', 'promotional', 'unknown'] as const
 const IDENTITY_RESOLUTIONS = ['launch_snapshot', 'alias', 'legacy_inferred', 'unresolved'] as const
 const ATTEMPT_TRIGGERS = ['initial', 'human_relaunch', 'automatic_retry', 'unknown'] as const
@@ -70,6 +84,8 @@ const RunObject = kept({
   startedAt: z.string(),
   finishedAt: z.optional(z.string()),
   outcome: z.optional(z.enum(OUTCOMES)),
+  /** Why an `incomplete` run is one: no final answer at all, or an answer without a result claim; files left uncommitted. */
+  incomplete: z.optional(kept({ reason: z.enum(INCOMPLETE_REASONS), uncommitted: z.number() })),
   model: z.optional(z.string()),
   contractPath: z.optional(z.string()),
   contractRevision: z.optional(z.string()),
@@ -111,10 +127,12 @@ export type NoteEvent =
   | { kind: 'accepted'; evidence?: string }
   | { kind: 'rejected'; reason: string }
   | { kind: 'superseded'; by: string }
+  | { kind: 'dropped'; reason: string }
   | { kind: 'launched_outside_preset'; worker: string; preset?: string }
   | { kind: 'preset_fallback'; stale: string; worker: string; preset?: string }
   | { kind: 'steer'; delivery: 'delivered' | 'refused' | 'failed' | 'abandoned'; steerId: string; detail?: string; message: string }
   | { kind: 'worktree'; outcome: 'removed' | 'kept_recent' | 'kept_unmerged' }
+  | { kind: 'started'; by?: string }
 
 /**
  * The event shapes, checked by hand rather than by a zod union: a union with a fallback for unknown kinds
@@ -131,10 +149,12 @@ const EVENT_SHAPES: Record<NoteEvent['kind'], EventShape> = {
   accepted: { may: ['evidence'] },
   rejected: { need: ['reason'] },
   superseded: { need: ['by'] },
+  dropped: { need: ['reason'] },
   launched_outside_preset: { need: ['worker'], may: ['preset'] },
   preset_fallback: { need: ['stale', 'worker'], may: ['preset'] },
   steer: { need: ['steerId', 'message'], may: ['detail'], oneOf: { delivery: ['delivered', 'refused', 'failed', 'abandoned'] } },
   worktree: { oneOf: { outcome: ['removed', 'kept_recent', 'kept_unmerged'] } },
+  started: { may: ['by'] },
 }
 
 /** A stored event this build knows, reduced to its own fields; anything else (a newer build's kind) is undefined. */
@@ -191,6 +211,9 @@ export const ReviewIntervalSchema = tolerate('reviewInterval', { source: { value
  * The orchestrator's check of finished work, between «worker finished» and «waiting for you» (vr1).
  * `pending` — due, nobody took it yet; `checking` — the orchestrator took it; `checked` — done, `note`
  * says what was checked. Bound to the run it checks: a new run makes it stale.
+ *
+ * On a root task or a decision (rt1) there is no run: `checked` is the orchestrator's «done» — the root
+ * task's work is finished, the decision is prepared — and `report` points at its stored report.
  */
 export const CHECK_STATES = ['pending', 'checking', 'checked'] as const
 export type CheckState = (typeof CHECK_STATES)[number]
@@ -200,6 +223,8 @@ export const TaskCheckSchema = kept({
   at: z.string(),
   by: z.optional(z.string()),
   note: z.optional(z.string()),
+  /** Root tasks and decisions: the stored markdown report (`.orchestration/reports/…`), relative to the repository. */
+  report: z.optional(z.string()),
 })
 export type TaskCheck = z.infer<typeof TaskCheckSchema>
 
@@ -233,10 +258,19 @@ const TaskObject = kept({
   acceptance: z.optional(z.array(z.string())),
   sources: z.optional(z.array(z.string())),
   worktree: z.optional(kept({ path: z.string(), branch: z.string() })),
+  /**
+   * An accepted task's branch reached the base branch (w1d): recorded on sync once the branch is an ancestor of
+   * `into` and the copy holds nothing uncommitted. Crewboard never merges by itself — a person or the orchestrator
+   * does. `commit` — the branch tip at that moment; absent when the branch was already gone (deleted after its
+   * merge, or by worktree cleanup, which removes only merged copies).
+   */
+  merged: z.optional(kept({ at: z.string(), into: z.string(), commit: z.optional(z.string()) })),
   runs: z._default(z.array(RunSchema), []),
   notes: z._default(z.array(NoteSchema), []),
   reviewIntervals: z.optional(z.array(ReviewIntervalSchema)),
   check: z.optional(TaskCheckSchema),
+  /** Root tasks (rt1): the orchestrator took the work with `start` — «in work by the orchestrator». */
+  started: z.optional(kept({ at: z.string(), by: z.optional(z.string()) })),
   pos: z.optional(kept({ x: z.number(), y: z.number() })),
 })
 

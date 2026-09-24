@@ -22,9 +22,11 @@ export function noteFallbackText(event: NoteEvent, verdict?: Note['verdict']): s
     }
     case 'rejected': return event.reason
     case 'superseded': return `superseded by task ${event.by}`
+    case 'dropped': return `closed as not needed: ${event.reason}`
     case 'launched_outside_preset': return `Launched by hand outside the preset “${preset(event.preset)}”: ${event.worker}`
     case 'preset_fallback': return `Worker ${event.stale}, chosen by an agent, is no longer in the preset “${preset(event.preset)}” for this class — ran by the preset order instead: ${event.worker}. The assignment was cleared.`
     case 'steer': return `${event.delivery} [${event.steerId}]${event.detail ? ` (${event.detail})` : ''}: ${event.message}`
+    case 'started': return `taken in work by the orchestrator${by(event.by)}`
     case 'worktree': return event.outcome === 'removed' ? 'Worktree removed after acceptance.' : event.outcome === 'kept_recent' ? 'Worktree kept: one of the three most recently accepted.' : 'Worktree kept: branch is not merged yet.'
   }
 }

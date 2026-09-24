@@ -34,6 +34,12 @@ export function workerIdentity(id: string | undefined, workers?: readonly Worker
     ?? { provider: '\u0414\u0440\u0443\u0433\u0438\u0435', mark: '··', model: id }
 }
 
+/** Who does a task: the orchestrator for its own work (rt1), never «no worker assigned»; else the worker. */
+export function taskIdentity(task: Pick<TaskSnapshot, 'kind' | 'worker'>, workers?: readonly WorkerInfo[], agent?: string): ProviderIdentity {
+  if (task.kind === 'root') return { provider: '\u0414\u0440\u0443\u0433\u0438\u0435', mark: '··', model: t('status.orchestrator'), label: t('status.orchestrator') }
+  return workerIdentity(agent ?? task.worker, workers)
+}
+
 export function identityLabel(identity: ProviderIdentity): string {
   if (identity.label) return identity.label
   return identity.provider === '\u0414\u0440\u0443\u0433\u0438\u0435' || identity.model.startsWith(identity.provider)

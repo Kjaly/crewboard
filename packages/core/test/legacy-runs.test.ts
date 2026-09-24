@@ -37,7 +37,7 @@ describe('saved run artifacts', () => {
     const fromPlan = await backends.forAgent('devin', ID)
     expect((await fromPlan.events(ID)).map((e) => e.type)).toEqual(events.map((e) => e.type))
     expect(buildTrajectory(events, { startedAt: '2026-09-22T10:00:00Z', finishedAt: '2026-09-22T10:01:00Z' }, new Date('2026-09-22T10:01:00Z')).spans.length).toBeGreaterThan(0)
-    expect(runCost({ runId: ID, agent: 'devin', startedAt: '2026-09-22T10:00:00Z', finishedAt: '2026-09-22T10:01:00Z' }, events).usd).toBe(0.1)
+    expect(runCost({ runId: ID, agent: 'devin', startedAt: '2026-09-22T10:00:00Z', finishedAt: '2026-09-22T10:01:00Z' }, events).cashUsd?.value).toBe(0.1)
   })
 
   it('reports missing history without crashing and refuses every mutation', async () => {

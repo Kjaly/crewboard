@@ -6,7 +6,7 @@ import { createDshBackend } from '../dsh/backend.js'
 import { runDshRun } from '../dsh/runner.js'
 import type { Exec } from '../exec.js'
 import { CREWBOARD_DIR } from '../plan/store.js'
-import type { AgentProfile } from '../preflight/preflight.js'
+import type { AgentProfile, WorkerCommands } from '../preflight/preflight.js'
 import { backendForTransport, loadProfileStore } from '../routing/profile-store.js'
 import { PROFILE_ALIASES } from '../routing/identity.js'
 import { defaultMinCliVersion, loadRegistry, registryPath } from '../routing/registry.js'
@@ -32,6 +32,20 @@ export type Backends = {
   forAgent(agent: string, runId?: string): Promise<RunBackend>
 }
 export type BackendsOptions = { env: NodeJS.ProcessEnv; home: string; exec: Exec; root: string }
+
+/**
+ * The binaries a launch runs when `CREWBOARD_<KIND>_COMMAND` replaces one; preflight checks these, so the
+ * check and the run look at the same program. A dsh or Devin command with its own `_ARGS` is a wrapper
+ * whose arguments belong to the launch, not a CLI to ask for `--version`: preflight keeps the default then.
+ */
+export function workerCommands(env: NodeJS.ProcessEnv): WorkerCommands {
+  const value = (name: string) => crewboardEnv(env, `CREWBOARD_${name}`)
+  const claude = value('CLAUDE_COMMAND')
+  const codex = value('CODEX_COMMAND')
+  const devin = value('DEVIN_ARGS') === undefined ? value('DEVIN_COMMAND') : undefined
+  const dsh = value('DSH_ARGS') === undefined ? value('DSH_COMMAND') : undefined
+  return { ...(claude ? { claude } : {}), ...(codex ? { codex } : {}), ...(devin ? { devin } : {}), ...(dsh ? { dsh } : {}) }
+}
 
 export function createBackends(o: BackendsOptions): Backends {
   const value = (name: string) => crewboardEnv(o.env, `CREWBOARD_${name}`)

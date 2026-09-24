@@ -1,5 +1,5 @@
 import type { OrchestraPlanSummary, OrchestraRepoSnapshot, OrchestraSnapshot, SidebarOrder } from '../shared/types.js'
-import { type NeedsYouItem, needsYou, needsYouCount } from '../../../core/src/orchestration/needs-you.js'
+import { type NeedsYouItem, type NeedsYouOpen, needsYou, needsYouCount } from '../../../core/src/orchestration/needs-you.js'
 import { plansOf, type PlanItem } from './plans.js'
 import { repoName } from './review.js'
 
@@ -233,8 +233,10 @@ const FOLDS_KEY = 'crewboard:side-folds'
 /** Manual fold choices survive a reload: {row key → open}. Absent key = the default rule decides. */
 export function readSideFolds(): Record<string, boolean> {
   try {
-    const stored = JSON.parse(globalThis.localStorage?.getItem(FOLDS_KEY) ?? '{}') as Record<string, boolean>
-    return typeof stored === 'object' && stored !== null ? stored : {}
+    const stored: unknown = JSON.parse(globalThis.localStorage?.getItem(FOLDS_KEY) ?? '{}')
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return {}
+    // Only yes/no choices count: any other value would read as «open» through `??`.
+    return Object.fromEntries(Object.entries(stored).filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'))
   } catch { return {} }
 }
 
@@ -256,11 +258,12 @@ export type InboxItem = NeedsYouItem & {
 
 /**
  * The cross-repository inbox — the core `needsYou` set (the same one `crewboard attention` prints),
- * named for the sidebar. Example rows come after every real row; `inboxCount` leaves them out.
+ * named for the sidebar. Example rows appear only while `open` is the example plan (the tour runs
+ * only there), after every real row; `inboxCount` leaves them out.
  */
-export function inboxItems(snapshot: OrchestraSnapshot): InboxItem[] {
+export function inboxItems(snapshot: OrchestraSnapshot, open?: NeedsYouOpen): InboxItem[] {
   const names = new Map(snapshot.repos.map((repo) => [repo.root, displayName(repo)]))
-  return needsYou(snapshot.repos).map((item) => ({
+  return needsYou(snapshot.repos, open).map((item) => ({
     ...item,
     key: `${item.root}/${item.background ? item.planId : item.taskId}`,
     id: item.taskId ?? item.planId ?? '',

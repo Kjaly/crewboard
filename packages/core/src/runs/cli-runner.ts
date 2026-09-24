@@ -3,7 +3,7 @@ import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from 'nod
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { type SteerRecord, finishSteers, readSteer, steerIdOfMail, transitionSteer } from './steers.js'
-import { type Parsed, type TurnUsage, parseClaudeLine, parseCodexLine } from './cli-parse.js'
+import { type BackgroundTask, type Parsed, type RateLimited, type TurnUsage, parseClaudeLine, parseCodexLine } from './cli-parse.js'
 
 export type CliKind = 'claude' | 'codex'
 export type CliRunStatus = 'running' | 'completed' | 'failed' | 'cancelled'
@@ -15,22 +15,46 @@ export type CliRunState = {
   finishedAt?: string
   sessionId?: string
   error?: string
+  /** The supervisor: this process. */
   pid: number
+  /**
+   * The worker process the supervisor runs now (B19). It leads its own process group, so the group outlives a
+   * supervisor that dies and can be stopped by its id; cleared when the worker exits.
+   */
+  workerPid?: number
+  /** A run whose supervisor died, as the backend finished it: which worker it found and whether it stopped it. */
+  interrupted?: { workerPid?: number; workerStopped: boolean }
+  /** Set by the backend when it has asked the orphaned worker's group to stop. */
+  stopRequestedAt?: string
   usage: CliUsage
   usageObservedAt?: string
 }
-export type CliRunnerArgs = { kind: CliKind; runDir: string; cwd: string; promptFile: string; model?: string; command: string; commandArgs?: string[] }
+export type CliRunnerArgs = { kind: CliKind; runDir: string; cwd: string; promptFile: string; model?: string; command: string; commandArgs?: string[]; background?: BackgroundTiming }
+/** How long a Claude run stays open for the worker's own background work (bg1); tests shorten it. */
+export type BackgroundTiming = { limitMs?: number; wakeGraceMs?: number; noticeMs?: number }
 
 const MAILBOX_POLL_MS = 250
 const STDERR_TAIL = 2000
+/** The longest a run waits for background work the worker left running at the end of its turn. */
+const BACKGROUND_LIMIT_MS = 60 * 60_000
+/** Background work ended but the CLI did not wake the session with it: the runner says it itself. */
+const WAKE_GRACE_MS = 30_000
+/** A waiting run reports that it still waits, more often than the watch counts it stalled (watch/rules.ts). */
+const WAIT_NOTICE_MS = 4 * 60_000
+
+const describeBackground = (tasks: BackgroundTask[]) => tasks.map((t) => t.description || t.id).join('; ')
 
 const paths = (runDir: string) => ({ state: join(runDir, 'state.json'), events: join(runDir, 'events.jsonl'), mailbox: join(runDir, 'mailbox') })
 
-async function writeJsonAtomic(file: string, value: unknown): Promise<void> {
+export async function writeJsonAtomic(file: string, value: unknown): Promise<void> {
   const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`
   await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`)
   await rename(tmp, file)
 }
+
+/** `failure` of a Claude turn that hit the usage limit: the reset time first, then Claude's own words. */
+export const rateLimitFailure = (limit: RateLimited, text: string): string =>
+  `Claude usage limit reached${limit.type ? ` (${limit.type})` : ''}${limit.resetsAt ? `, resets at ${limit.resetsAt}` : ''}: ${text}`
 
 export async function readCliRunState(runDir: string): Promise<CliRunState | null> {
   try {
@@ -60,6 +84,8 @@ async function takeMail(runDir: string): Promise<Mail[]> {
 type Session = {
   emit(type: string, data: unknown): Promise<void>
   onParsed(p: Parsed): void
+  /** Records the worker process the run now waits on (undefined once it exited). */
+  worker(pid: number | undefined): void
   state: CliRunState
   cancelled: boolean
   failure?: string
@@ -84,13 +110,22 @@ function exited(child: ChildProcess, stderr: { text: string }): Promise<number> 
  * counted: with `--replay-user-messages` a message is taken when it is echoed back, and the session is idle when a
  * `result` arrives with nothing written-but-untaken. At idle a held direction becomes the next turn; with nothing
  * pending stdin closes and the run finishes. A `queue` direction waits for idle; `auto`/`interrupt` join the turn.
+ *
+ * Background work (bg1). Closing stdin while the session still runs background tasks (a `run_in_background` shell,
+ * a monitor, a background subagent) makes the CLI kill them and exit: a worker that ended its turn «waiting for the
+ * notification» lost its checks and the run went to review unfinished. So at idle, while `background_tasks_changed`
+ * lists any task, stdin stays open: the CLI wakes the session with the task's notification as a new turn, and the run
+ * finishes once a turn ends with nothing left in the background. Bounded: if the work outlives the limit, the runner
+ * tells the worker to stop waiting and finish (one turn), then closes whatever still runs; if the CLI does not wake
+ * the session within a grace period after the work ended, the runner sends the outcome as a turn itself.
  */
 async function driveClaude(args: CliRunnerArgs, s: Session, prompt: string): Promise<number> {
   const child = spawn(
     args.command,
     [...(args.commandArgs ?? []), '-p', '--output-format', 'stream-json', '--input-format', 'stream-json', '--verbose', '--replay-user-messages', '--dangerously-skip-permissions', ...(args.model ? ['--model', args.model] : [])],
-    { cwd: args.cwd, stdio: ['pipe', 'pipe', 'pipe'] },
+    { cwd: args.cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: true },
   )
+  s.worker(child.pid)
   const stderr = { text: '' }
   const done = exited(child, stderr)
   child.stdin?.on('error', () => {})
@@ -100,14 +135,31 @@ async function driveClaude(args: CliRunnerArgs, s: Session, prompt: string): Pro
   let closed = false
   let busy = false
   let lastTurnOk = false
+  /** Why the last turn failed (`is_error`), and the limit it hit if Claude rejected it on a rate limit. */
+  let lastTurnError: string | undefined
+  let lastLimit: RateLimited | undefined
+  let limit: RateLimited | undefined
   const untaken: { text: string; id?: string }[] = []
   const held: { text: string; id?: string }[] = []
   const acknowledgements: Promise<unknown>[] = []
-  const send = async (text: string, id?: string) => {
-    if (!child.pid || !child.stdin?.writable) return false
+  const limitMs = args.background?.limitMs ?? BACKGROUND_LIMIT_MS
+  const wakeGraceMs = args.background?.wakeGraceMs ?? WAKE_GRACE_MS
+  const noticeMs = args.background?.noticeMs ?? WAIT_NOTICE_MS
+  let background: BackgroundTask[] = []
+  /** What ended in the background since the last turn: the text of a runner-sent follow-up. */
+  const endedInBackground: string[] = []
+  let waitingSince: number | undefined
+  let lastNotice = 0
+  let quietSince: number | undefined
+  let limitSent = false
+  const turnStarted = (text: string, woken?: true) => {
     started += 1
     busy = true
-    await s.emit('turn_started', { turn: started, text: text.trim().slice(0, 200), fullText: text })
+    return s.emit('turn_started', { turn: started, text: text.trim().slice(0, 200), fullText: text, ...(woken ? { woken } : {}) })
+  }
+  const send = async (text: string, id?: string) => {
+    if (!child.pid || !child.stdin?.writable) return false
+    await turnStarted(text)
     untaken.push({ text, ...(id ? { id } : {}) })
     child.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: text } })}\n`)
     if (id) await transitionSteer(args.runDir, id, 'sent')
@@ -130,7 +182,8 @@ async function driveClaude(args: CliRunnerArgs, s: Session, prompt: string): Pro
   const drainOnce = async () => {
     for (const m of await takeMail(args.runDir)) {
       if (m.kind === 'cancel') {
-        if (!busy && lastTurnOk) {
+        // While background work runs the last answer was «waiting», not a report: a stop is a real stop.
+        if (!busy && lastTurnOk && waitingSince === undefined) {
           // The worker has already given its final report: stopping now finishes the run, it does not discard it.
           await s.emit('warning', 'остановка после финального отчёта: запуск завершается как выполненный')
           if (!closed) close()
@@ -138,7 +191,8 @@ async function driveClaude(args: CliRunnerArgs, s: Session, prompt: string): Pro
         }
         s.cancelled = true
         await s.emit('steer', 'остановка по запросу')
-        child.kill('SIGTERM')
+        // The worker runs in its own process group: stop the commands it started too, not only the CLI itself.
+        try { if (child.pid) process.kill(-child.pid, 'SIGTERM'); else child.kill('SIGTERM') } catch { child.kill('SIGTERM') }
       } else if (closed || s.cancelled) {
         if (m.id) await transitionSteer(args.runDir, m.id, 'abandoned', s.cancelled ? 'cancelled' : 'run_finished')
         await s.emit('warning', 'поправка пришла после завершения запуска и не доставлена')
@@ -148,11 +202,45 @@ async function driveClaude(args: CliRunnerArgs, s: Session, prompt: string): Pro
     if (busy || closed || s.cancelled) return
     const next = held.splice(0)
     for (const m of next) await sendSteer(m)
-    if (!next.length) close()
+    if (!next.length && !(await awaitBackground())) close()
+  }
+  /** At idle: true while the run stays open for background work (see above), false when it may finish. */
+  const awaitBackground = async (): Promise<boolean> => {
+    const now = Date.now()
+    if (background.length) {
+      quietSince = undefined
+      waitingSince ??= now
+      if (!lastNotice || now - lastNotice >= noticeMs) {
+        lastNotice = now
+        await s.emit('background_wait', { tasks: background, minutes: Math.floor((now - waitingSince) / 60_000) })
+      }
+      if (now - waitingSince < limitMs) return true
+      if (limitSent) {
+        await s.emit('background_abandoned', { tasks: background })
+        return false
+      }
+      limitSent = true
+      await send(
+        `Your background work is still running after ${Math.round(limitMs / 60_000)} min: ${describeBackground(background)}. Stop it, or run what you need in the foreground with a timeout, then finish the task and give your final report now. Nothing will wake you after this turn.`,
+      )
+      return true
+    }
+    if (waitingSince === undefined) return false
+    // The work ended while the session idled: the CLI wakes the session with its notification.
+    quietSince ??= now
+    if (now - quietSince < wakeGraceMs) return true
+    quietSince = undefined
+    await send(`Your background work has finished: ${endedInBackground.join('; ') || 'no outcome reported'}. Continue the task and finish it with your final report.`)
+    return true
   }
   const rl = createInterface({ input: child.stdout as NodeJS.ReadableStream })
   rl.on('line', (line) => {
     const p = parseClaudeLine(line, tools)
+    if (p.rateLimited) limit = p.rateLimited
+    if (p.background) background = p.background
+    if (p.backgroundDone) endedInBackground.push(p.backgroundDone.summary || `${p.backgroundDone.id}: ${p.backgroundDone.status}`)
+    // The CLI woke the idle session with a background notification: a turn the runner did not send.
+    if (!busy && !closed && waitingSince !== undefined && p.events.some(([type]) => type === 'answer_delta' || type === 'tool_started')) void turnStarted(endedInBackground.join('; ') || 'background work finished', true)
     s.onParsed(p)
     if (p.replay !== undefined && untaken.length) {
       // A replay may carry several folded messages; an unrecognised one stands for the oldest.
@@ -165,6 +253,16 @@ async function driveClaude(args: CliRunnerArgs, s: Session, prompt: string): Pro
     if (!p.turnEnd) return
     ended += 1
     lastTurnOk = !p.turnEnd.failed
+    lastTurnError = p.turnEnd.failed ? (p.turnEnd.error ?? 'turn failed') : undefined
+    lastLimit = p.turnEnd.failed ? limit : undefined
+    limit = undefined
+    endedInBackground.length = 0
+    quietSince = undefined
+    if (background.length) waitingSince ??= Date.now()
+    else {
+      waitingSince = undefined
+      lastNotice = 0
+    }
     if (!untaken.length) busy = false
     void s.emit('turn_ended', { turn: ended, stopReason: p.turnEnd.stopReason })
     void drain()
@@ -172,10 +270,13 @@ async function driveClaude(args: CliRunnerArgs, s: Session, prompt: string): Pro
   await send(prompt)
   const timer = setInterval(() => void drain(), MAILBOX_POLL_MS)
   const code = await done
+  s.worker(undefined)
   clearInterval(timer)
   closed = true
   await draining
   await Promise.all(acknowledgements)
+  // B01: Claude ends a turn that hit the usage limit or an API error with exit code 0; the last `result` decides.
+  if (lastTurnError !== undefined && !s.cancelled && !s.failure) s.failure = lastLimit ? rateLimitFailure(lastLimit, lastTurnError) : lastTurnError
   if (code !== 0 && !s.cancelled && !s.failure) s.failure = stderr.text.trim() || `claude exited with code ${code}`
   return code
 }
@@ -195,21 +296,28 @@ async function driveCodex(args: CliRunnerArgs, s: Session, prompt: string): Prom
     const cli = thread
       ? ['exec', 'resume', '--json', '--skip-git-repo-check', '-c', 'sandbox_mode="workspace-write"', ...model, thread, next.text]
       : ['exec', '--json', '--skip-git-repo-check', '-s', 'workspace-write', ...model, next.text]
-    const child = spawn(args.command, [...(args.commandArgs ?? []), ...cli], { cwd: args.cwd, stdio: ['ignore', 'pipe', 'pipe'] })
-    if (next.id && child.pid) await transitionSteer(args.runDir, next.id, 'sent')
+    const child = spawn(args.command, [...(args.commandArgs ?? []), ...cli], { cwd: args.cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
+    s.worker(child.pid)
     const steerId = next.id
     let acknowledged = false
     const acknowledgements: Promise<unknown>[] = []
     const stderr = { text: '' }
     const done = exited(child, stderr)
     let interrupted = false
+    // A direction interrupts only a process that has reported its thread: one killed while still booting leaves no
+    // thread to resume, and the correction would run as a fresh `exec` without the task.
+    let threadReported = false
+    let interruptOnThread = false
+    const interrupt = () => { interrupted = true; child.kill('SIGINT') }
     let turnFailed: string | undefined
     const rl = createInterface({ input: child.stdout as NodeJS.ReadableStream })
     rl.on('line', (line) => {
       const p = parseCodexLine(line)
       if (p.sessionId) {
         thread = p.sessionId
+        threadReported = true
         if (steerId && !acknowledged) { acknowledged = true; acknowledgements.push(transitionSteer(args.runDir, steerId, 'acknowledged')) }
+        if (interruptOnThread) { interruptOnThread = false; interrupt() }
       }
       s.onParsed(p)
       if (p.turnEnd) {
@@ -217,6 +325,9 @@ async function driveCodex(args: CliRunnerArgs, s: Session, prompt: string): Prom
         if (p.turnEnd.failed) turnFailed = p.turnEnd.error ?? 'turn failed'
       }
     })
+    // Only now that `close` and stdout are listened to: a process that exits during this await would otherwise have its
+    // output flushed and its `close` missed, and the run would wait forever.
+    if (steerId && child.pid) await transitionSteer(args.runDir, steerId, 'sent')
     // A `queue` direction waits for the turn to end; any other direction or a cancel interrupts it.
     const collect = async (running: boolean) => {
       for (const m of await takeMail(args.runDir)) {
@@ -227,13 +338,14 @@ async function driveCodex(args: CliRunnerArgs, s: Session, prompt: string): Prom
         } else if (m.kind === 'cancel') {
           s.cancelled = true
           await s.emit('steer', 'остановка по запросу')
+          if (running) child.kill('SIGINT')
         } else {
           queue.push({ text: m.text, ...(m.id ? { id: m.id } : {}) })
           await s.emit('steer', m.text.trim().slice(0, 200))
-          if (m.mode === 'queue') continue
-          if (running) interrupted = true
+          if (m.mode === 'queue' || !running) continue
+          if (threadReported) interrupt()
+          else interruptOnThread = true
         }
-        if (running) child.kill('SIGINT')
       }
     }
     let draining: Promise<void> = Promise.resolve()
@@ -241,6 +353,7 @@ async function driveCodex(args: CliRunnerArgs, s: Session, prompt: string): Prom
       draining = draining.then(() => collect(true))
     }, MAILBOX_POLL_MS)
     code = await done
+    s.worker(undefined)
     clearInterval(timer)
     await draining
     // A direction that arrived as the turn ended is still undelivered: it becomes the next turn.
@@ -284,6 +397,11 @@ export async function runCliRun(args: CliRunnerArgs, now: () => Date = () => new
       const line = `${JSON.stringify({ ts: now().toISOString(), type, backend: args.kind, data })}\n`
       writes = writes.then(() => appendFile(p.events, line))
       return writes
+    },
+    worker(pid) {
+      if (pid === undefined) delete state.workerPid
+      else state.workerPid = pid
+      writes = writes.then(() => writeJsonAtomic(p.state, state))
     },
     onParsed(parsed) {
       for (const [type, data] of parsed.events) void s.emit(type, data)

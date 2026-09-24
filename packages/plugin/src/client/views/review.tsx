@@ -1,5 +1,6 @@
 import type { PlanCost, PlanRunCost, TaskReviewSummary } from '../../shared/types.js'
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { waitsForHuman } from '../../../../core/src/plan/graph.js'
 import { CopyForAgent } from '../copy-agent.js'
 import { taskHandoff } from '../handoff.js'
 import { t, useLang } from '../i18n.js'
@@ -8,6 +9,7 @@ import { identityLabel, workerIdentity } from '../provider.js'
 import { formatRoute } from '../route.js'
 import type { TraceTarget } from '../panel/trace.js'
 import type { ViewProps } from './types.js'
+import { laneOf, laneTitle } from './graph/layout.js'
 import {
   emptyReviewFilters,
   filterReviewRows,
@@ -118,6 +120,7 @@ export function ReviewView({
   now = new Date(),
   detail,
   selectedRunId,
+  lane = null,
 }: ReviewProps) {
   useLang()
   const key = `${repo.root}\n${repo.planId ?? ''}`
@@ -169,6 +172,14 @@ export function ReviewView({
     heading.current?.focus()
     heading.current?.scrollIntoView?.({ block: 'start' })
   }
+  // A lane picked in the sidebar tree (or opened by `?lane=`) is this list's Lane filter.
+  const laneServed = useRef<number | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Only a new lane request (its seq) sets the filter; later edits of the filter are the reader's.
+  useEffect(() => {
+    if (!lane || laneServed.current === lane.seq) return
+    laneServed.current = lane.seq
+    filters({ lane: lane.lane === '' ? '__unknown' : lane.lane })
+  }, [lane?.seq])
   const rows = useMemo(() => (cost ? reviewRows(repo, cost) : []), [repo, cost])
   const matched = useMemo(() => filterReviewRows(rows, state.filters, cost?.generatedAt ?? now.toISOString()), [rows, state.filters, cost?.generatedAt, now])
   const sorted = useMemo(
@@ -192,7 +203,7 @@ export function ReviewView({
         .filter((task) => {
           const taskRuns = matched.filter((row) => row.run.taskId === task.id)
           const hasFilters = Object.values(state.filters).some(Boolean)
-          if (state.investigation === 'waiting') return task.status === 'in_review' || (task.status === 'ready' && task.kind === 'decision')
+          if (state.investigation === 'waiting') return task.status === 'in_review' || waitsForHuman(task)
           if (state.investigation === 'multiple')
             return rows.filter((row) => row.run.taskId === task.id).length > 1
           return (
@@ -218,8 +229,8 @@ export function ReviewView({
                   : task.class === state.filters.taskClass)) &&
               (!state.filters.lane ||
                 (state.filters.lane === '__unknown'
-                  ? !task.lane
-                  : task.lane === state.filters.lane)))
+                  ? !laneOf(task)
+                  : laneOf(task) === state.filters.lane)))
           )
         })
         .sort((a, b) => {
@@ -346,7 +357,7 @@ export function ReviewView({
                 ? b.equivalent - a.equivalent || a.id.localeCompare(b.id)
                 : b.tasks - a.tasks || a.id.localeCompare(b.id),
     )
-  const protocolLabel = (value: string) => ({ running: t('drill.execution.running'), completed: t('drill.execution.completed'), failed: t('drill.execution.failed'), cancelled: t('drill.execution.cancelled'), accept: t('review.outcome.accepted'), reject: t('review.outcome.returned'), none: t('review.noDecision'), known: t('drill.recorded'), pending: t('review.pendingUsage'), unavailable: t('review.unavailable'), task: t('review.tasks'), lane: t('review.lane'), worker: t('drill.worker') } as Record<string, string>)[value] ?? value
+  const protocolLabel = (value: string) => ({ running: t('drill.execution.running'), completed: t('drill.execution.completed'), failed: t('drill.execution.failed'), cancelled: t('drill.execution.cancelled'), incomplete: t('drill.execution.incomplete'), accept: t('review.outcome.accepted'), reject: t('review.outcome.returned'), none: t('review.noDecision'), known: t('drill.recorded'), pending: t('review.pendingUsage'), unavailable: t('review.unavailable'), task: t('review.tasks'), lane: t('review.lane'), worker: t('drill.worker') } as Record<string, string>)[value] ?? value
   const options = (values: string[], unknown: string): Array<[string, string]> => [
     ['', t('work.filter.all')],
     ...values.filter(Boolean).map((value) => [value, protocolLabel(value) || unknown] as [string, string]),
@@ -359,12 +370,12 @@ export function ReviewView({
     ['__unknown', t('review.unclassified')],
   ]
   const laneOptions: Array<[string, string]> = [
-    ...options([...new Set(repo.tasks.map((task) => task.lane ?? ''))].sort(), t('review.noLane')),
+    ...options([...new Set(repo.tasks.map(laneOf))].sort(), t('review.noLane')).map(([value, label]): [string, string] => [value, value ? laneTitle(value) : label]),
     ['__unknown', t('review.noLane')],
   ]
   // Every folded filter is one descriptor: a new facet (a preset, hand-picked work) is one more entry.
   const moreFilters: Array<{ key: keyof ReviewFilters; label: string; options: Array<[string, string]> }> = [
-    { key: 'execution', label: t('review.execution'), options: options(['running', 'completed', 'failed', 'cancelled'], '') },
+    { key: 'execution', label: t('review.execution'), options: options(['running', 'completed', 'failed', 'cancelled', 'incomplete'], '') },
     { key: 'decision', label: t('review.decision'), options: options(['accept', 'reject', 'none'], '') },
     { key: 'worker', label: t('drill.worker'), options: options([...new Set(rows.map((row) => row.worker))].sort(), '') },
     { key: 'taskClass', label: t('review.class'), options: classOptions },
@@ -390,7 +401,7 @@ export function ReviewView({
         >
           <span className="orc-rrow__head">
             <strong className="orc-rrow__title">{row.run.taskTitle}</strong>
-            <StatusWord status={row.status} cancelled={(row.run.executionOutcome ?? row.run.outcome) === 'cancelled'} />
+            <StatusWord status={row.status} cancelled={(row.run.executionOutcome ?? row.run.outcome) === 'cancelled'} incomplete={(row.run.executionOutcome ?? row.run.outcome) === 'incomplete'} />
           </span>
           <span className="orc-rrow__meta">
             {identityLabel(workerIdentity(row.worker, workers))} · {t('review.attempt', { n: attemptOf(row) })} · {shortDate(row.run.startedAt)} · {durationLabel(runDurationMs(row.run, snapshot))}
@@ -432,6 +443,7 @@ export function ReviewView({
       <NeedsBand
         waiting={needs.waiting}
         failed={needs.failed}
+        unmerged={needs.unmerged}
         running={running}
         onOpenTask={(id) => onSelect(id)}
         onWaiting={() => jump({}, 'tasks', 'wait', 'waiting')}
@@ -549,10 +561,10 @@ export function ReviewView({
                     const expanded = state.expanded.includes(group.key)
                     const childPage = state.childPages[group.key] ?? 1
                     return (
-                      <section key={group.key} className="orc-rgroup" aria-label={group.key || t('review.noLane')}>
+                      <section key={group.key} className="orc-rgroup" aria-label={(state.group === 'lane' ? laneTitle(group.key) : group.key) || t('review.noLane')}>
                         <div className="orc-rgroup__head">
                           <button type="button" aria-expanded={expanded} onClick={() => change({ expanded: expanded ? state.expanded.filter((item) => item !== group.key) : [...state.expanded, group.key] })}>
-                            {expanded ? '▾' : '▸'} {group.key || (state.group === 'lane' ? t('review.noLane') : t('review.unclassified'))} · {group.rows.length}
+                            {expanded ? '▾' : '▸'} {(state.group === 'lane' ? laneTitle(group.key) : group.key) || (state.group === 'lane' ? t('review.noLane') : t('review.unclassified'))} · {group.rows.length}
                             {state.group === 'task' ? ` / ${rows.filter((row) => row.run.taskId === group.key).length}` : ''}
                           </button>
                           {state.group !== 'task' ? (
@@ -601,7 +613,7 @@ export function ReviewView({
                             <a href={detailHref(task.id)} className="orc-review__link orc-review__title" data-review-task={task.id} onClick={(event) => { event.preventDefault(); openTask(task.id) }}>
                               {task.title}
                             </a>
-                            <small>{task.id} · {task.class ?? t('review.unclassified')} · {task.lane ?? t('review.noLane')}</small>
+                            <small>{task.id} · {task.class ?? t('review.unclassified')} · {laneTitle(laneOf(task)) || t('review.noLane')}</small>
                             <small>{t('review.lastActivity')}: {activity.length ? shortDate(activity.at(-1)!) : '—'}</small>
                           </th>
                           <td>

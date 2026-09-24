@@ -60,7 +60,7 @@ async function writeWoken(root: string, keys: Set<string>): Promise<void> {
 
 /** Human labels for statuses in prompts (the stored values stay English). */
 const STATUS_LABEL: Record<ViewStatus, string> = {
-  backlog: 'backlog', ready: 'ready to start', running: 'running', in_review: 'awaiting review', accepted: 'accepted', closed: 'closed without result', blocked: 'waiting', superseded: 'superseded',
+  backlog: 'backlog', ready: 'ready to start', running: 'running', in_review: 'awaiting review', accepted: 'accepted', closed: 'closed without result', blocked: 'waiting', superseded: 'superseded', dropped: 'closed as not needed',
 }
 
 const statusLabel = (status: string): string => STATUS_LABEL[status as ViewStatus] ?? status
@@ -222,6 +222,11 @@ export function createChatWaker(deps: ChatDeps & { windowMs?: number; schedule?:
         // The orchestrator's own cue (vr1): finished work waits for its check, not for the human yet.
         if (task.status === 'in_review' && task.check === 'pending') {
           out.push({ key: `${task.lastRunId ?? task.id}:check`, root: repo.root, planId: repo.planId ?? 'main', planName: repo.goal, taskId: task.id, title: task.title, kind: 'check_due', message: `Run finished — check it: orch verify ${task.id}, then --done --note "…" or --return "findings"` })
+          continue
+        }
+        // A decision whose dependencies closed waits for the orchestrator to prepare it (rt1).
+        if (task.preparing) {
+          out.push({ key: `${task.id}:prepare`, root: repo.root, planId: repo.planId ?? 'main', planName: repo.goal, taskId: task.id, title: task.title, kind: 'check_due', message: `Decision is ready to prepare — its dependencies are accepted: orch verify ${task.id} --done --note "options and your recommendation"` })
           continue
         }
         // Checked by the orchestrator itself: nothing new for it to hear.

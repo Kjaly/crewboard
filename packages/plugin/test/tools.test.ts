@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -79,10 +79,28 @@ describe('orchestra tools', () => {
     })
     expect(await tool('orchestra_verify').execute({ task: 'b', action: 'take' })).toMatchObject({ check: { state: 'checking', by: 'orchestrator' } })
     await expect(tool('orchestra_verify').execute({ task: 'b', action: 'done' })).rejects.toThrow('note is required')
-    expect(await tool('orchestra_verify').execute({ task: 'b', action: 'done', note: 'gates green' })).toMatchObject({ check: { state: 'checked', note: 'gates green' } })
-    await expect(tool('orchestra_verify').execute({ task: 'b', action: 'accept' })).rejects.toThrow('action must be take, done or return')
+    // B10: the run left no report and no changed file — done names the verdict and wants a deliberate yes.
+    await expect(tool('orchestra_verify').execute({ task: 'b', action: 'done', note: 'gates green' })).rejects.toThrow(/"kind":"disputed".*confirm: true/)
+    expect(await tool('orchestra_verify').execute({ task: 'b', action: 'done', note: 'gates green', confirm: true })).toMatchObject({ check: { state: 'checked', note: 'gates green' }, verdict: { kind: 'disputed', files: 0 } })
+    // A repeated take leaves checked work with the person; only reopen takes it back.
+    expect(await tool('orchestra_verify').execute({ task: 'b', action: 'take' })).toMatchObject({ alreadyChecked: true, check: { state: 'checked' } })
+    expect(await tool('orchestra_verify').execute({ task: 'b', action: 'reopen' })).toMatchObject({ check: { state: 'checking' } })
+    await expect(tool('orchestra_verify').execute({ task: 'b', action: 'accept' })).rejects.toThrow('action must be start, take, reopen, done or return')
     // A return relaunches through the contract, like a human relaunch: without one it is refused.
     await expect(tool('orchestra_verify').execute({ task: 'b', action: 'return', note: 'tests red' })).rejects.toMatchObject({ code: 'no_contract' })
+  })
+
+  // rt1: the orchestrator's own work — start, then done with a report file; the kind of an open task may change.
+  it('orchestra_verify starts and finishes a root task with a report, and task_upsert changes its kind', async () => {
+    const { root, tool } = await setup()
+    await tool('orchestra_task_upsert').execute({ id: 'i1', title: 'Integrate on the stand', kind: 'decision' })
+    expect(await tool('orchestra_task_upsert').execute({ id: 'i1', kind: 'root' })).toMatchObject({ kind: 'root', status: 'ready' })
+    await expect(tool('orchestra_run').execute({ task: 'i1' })).rejects.toMatchObject({ code: 'root' })
+    expect(await tool('orchestra_verify').execute({ task: 'i1', action: 'start' })).toMatchObject({ started: { by: 'orchestrator' } })
+    await writeFile(join(root, 'report.md'), 'Result: received\n- [x] stand answers 200\n')
+    await expect(tool('orchestra_verify').execute({ task: 'i1', action: 'done', note: 'n', report: '../outside.md' })).rejects.toThrow('inside the repo')
+    expect(await tool('orchestra_verify').execute({ task: 'i1', action: 'done', note: 'stand integrated', report: 'report.md' })).toMatchObject({ status: 'in_review', check: { state: 'checked', report: '.orchestration/reports/main/i1.md' } })
+    await expect(tool('orchestra_verify').execute({ task: 'i1', action: 'take' })).rejects.toMatchObject({ code: 'own_work' })
   })
 
   it('stores a chat draft and returns findings without approving it', async () => {

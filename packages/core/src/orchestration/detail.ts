@@ -17,6 +17,8 @@ import { join } from 'node:path'
 import { CREWBOARD_DIR } from '../plan/store.js'
 import { type MessageVars, orchText } from './messages.js'
 import { type BaselineRecord, readWorktreeState } from '../worktree/state.js'
+import { baseBranch, uncommittedCount } from '../worktree/merged.js'
+import { mergeCommands } from '../plan/merge.js'
 
 const MAX_CONTRACT_BYTES = 64 * 1024
 const MAX_DIFF_CHARS = 200 * 1024
@@ -51,7 +53,15 @@ export type TaskDetail = {
   changedFiles: string[]
   report?: RunReport
   evidence?: RunEvidence
-  verdict: Verdict
+  /** Absent on a decision (w1b, B05): a decision is the person's choice, there is no worker's claim to judge. */
+  verdict?: Verdict
+  /**
+   * Files the run left in the copy without a commit (w1d) — from its evidence, else the copy as it is now. Accepted
+   * as is, they would not reach the base branch.
+   */
+  uncommitted?: number
+  /** Accepted work not merged into the base branch yet (w1d): where it goes and the exact commands that take it there. */
+  merge?: { into: string; branch: string; path: string; commands: string[] }
   example?: boolean
 }
 
@@ -103,8 +113,10 @@ export async function getTaskDetail(root: string, taskId: string, backends: Back
   const task = view.task
   const run = task.runs.at(-1)
   const evidence = await readEvidence(root, run?.evidence)
+  // A finished run's evidence holds the report and files, not the steps: the feed still comes from the run's events
+  // (B12), so Activity shows what the worker did. A backend that no longer has them leaves the feed empty.
   let raw: RawEvent[] = []
-  if (run && !evidence) {
+  if (run) {
     try {
       const backend = await source.forAgent(run.agent, run.runId)
       raw = await backend.events(run.runId)
@@ -112,14 +124,15 @@ export async function getTaskDetail(root: string, taskId: string, backends: Back
       raw = []
     }
   }
-  // Example runs keep their synthetic events even with evidence, so the feed shows what the worker did.
-  if (run && evidence && plan.example) raw = await (await source.forAgent(run.agent, run.runId)).events(run.runId)
   const completed = [...task.runs].reverse().find((r) => r.outcome === 'completed')
   const reportEvidence = completed?.runId === run?.runId ? evidence : await readEvidence(root, completed?.evidence)
-  const report = reportEvidence ? reportEvidence.report : await readReport(task.runs, run?.runId, raw, source)
+  const report = task.kind === 'root' || task.kind === 'decision' ? await readOwnReport(root, task) : reportEvidence ? reportEvidence.report : await readReport(task.runs, run?.runId, raw, source)
   const changes = evidence ? undefined : task.worktree ? await listChanges(root, task.worktree.path, exec) : { tracked: [], untracked: [] }
   const contract = await readContract(root, task.contract)
   const baseline = task.worktree && (await exists(task.worktree.path)) ? (await readWorktreeState(task.worktree.path))?.baseline : undefined
+  // What the run left uncommitted is a fact of its evidence; without evidence (an older run) the copy is asked now.
+  const uncommitted = evidence ? evidence.uncommitted : task.worktree && !plan.example ? await uncommittedCount(task.worktree.path, exec) : undefined
+  const into = view.unmerged ? await baseBranch(root, exec) : undefined
   const detail: Omit<TaskDetail, 'verdict'> = {
     id: task.id,
     ...(plan.example ? { example: true } : {}),
@@ -139,8 +152,25 @@ export async function getTaskDetail(root: string, taskId: string, backends: Back
     changedFiles: evidence ? evidence.files.map((file) => file.path) : [...new Set([...(changes?.tracked ?? []), ...(changes?.untracked ?? [])])].sort(),
     ...(evidence ? { evidence } : {}),
     ...(report ? { report } : {}),
+    ...(uncommitted ? { uncommitted } : {}),
+    ...(into && task.worktree ? { merge: { into, ...task.worktree, commands: mergeCommands({ root, taskId: task.id, ...task.worktree, uncommitted: await uncommittedCount(task.worktree.path, exec) }) } } : {}),
   }
-  return { ...detail, verdict: verdictOf(detail) }
+  return detail.kind === 'decision' ? detail : { ...detail, verdict: verdictOf(detail) }
+}
+
+/**
+ * The orchestrator's report of a root task or a decision (rt1): the stored `--report` file, else — for a
+ * root task, whose note is its only account of the work — the `verify --done` note. A decision's note
+ * carries options and a recommendation, not a report of work, so alone it makes no report.
+ */
+async function readOwnReport(root: string, task: Task): Promise<RunReport | undefined> {
+  const check = task.check?.state === 'checked' ? task.check : undefined
+  if (!check) return undefined
+  const abs = check.report ? insideRoot(root, check.report) : undefined
+  const stored = abs ? await readFile(abs, 'utf8').catch(() => undefined) : undefined
+  const text = stored ?? (task.kind === 'root' ? check.note : undefined)
+  if (!text?.trim()) return undefined
+  return { ...extractReport('', text, MAX_CONTRACT_BYTES), source: 'orchestrator' }
 }
 
 /**

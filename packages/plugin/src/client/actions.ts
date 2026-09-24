@@ -16,6 +16,7 @@ const MESSAGE_KEYS: Record<string, string> = {
   not_found: 'panel.draft.error.notFound',
   backend_unavailable: 'actions.backendUnavailable',
   legacy_run_read_only: 'actions.legacyReadOnly',
+  plan_archived: 'actions.planArchived',
   plan_incompatible: 'panel.planError.incompatible',
   repo_not_absolute: 'side.addRepo.error.notAbsolute',
   repo_not_found: 'side.addRepo.error.notFound',

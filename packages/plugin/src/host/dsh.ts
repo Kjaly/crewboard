@@ -13,7 +13,8 @@ export type DshToolDefinition = {
   description: string
   parameters: Record<string, unknown>
   output: { schema: Record<string, unknown>; render(args: unknown, value: unknown): ContentBlock[] }
-  execute(args: Record<string, unknown>): Promise<unknown>
+  /** dsh passes the call as the second argument; `agent.id` is the calling session's id. */
+  execute(args: Record<string, unknown>, exec?: { agent?: { id?: string } }): Promise<unknown>
 }
 export type ToolsFace = { register(definition: DshToolDefinition): Disposer }
 export type SystemPromptFace = { section(section: { name: string; order: number; text: string }): Disposer }

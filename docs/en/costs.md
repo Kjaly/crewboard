@@ -24,14 +24,15 @@ Workers are paid for in different ways: some per token through an API, some thro
 
 ## `crewboard cost`
 
-`crewboard cost` prints one line per worker: runs, minutes, dollars, tokens, quota, and runs still awaiting accounting. For example (illustrative figures):
+`crewboard cost` prints one line per worker: runs, minutes, money, tokens, quota, and runs still awaiting accounting. For example (illustrative figures):
 
 ```text
-dsh/deepseek-flash: 2 run(s) · 14 min · $0.21 · tokens 310.4k in / 12.9k out / 280.0k cache
+dsh/deepseek-flash: 2 run(s) · 14 min · cash $0.21 · tokens 310.4k in / 12.9k out / 280.0k cache
+claude/opus: 3 run(s) · 25 min · estimate ≈$4.8 · tokens 1.2k in / 40.1k out / 2100.0k cache
 codex/gpt-6-sol: 1 run(s) · 9 min · cost: no data · quota +3%
 ```
 
-The dollar figure in this summary adds up whatever the runs reported, cash or estimate. Use `crewboard cost --json` or the screen to tell them apart: each run there has `billingMode` (`api`, `subscription`, `promotional`, `unknown`), `cashUsd` or `apiEquivalentUsd` with its source, and an `availability` entry for every metric.
+Money comes in two units that are never added up, as on the screen: `cash` is what API runs were charged, `estimate ≈` is what subscription runs would have cost at API rates. A worker with both shows both. In `crewboard cost --json` the per-worker `totals` carry `cashUsd` and `apiEquivalentUsd` (each absent when no run reported it), and each run has `billingMode` (`api`, `subscription`, `promotional`, `unknown`), `cashUsd` or `apiEquivalentUsd` with its source, and an `availability` entry for every metric.
 
 ## Where the numbers come from
 

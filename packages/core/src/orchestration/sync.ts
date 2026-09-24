@@ -2,12 +2,28 @@ import { homedir } from 'node:os'
 import { claudeLimitsPath, isClaudeAgent, latestClaudeWeeklyPct } from '../cost/claude-limits.js'
 import { codexQuotaUsedPercent } from '../cost/codex-quota.js'
 import { type RunStateMap, syncRuns } from '../plan/graph.js'
-import type { Plan } from '../plan/schema.js'
+import type { Plan, Run, Task } from '../plan/schema.js'
 import { currentPlanId, loadPlan, updatePlan } from '../plan/store.js'
 import { eventNote } from '../plan/notes.js'
 import type { Backends } from './backends.js'
-import { writeEvidence } from '../runs/evidence.js'
+import { type RunEvidence, readEvidence, uncommittedFiles, writeEvidence } from '../runs/evidence.js'
 import { resolveOrchestratorCheck } from './check-setting.js'
+import { claimOf } from './verdict.js'
+import { nodeExec } from '../exec.js'
+import { recordMerges } from '../worktree/merged.js'
+
+/**
+ * bg1: a clean finish that hands nothing in — the worker's copy has uncommitted changes and its answer carries
+ * no result claim (neither in its first lines nor on the report's first line — verdict.ts:claimLineOf). Typically a worker that ended its turn
+ * «waiting» for work it had started in the background. Unreadable evidence or git state is not a verdict.
+ */
+export async function incompleteRun(task: Pick<Task, 'worktree'>, evidence: RunEvidence | undefined): Promise<Run['incomplete']> {
+  if (!evidence || !task.worktree || evidence.finalAnswerState === 'unreadable') return undefined
+  if (claimOf(evidence.finalAnswer) || claimOf(evidence.claimLine) || claimOf(evidence.report?.text)) return undefined
+  const uncommitted = await uncommittedFiles(task.worktree.path)
+  if (!uncommitted) return undefined
+  return { reason: evidence.finalAnswer ? 'no_claim' : 'no_report', uncommitted }
+}
 
 async function collectRunStates(plan: Plan, backends: Backends): Promise<{ states: RunStateMap; degraded: boolean }> {
   const states: RunStateMap = {}
@@ -27,7 +43,8 @@ async function collectRunStates(plan: Plan, backends: Backends): Promise<{ state
 }
 
 /**
- * Reads the plan, asks each run's backend about unfinished runs and persists newly finished ones.
+ * Reads the plan, records accepted work that was merged, asks each run's backend about unfinished runs and
+ * persists newly finished ones.
  * Runs that recorded a subscription quota before start get the quota after finish: Codex from app-server,
  * Claude from the status line log (weekly window).
  */
@@ -36,9 +53,13 @@ export async function syncPlan(
   backends: Backends,
   now: Date,
   claudeLimitsFile: string = claudeLimitsPath(process.env, homedir()),
-  planId?: string,
+  asked?: string,
 ): Promise<{ plan: Plan; states: RunStateMap; degraded: boolean }> {
-  const plan = await loadPlan(root, planId)
+  // Bookkeeping names the plan it read: finished runs land in an archived plan too (B22).
+  const planId = asked ?? currentPlanId(root)
+  const loaded = await loadPlan(root, planId)
+  // Accepted work that reached the base branch becomes `merged` (w1d); a plan this build may not write stays as read.
+  const plan = loaded.example ? loaded : await recordMerges(root, loaded, nodeExec, now, planId).catch(() => loaded)
   if (plan.example) {
     const states: RunStateMap = {}
     for (const task of plan.tasks) for (const run of task.runs) if (!run.finishedAt) states[run.runId] = { status: 'running', terminal: false, exitCode: null }
@@ -47,7 +68,7 @@ export async function syncPlan(
   const { states, degraded } = await collectRunStates(plan, backends)
   const { finished } = syncRuns(plan, states, now)
   // With «orchestrator checks finished work» on, finished work goes to the orchestrator first (vr1).
-  const checking = (await resolveOrchestratorCheck(root, planId ?? currentPlanId(root), plan)).enabled
+  const checking = (await resolveOrchestratorCheck(root, planId, plan)).enabled
   const unchecked = checking && plan.tasks.some((task) => {
     const last = task.runs.at(-1)
     return task.status === 'in_review' && last?.outcome === 'completed' && !!last.finishedAt && task.check?.runId !== last.runId
@@ -61,12 +82,20 @@ export async function syncPlan(
       references.set(run.runId, await writeEvidence(root, task, run, backends, now))
     }
   }
+  const incomplete = new Map<string, NonNullable<Run['incomplete']>>()
+  for (const task of plan.tasks) {
+    for (const run of task.runs) {
+      if (!references.has(run.runId) || states[run.runId]?.status !== 'completed') continue
+      const found = await incompleteRun(task, await readEvidence(root, references.get(run.runId)))
+      if (found) incomplete.set(run.runId, found)
+    }
+  }
 
   const quoted = plan.tasks.flatMap((t) => t.runs).filter((r) => finished.includes(r.runId) && r.quotaBeforePct !== undefined)
   const codexAfter = quoted.some((r) => !isClaudeAgent(r.agent)) ? await codexQuotaUsedPercent() : undefined
   const claudeAfter = quoted.some((r) => isClaudeAgent(r.agent)) ? await latestClaudeWeeklyPct(claudeLimitsFile) : undefined
   const saved = await updatePlan(root, (current) => {
-    const next = syncRuns(current, states, now).plan
+    const next = syncRuns(current, states, now, incomplete).plan
     for (const task of next.tasks) {
       for (const run of task.runs) {
         if (references.has(run.runId)) run.evidence = references.get(run.runId)

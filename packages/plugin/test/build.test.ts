@@ -23,8 +23,10 @@ describe('plugin build', () => {
 
   it('keeps the layout engine out of the screen and in its own bundle', async () => {
     const client = await readFile(`${pkg}/lib/client.js`, 'utf8')
-    // Keep screens opened after first paint out of the always loaded bundle.
-    expect(Buffer.byteLength(client)).toBeLessThan(320 * 1024)
+    // Keep screens opened after first paint out of the always loaded bundle. The ceiling is the measured
+    // size plus ~5% (296.0 KiB, 2026-09-24, after opt2); scripts/release-check.mjs holds the same number.
+    // Client measured after wave 1 (w1a–w1f), 2026-09-24: 312.8 KiB → 329; host index.js 459.4 KiB → 483.
+    expect(Buffer.byteLength(client)).toBeLessThan(329 * 1024)
     expect(client).not.toContain('Task actions')
     expect(client).not.toContain('Действия с задачей')
     for (const lang of ['en', 'ru']) expect((await readFile(`${pkg}/lib/dict-${lang}.js`, 'utf8')).length).toBeGreaterThan(1000)
@@ -62,17 +64,13 @@ describe('plugin build', () => {
     expect(mod.name).toBe('crewboard')
     expect(typeof mod.apply).toBe('function')
   })
-  // dsh loads the host on every start. Ceilings sit ~15% above the size reached by moving core to
-  // zod/mini and minifying (host 397 KiB, runners 22 and 9 KiB, 2026-09-24): growth past them is a
-  // decision to make on purpose, not something to discover later. Raised host 457 → 461 KiB for the
-  // refresh that lets untracked setup files through and names what blocks it, in two languages (rf1,
-  // +2.8 KB, 2026-09-24). Raised 461 → 466 KiB for reading plans a newer build wrote (pq1, +4.1 KB,
-  // 2026-09-24): tolerant schema fields, bounded quarantine, the incompatibility error and its screen state.
-  // Raised 466 → 472 KiB for the repository list (rg1, +4.0 KB, 2026-09-24): `repos.json`, worktree
-  // discovery, the add/remove routes. The host already stood at 466.2 KiB before rg1, over the old ceiling. Raised to 476 KiB
-  // with st1 (+1.9 KB): directions that end in a state matching reality.
+  // dsh loads the host on every start. Ceilings are the measured size plus ~5% (host 422.8 KiB, runners
+  // 23.4 and 8.9 KiB, 2026-09-24, after opt2; the Claude/Codex runner 25.9 KiB after bg1, which keeps a run
+  // open for the worker's background work; 27.3 KiB after w1a, which fails a Claude run on `is_error` and records
+  // the worker's process group): growth past them is a decision to make on purpose, not
+  // something to discover later — measure it and move the number with the new size.
   it('keeps the host and runner bundles within their weight and free of classic zod', async () => {
-    for (const [name, ceiling] of [['index.js', 476], ['cli-runner-main.js', 26], ['runner-main.js', 10]] as const) {
+    for (const [name, ceiling] of [['index.js', 483], ['cli-runner-main.js', 29], ['runner-main.js', 10]] as const) {
       expect(Buffer.byteLength(await readFile(`${pkg}/lib/${name}`)), name).toBeLessThan(ceiling * 1024)
     }
     // Classic zod registers `ZodString`/`ZodObject`; zod/mini registers `ZodMini…`. No bundle — host,

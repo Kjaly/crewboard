@@ -18,16 +18,18 @@ const BUCKET_COLOR: Record<string, string> = { accepted: 'var(--orc-ok)', runnin
  * The top band: amber only when a decision waits for this person. Failed work gets its own red
  * count and never turns the band calm-green, because failed is not «nothing to do».
  */
-export function NeedsBand({ waiting, failed, running, onOpenTask, onWaiting, onFailed, onRuns }: {
+export function NeedsBand({ waiting, failed, unmerged = [], running, onOpenTask, onWaiting, onFailed, onRuns }: {
   waiting: Task[]
   failed: Task[]
+  /** Accepted work not merged into the base branch yet (w1d): «accepted» here does not mean «in the code». */
+  unmerged?: Task[]
   running: number
   onOpenTask(id: string): void
   onWaiting(): void
   onFailed(): void
   onRuns(): void
 }) {
-  const tone = waiting.length ? 'warn' : failed.length ? 'neutral' : 'calm'
+  const tone = waiting.length ? 'warn' : failed.length || unmerged.length ? 'neutral' : 'calm'
   return (
     <section className={`orc-needs orc-needs--${tone}`} aria-labelledby="review-needs">
       <div className="orc-needs__text">
@@ -51,6 +53,17 @@ export function NeedsBand({ waiting, failed, running, onOpenTask, onWaiting, onF
             <button type="button" className="orc-review__link" onClick={onFailed}>{t('review.needs.showFailed')}</button>
           </p>
         ) : null}
+        {unmerged.length ? (
+          <p className="orc-needs__unmerged">
+            <b>{t('review.needs.unmerged', { count: unmerged.length })}</b>{' '}
+            {unmerged.slice(0, 2).map((task) => (
+              <button key={task.id} type="button" className="orc-needs__task" onClick={() => onOpenTask(task.id)}>
+                {task.title} →
+              </button>
+            ))}
+            {unmerged.length > 2 ? <span>{t('review.needs.more', { count: unmerged.length - 2 })}</span> : null}
+          </p>
+        ) : null}
       </div>
       <div className="orc-needs__act">
         <strong className="orc-needs__count" aria-hidden="true">{numeric(waiting.length)}</strong>
@@ -64,13 +77,13 @@ export function NeedsBand({ waiting, failed, running, onOpenTask, onWaiting, onF
 
 /** One labelled distribution of exclusive buckets, then the line that stops «accepted» reading as «verified». */
 export function ProgressPanel({ progress }: { progress: PlanProgress }) {
-  const { total, superseded, buckets, verdicts } = progress
+  const { total, superseded, dropped, buckets, verdicts } = progress
   const label = PROGRESS_BUCKETS.map((bucket) => `${t(`review.bucket.${bucket}`)} ${numeric(buckets[bucket])}`).join(', ')
   return (
     <section className="orc-rprogress" aria-labelledby="review-progress">
       <div className="orc-review__head">
         <h2 id="review-progress">{t('review.progressTitle')}</h2>
-        <span>{t('review.scopeLine', { total: numeric(total), superseded: numeric(superseded) })}</span>
+        <span>{t('review.scopeLine', { total: numeric(total), superseded: numeric(superseded) })}{dropped ? ` · ${t('review.droppedLine', { dropped: numeric(dropped) })}` : ''}</span>
       </div>
       {total ? (
         <>

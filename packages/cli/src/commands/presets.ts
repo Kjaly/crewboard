@@ -1,5 +1,5 @@
 import { parseArgs } from 'node:util'
-import { BUILTIN_PRESET_ID, TASK_CLASSES, deletePreset, listPresets, resolveRouting, savePreset, setPlanPreset, setRepositoryPreset, type Exec, type TaskClass } from '@crewboard/core'
+import { BUILTIN_PRESET_ID, TASK_CLASSES, currentPlanId, deletePreset, listPresets, resolveRouting, savePreset, setPlanPreset, setRepositoryPreset, type Exec, type TaskClass } from '@crewboard/core'
 import { repoRoot } from '../context.js'
 import { cliT } from '../i18n.js'
 import { type Io, UserError } from '../io.js'
@@ -50,7 +50,6 @@ export async function cmdPlanPreset(argv: string[], io: Io, exec: Exec): Promise
   const root = await repoRoot(io, exec)
   const id = argv[0] === '--clear' ? undefined : argv[0]
   if (!id && argv[0] !== '--clear') throw new UserError(cliT(language(io), 'presets.planUsage'), 2)
-  const { currentPlanId } = await import('@crewboard/core')
   await setPlanPreset(root, currentPlanId(root), id, io.env)
   io.out(`${cliT(language(io), 'presets.selected', { id: id ?? BUILTIN_PRESET_ID })}\n`)
   return 0

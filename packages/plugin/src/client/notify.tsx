@@ -302,8 +302,13 @@ export function useReviewBadge(): { waiting: number; locations: string } {
   )
 }
 
-/** Accessible name of the sidebar item — dsh calls `label` when it renders the entry. */
+/** Name of the sidebar item — dsh calls `label` when it renders the entry. The waiting count lives on the badge only. */
 export function reviewBadgeLabel(): string {
+  return t('notify.badge')
+}
+
+/** Hover title of the sidebar icon: the count and where the waiting work is. */
+export function reviewBadgeTitle(): string {
   const { waiting, locations } = reviewCenter().getState()
   return waiting > 0 ? t('notify.badgeWaiting', { n: waiting, locations }) : t('notify.badge')
 }

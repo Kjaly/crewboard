@@ -104,3 +104,17 @@ it('keeps the ordinary task panel snapshot', async () => {
   await waitFor(() => expect(screen.getByRole('tab', { name: 'Обзор' })).toBeTruthy())
   expect(view.container.querySelector('.orc-panel')).toMatchSnapshot()
 })
+
+it('a decision in review shows its choice and «Where to look», never a verdict or worker lines (w1b, B05)', async () => {
+  const reviewing = { ...decision, status: 'in_review' as const, check: 'checked' as const }
+  // The host sends a decision without a verdict, even when the orchestrator stored a report for it.
+  const detail = { ...makeDetail({ id: decision.id, kind: 'decision', status: 'in_review', deps: decision.deps, report: { runId: '', text: 'Варианты: A или B', source: 'orchestrator', truncated: false } }), verdict: undefined }
+  const { container } = mount(reviewing, { human: detail })
+  expect(await screen.findByRole('heading', { name: 'Куда смотреть' })).toBeTruthy()
+  await waitFor(() => expect(screen.getByText('Варианты: A или B')).toBeTruthy())
+  expect(container.querySelector('.orc-verdict')).toBeNull()
+  // Predecessors keep their verdicts in «Where to look»; the decision itself has none.
+  expect(screen.queryByText(/Спорно/)).toBeNull()
+  expect(container.querySelector('.orc-panel__choice')).toBeNull()
+  expect(container.querySelector('.orc-panel__identity-name')).toBeNull()
+})

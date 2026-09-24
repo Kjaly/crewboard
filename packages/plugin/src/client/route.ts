@@ -10,6 +10,8 @@ export type OrchestraRoute = {
   run?: string
   step?: string
   lens?: string
+  /** The lane the plan opens focused on: the graph flies to it, Work and Review filter to it. */
+  lane?: string
 }
 
 const PREFIX = '#orchestra/'
@@ -30,9 +32,11 @@ export function parseRoute(hash: string): OrchestraRoute | null {
   const run = params.get('run') || undefined
   const step = params.get('step') || undefined
   const lens = params.get('lens') || undefined
+  // The unnamed lane is a real lane: `?lane=` (empty) addresses it, so presence decides, not truthiness.
+  const lane = params.has('lane') ? params.get('lane') ?? '' : undefined
   if (draft && run) return null
   if (step && !run) return null
-  return { repo, plan, view: VIEWS.has(view as RouteView) ? view as RouteView : 'graph', ...(task ? { task } : {}), ...(tab ? { tab } : {}), ...(draft ? { draft } : {}), ...(run ? { run } : {}), ...(step ? { step } : {}), ...(lens ? { lens } : {}) }
+  return { repo, plan, view: VIEWS.has(view as RouteView) ? view as RouteView : 'graph', ...(task ? { task } : {}), ...(tab ? { tab } : {}), ...(draft ? { draft } : {}), ...(run ? { run } : {}), ...(step ? { step } : {}), ...(lens ? { lens } : {}), ...(lane !== undefined ? { lane } : {}) }
 }
 
 export function formatRoute(route: OrchestraRoute): string {
@@ -43,6 +47,7 @@ export function formatRoute(route: OrchestraRoute): string {
   if (route.run) query.set('run', route.run)
   if (route.run && route.step) query.set('step', route.step)
   if (route.lens) query.set('lens', route.lens)
+  if (route.lane !== undefined) query.set('lane', route.lane)
   return `${PREFIX}${path}${query.size ? `?${query}` : ''}`
 }
 

@@ -8,7 +8,6 @@ export type RunCost = {
   runId: string
   agent: string
   durationSec?: number
-  usd?: number
   quotaDeltaPct?: number
   calls?: number
   tokens?: Tokens
@@ -22,7 +21,7 @@ export type RunCost = {
   cashUsd?: { value: number; currency: 'USD'; source: string; sourceRecordId?: string }
   apiEquivalentUsd?: { value: number; currency: 'USD'; source: string; model?: string; rateDate?: string; priceVersion?: string }
   quotaMeasurements?: Array<{ sampleId: string; accountKey: string; provider: string; windowId: string; beforePct: number; afterPct: number; attribution: 'exclusive' | 'shared' | 'unknown'; reset?: boolean }>
-  executionOutcome?: 'completed' | 'failed' | 'cancelled' | 'running' | 'unknown'
+  executionOutcome?: 'completed' | 'failed' | 'cancelled' | 'incomplete' | 'running' | 'unknown'
   attemptIndex?: number
   attemptParentRunId?: string
   attemptTrigger?: 'initial' | 'human_relaunch' | 'automatic_retry' | 'unknown'
@@ -30,7 +29,11 @@ export type RunCost = {
   metricObservations?: RunUsage['availability']
   reasoningIncludedInOutput?: boolean
 }
-export type AgentTotals = { runs: number; durationSec: number; usd?: number; quotaDeltaPct?: number; tokens?: Tokens; pendingRuns?: number }
+/**
+ * Money is two units that never add up (B08): `cashUsd` — what the runs were charged, `apiEquivalentUsd` — what
+ * subscription runs would have cost at API rates, an estimate. Each is absent when no run reported it.
+ */
+export type AgentTotals = { runs: number; durationSec: number; cashUsd?: number; apiEquivalentUsd?: number; quotaDeltaPct?: number; tokens?: Tokens; pendingRuns?: number }
 
 const USD = /"?(?:total_cost_usd|cost_usd)"?\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)/
 
@@ -57,7 +60,6 @@ export function runCost(run: Run, events: RawEvent[], usage?: RunUsage): RunCost
   const family = canonical.split('/')[0]!.toLowerCase()
   const subscription = run.billingMode ? run.billingMode === 'subscription' || run.billingMode === 'promotional' : family.startsWith('claude') || family.startsWith('codex')
   if (usd !== undefined) {
-    cost.usd = usd
     if (subscription) cost.apiEquivalentUsd = { value: usd, currency: 'USD', source: usage?.source ?? 'rate_estimate', ...(run.model ? { model: run.model } : {}), ...(usage?.rateDate ? { rateDate: usage.rateDate } : {}), ...(usage?.priceVersion ? { priceVersion: usage.priceVersion } : {}) }
     else cost.cashUsd = { value: usd, currency: 'USD', source: usage?.source ?? 'legacy_cost_record', ...(usage?.cashSourceId ? { sourceRecordId: usage.cashSourceId } : {}) }
   }
@@ -92,7 +94,8 @@ export function summarizeCosts(costs: RunCost[]): Record<string, AgentTotals> {
     const t = out[c.agent]
     t.runs += 1
     t.durationSec += c.durationSec ?? 0
-    if (c.usd !== undefined) t.usd = round6((t.usd ?? 0) + c.usd)
+    if (c.cashUsd) t.cashUsd = round6((t.cashUsd ?? 0) + c.cashUsd.value)
+    if (c.apiEquivalentUsd) t.apiEquivalentUsd = round6((t.apiEquivalentUsd ?? 0) + c.apiEquivalentUsd.value)
     if (c.quotaMeasurements?.length) {
       const unique = c.quotaMeasurements.filter((sample) => !seenQuota.has(sample.sampleId) && (seenQuota.add(sample.sampleId), true))
       // Only a sample known to be shared is left out; legacy samples of unknown attribution keep the

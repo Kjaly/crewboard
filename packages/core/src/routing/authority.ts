@@ -92,7 +92,7 @@ export function assignWorker(task: { worker?: string; workerSource?: WorkerSourc
 }
 
 // Finished work never launches again, so an old assignment on it is history, not a deviation.
-const FINISHED = new Set(['accepted', 'closed', 'superseded'])
+const FINISHED = new Set(['accepted', 'closed', 'superseded', 'dropped'])
 
 /** Marks open tasks whose assigned worker the current preset does not route their class to. */
 export function markOutsidePreset<T extends { kind: string; class?: TaskClass; worker?: string; workerSource?: WorkerSource; status?: string }>(tasks: T[], routing: EffectiveRouting, aliases: Record<string, string> = {}): Array<T & { outsidePreset?: boolean }> {

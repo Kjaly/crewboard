@@ -2,9 +2,9 @@
 
 All notable changes to Crewboard are documented here. This changelog follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-The public history starts with 0.3.0, the first public snapshot of the repository. The 0.1.0 and 0.2.0 entries below describe internal milestones from before that snapshot, under the working name dsh-orchestra; they were never published and have no Git tags.
+The public history starts with the first public snapshot of the repository (0.3.0, pushed to GitHub on 2026-09-24 without a tag or an npm release); its changes are folded into 0.4.0, the first release. The 0.1.0 and 0.2.0 entries below describe internal milestones from before that snapshot, under the working name dsh-orchestra; they were never published and have no Git tags.
 
-## [0.3.0] - Unreleased
+## [0.4.0] - Unreleased
 
 First public release. Crewboard is published as two npm packages: [`crewboard`](https://www.npmjs.com/package/crewboard), the command-line interface, and [`dsh-crewboard`](https://www.npmjs.com/package/dsh-crewboard), the DeepSeek Harness plugin.
 
@@ -15,7 +15,11 @@ First public release. Crewboard is published as two npm packages: [`crewboard`](
 - **Graph, Work, and Review views.** Review shows plan progress, money and quota, and lets you open a run or a task in detail. The task panel has overview, activity, changes, contract, your actions, and links; a right-click menu on a task offers follow-up and superseding tasks. The current place is kept in the URL, and heavy screens load on demand.
 - **Plan drafts as durable jobs.** A draft keeps the worker's answer even when it does not match the draft format, and can be repaired, retried, recovered, or dropped (`crewboard plan draft …`).
 - **The orchestrator's check.** Between a finished run and a person's decision, the plan's orchestrator can check the work: `crewboard verify <id>` takes it, `--done --note "…"` hands it to the person with the note above **Accept**, and `--return "findings"` sends it back to the worker in the same worktree. **Orchestrator checks finished work** is set per repository or plan and is on by default while the plan has a chat (`crewboard verify --setting`); `crewboard wait --for check` follows its steps. Acceptance stays human-only.
+- **The orchestrator's own work and prepared decisions.** A `root` task is work the orchestrator does itself — integration on a stand, starting processes, the owner's database: `crewboard start <id>` shows it «in work by the orchestrator», `crewboard verify <id> --done --note "…" [--report <file>]` sends it to review with a report shown where a worker's is, and no worker is ever launched for it. A decision reaches **Needs you** only once its dependencies are accepted and the orchestrator prepared it with `verify --done` (while the orchestrator check is on); **Accept in batch** names decisions and root tasks the orchestrator has not checked. `crewboard task set <id> --kind` changes the kind of an open task.
 - **Run ledger.** Paged, seekable steps of a run with links to individual steps.
+- **Closing a task that is no longer needed.** `crewboard drop <id> --reason "…"` (human only, with a confirmation) and **Close as not needed…** in the task menu close a task for good: it becomes «dropped», keeps the reason in its history, never becomes ready again and leaves the critical path. A plan with a dropped task is refused by older builds instead of being misread.
+- **Unfinished runs.** A run whose worker stopped with uncommitted work and no result line ends `incomplete` instead of going to review: **Needs you** says why, and **Continue** (or `crewboard continue <id>`) relaunches it in the same worktree with the direction to finish and report.
+- **Accepted is not merged.** Accepting leaves the work on the task's branch; Crewboard detects when that work reaches the base branch — by a merge, a fast-forward or a squash, also one resolved by hand (see docs/en/review.md for the rule) — and records the task as merged, and never merges by itself. Until then the task is **Accepted, not merged** in **Needs you**, the Work board, Review, `crewboard status` and `crewboard attention`, and its panel (and `crewboard accept`) gives the exact commands. A dependency counts as done only once merged: a dependent task shows «waiting for X to be merged» and `crewboard run` refuses with the commands, unless a person passes `--allow-unmerged`. Files a worker left without a commit are named in the verdict and in the accept confirmation, since the branch does not contain them.
 - **CLI version preflight.** Claude Code is checked against the minimum version of the model before a run; Opus 5.5 needs Claude Code 2.1.280 or newer.
 - **Documentation** in English and Russian: getting started, plugin setup, CLI reference, workers, review, costs, and troubleshooting.
 
@@ -27,9 +31,23 @@ First public release. Crewboard is published as two npm packages: [`crewboard`](
 
 ### Fixed
 
+- `crewboard worktree gc` without `--yes` removes nothing: it used to remove merged, clean accepted copies through its re-check without saying so. `--yes` lists what it removed, or `Nothing removed: N kept as …`.
+- `crewboard cost` shows money charged (`cash $X`) and the API-rate estimate (`estimate ≈$Y`) separately instead of adding them into one figure; the JSON totals carry `cashUsd` and `apiEquivalentUsd` instead of `usd`, and a plan without runs says so.
+- `crewboard wait --tasks` returns `0` at once when every listed task is already where the wait looks, instead of waiting for a transition that already happened; the default timeout is 30 minutes instead of none.
 - The plugin's browser half is registered under the package name, and the bundle patch imports the plugin by that name.
 - The bundled CLI ships its run supervisors next to its entry point.
 - Orchestra tool output stays lossless JSON.
+- An honest report is no longer disputed: the result line is read from the first lines of the answer or right under a report heading (`## Отчёт`, `## Report`), with list, quote, bold and code marks ignored, and Russian check outcomes («прошёл», «зелёный», «пройдены», «9 тестов», `ok`, `✓`) count as run.
+- A result line with a free-text positive claim is accepted: «Result:»/«Результат:» followed by a plain sentence (in Russian, Ukrainian, English, German, French, Spanish, Portuguese, Italian or Polish) counts when its first sentence has a whole positive word and no negation, hedge or failure word; exact keys such as «получен»/`received` work as before.
+- A decision has no verdict: its panel shows the checklist and **Where to look** without worker or task-class lines, and `crewboard accept` asks to close it instead of naming `claim_missing`. Verdict reasons in the CLI are words, not codes.
+- Batch acceptance never takes risky work by default: **Accept in batch** is the one entry point (the review queue opens the same sheet), pre-selects only clean results, groups negative, disputed and unchecked work under **Open first** without ticks, and the confirmation counts «1 clean, 9 at risk». Review queue rows show their verdict.
+- A Claude Code run no longer ends while the worker waits for its own background work: the session stays open until that work finishes and the worker's follow-up turn ends (bounded to an hour). Every worker is told to run long checks in the foreground.
+- A Claude Code run that hit the usage limit or ended its last turn with `is_error: true` fails with Claude's message (and, for a limit, the reset time and "start again after the reset") instead of going to review as finished work.
+- One worker per worktree even after a run's supervisor dies: the worker runs in its own process group recorded in the run's state, Crewboard stops an orphaned worker and refuses a new start while it lives, and the run ends failed with the reason "the run's supervisor exited; its worker was stopped".
+- Activity of a finished run shows its steps instead of "this run has not done anything"; `crewboard events` shows the worker's warnings and `crewboard status` marks a task whose last run failed.
+- A closed task starts no worker: `crewboard run`, `orchestra_run`, `steer --relaunch` and `continue` refuse a task that is accepted (also with a negative verdict) or superseded, with the reason in the CLI's language.
+- Ctrl+D or Ctrl+C at a confirmation (`accept`, `reject`, `supersede`, `plan approve`, `worktree gc --force`, `verify`) means no: it prints the same «Cancelled.» line as answering `n` and exits 1, without an `AbortError` stack.
+- CI and release workflows use `actions/checkout@v7`, `actions/setup-node@v7` and `pnpm/action-setup@v6`, which run on Node.js 24.
 
 ## Internal milestones before the public snapshot
 

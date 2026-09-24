@@ -76,7 +76,8 @@
               "implement",
               "review",
               "research",
-              "decision"
+              "decision",
+              "root"
             ]
           },
           "deps": {

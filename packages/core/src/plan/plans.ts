@@ -1,6 +1,6 @@
 import { readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import type { Plan } from './schema.js'
-import { LEGACY_PLAN_ID, PLAN_ID, currentPlanFile, currentPlanId, initPlan, loadPlan, planPath, plansDir, updatePlan } from './store.js'
+import { LEGACY_PLAN_ID, PLAN_ID, currentPlanFile, currentPlanId, initPlan, loadPlan, planPath, plansDir, setPlanView, storedCurrentPlanId, updatePlan } from './store.js'
 
 export type PlanInfo = { id: string; goal: string; archived: boolean; current: boolean; rev: number; updatedAt: string; taskCount: number; example?: boolean }
 
@@ -40,12 +40,24 @@ export async function listPlans(root: string): Promise<PlanInfo[]> {
   return out.sort((a, b) => rank(a) - rank(b) || Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
 }
 
+/** Makes `id` the repository's current plan; a view this process held (B22) gives way to it. */
 export async function setCurrentPlan(root: string, id: string): Promise<void> {
   if (!(await planIds(root)).includes(id)) throw new PlanIdError(`Нет плана ${id}`)
   const file = currentPlanFile(root)
   const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`
   await writeFile(tmp, `${id}\n`)
   await rename(tmp, file)
+  setPlanView(root, undefined)
+}
+
+/**
+ * The screen opens a plan (B22). An active plan becomes current, as before; an archived one is only shown
+ * by this process — `current` stays where the CLI, the agents and other people left it.
+ */
+export async function openPlan(root: string, id: string): Promise<void> {
+  if (!(await planIds(root)).includes(id)) throw new PlanIdError(`Нет плана ${id}`)
+  if ((await loadPlan(root, id).catch(() => undefined))?.archived !== true) return setCurrentPlan(root, id)
+  setPlanView(root, storedCurrentPlanId(root) === id ? undefined : id)
 }
 
 export async function createPlan(root: string, id: string, goal: string, now = new Date()): Promise<Plan> {
@@ -70,7 +82,7 @@ export async function setPlanArchived(root: string, id: string, archived: boolea
     5,
     id,
   )
-  if (archived && currentPlanId(root) === id) {
+  if (archived && storedCurrentPlanId(root) === id) {
     const next = (await listPlans(root)).find((p) => !p.archived && p.id !== id)
     if (next) await setCurrentPlan(root, next.id)
   }
@@ -100,7 +112,7 @@ export async function removeExamplePlan(root: string, id: string): Promise<void>
   const plan = await loadPlan(root, id)
   if (!plan.example) throw new PlanIdError('This is not an example plan')
   const next = (await listPlans(root)).find((p) => p.id !== id && !p.archived)
-  if (currentPlanId(root) === id && next) await setCurrentPlan(root, next.id)
+  if (storedCurrentPlanId(root) === id && next) await setCurrentPlan(root, next.id)
   await rm(planPath(root, id))
-  if (currentPlanId(root) === id) await rm(currentPlanFile(root), { force: true })
+  if (storedCurrentPlanId(root) === id) await rm(currentPlanFile(root), { force: true })
 }

@@ -3,8 +3,9 @@ import { build } from 'esbuild'
 import { buildAtomically } from '../../../scripts/atomic-output.mjs'
 
 // Whitespace and syntax only, identifiers kept: an unexpected error prints its stack, and names are what
-// make it readable. No source maps — see the plugin build for why.
-const common = { bundle: true, platform: 'node', format: 'esm', target: 'node24', packages: 'bundle', minifyWhitespace: true, minifySyntax: true, logLevel: 'warning' }
+// make it readable. No source maps — see the plugin build for why. UTF-8 output: escaped, every Cyrillic
+// letter of the Russian messages costs six bytes instead of two.
+const common = { bundle: true, platform: 'node', format: 'esm', target: 'node24', packages: 'bundle', minifyWhitespace: true, minifySyntax: true, charset: 'utf8', logLevel: 'warning' }
 
 // dist/ is published as is and `orch` runs from it while this builds: the bundles go into a fresh
 // directory swapped in whole, so no leftover of an older build ships and dist/ is never empty.

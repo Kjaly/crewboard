@@ -10,7 +10,6 @@ import { laneBands, layoutFoldStack, layoutGraph } from '../../src/client/views/
 import { installMatchMedia, makeRepo, makeTask } from './helpers.js'
 
 const old = '2026-09-21T12:00:00Z'
-const now = new Date('2026-09-22T12:00:00Z')
 const lane = (name: string) => Array.from({ length: 6 }, (_, i) => makeTask({ id: `${name}-${i}`, lane: name, title: `Задача ${name} ${i}`, status: 'accepted', acceptedAt: old }))
 const fixture = () => {
   const tasks = [...lane('1A'), ...lane('2A'), ...lane('3A'), ...Array.from({ length: 12 }, (_, i) => makeTask({ id: `q${i}`, lane: 'Работа', status: 'ready' }))]
@@ -21,7 +20,7 @@ afterEach(() => { cleanup(); localStorage.clear() })
 
 it('packs three consecutive folded lanes into one short band while retaining guest boxes', async () => {
   const source = fixture()
-  const decision = decideFolds(source, {}, now)
+  const decision = decideFolds(source, {})
   const graph = foldGraph(source, decision)
   const visible = graph.nodes.map((node) => node.task ?? makeTask({ id: node.id, lane: node.lane }))
   const compact = layoutFoldStack(visible, decision.folded)
@@ -60,7 +59,7 @@ it('fans task cards on hover, closes on leave or Escape, and skips motion when r
 
 it('routes aggregated edges to a chip and places its fan away from live nodes', () => {
   const source = fixture()
-  const decision = decideFolds(source, {}, now)
+  const decision = decideFolds(source, {})
   const graph = foldGraph(source, decision)
   expect(graph.edges).toContainEqual(expect.objectContaining({ from: 'lane:1A', to: 'q0', count: 2 }))
   const visible = graph.nodes.map((node) => node.task ?? makeTask({ id: node.id, lane: node.lane }))

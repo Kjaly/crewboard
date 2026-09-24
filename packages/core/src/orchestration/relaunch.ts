@@ -3,9 +3,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { ExamplePlanError, CREWBOARD_DIR, loadPlan } from '../plan/store.js'
 import { normalize } from '../runs/normalize.js'
-import { type LaunchOptions, type LaunchResult, launchError, launchLang, launchTask } from './launch.js'
+import { type LaunchOptions, type LaunchResult, assertOpenForRun, launchError, launchLang, launchTask } from './launch.js'
 
-export type RelaunchOptions = Omit<LaunchOptions, 'agent' | 'promptFile' | 'contract'> & { agent?: string; note?: string; fromStep?: string; noteFrom?: 'human' | 'orchestrator' }
+export type RelaunchOptions = Omit<LaunchOptions, 'agent' | 'promptFile' | 'contract'> & { agent?: string; note?: string; fromStep?: string; noteFrom?: 'human' | 'orchestrator' | 'crewboard' }
 
 const MAX_MESSAGES = 3
 const MAX_PROBLEMS = 5
@@ -20,6 +20,8 @@ export async function relaunchTask(o: RelaunchOptions): Promise<LaunchResult> {
   const task = plan.tasks.find((t) => t.id === o.taskId)
   const lang = launchLang(o)
   if (!task) throw launchError(lang, 'unknown_task', { id: o.taskId })
+  // Refused before the previous run is read or a prompt is written.
+  assertOpenForRun(task, lang)
   const last = task.runs.at(-1)
   if (!last) throw launchError(lang, 'no_runs', { id: o.taskId })
   if (LEGACY_RUN_ID.test(last.runId)) throw new LegacyRunReadOnlyError()
@@ -38,7 +40,7 @@ export async function relaunchTask(o: RelaunchOptions): Promise<LaunchResult> {
     ...said.map((e) => `Последнее сообщение воркера: ${e.text}`),
     ...problems.map((e) => `Проблема: ${e.text}`),
     ...(o.fromStep ? [`Продолжи с шага: ${o.fromStep}`] : []),
-    ...(o.note ? [o.noteFrom === 'orchestrator' ? `Замечания оркестратора по проверке: ${o.note}` : `Указание человека: ${o.note}`] : []),
+    ...(o.note ? [o.noteFrom === 'orchestrator' ? `Замечания оркестратора по проверке: ${o.note}` : o.noteFrom === 'crewboard' ? o.note : `Указание человека: ${o.note}`] : []),
     'Рабочая копия уже содержит изменения прошлого запуска — продолжай с них, не начинай заново.',
     '</previous_run>',
   ]
@@ -50,4 +52,22 @@ export async function relaunchTask(o: RelaunchOptions): Promise<LaunchResult> {
   // worker while the preset still allows it, else the preset order. Re-running the last worker is not
   // a fresh choice by whoever relaunches, so it never bypasses the preset.
   return launchTask({ ...o, promptFile, preferWorker: last.agent })
+}
+
+/** The direction «Continue» gives an incomplete run's successor (bg1). */
+export const CONTINUE_DIRECTION =
+  'Прошлый запуск закончился, не сдав работу: изменения в рабочей копии не закоммичены, финального отчёта со строкой «Результат:» нет. Доделай задачу в этой копии: длинные проверки запускай в этом же ходе на переднем плане с таймаутом, не в фоне; закоммить работу и закончи финальным отчётом.'
+
+/**
+ * «Continue» on a run that ended `incomplete` (bg1): the same relaunch in the same worktree, with a fixed
+ * direction to finish and report. Only the task's last run being incomplete makes it one.
+ */
+export async function continueTask(o: Omit<RelaunchOptions, 'note' | 'noteFrom' | 'fromStep'>): Promise<LaunchResult> {
+  const plan = await loadPlan(o.root, o.planId)
+  const task = plan.tasks.find((t) => t.id === o.taskId)
+  const lang = launchLang(o)
+  if (!task) throw launchError(lang, 'unknown_task', { id: o.taskId })
+  assertOpenForRun(task, lang)
+  if (task.runs.at(-1)?.outcome !== 'incomplete') throw launchError(lang, 'not_incomplete', { id: o.taskId })
+  return relaunchTask({ ...o, note: CONTINUE_DIRECTION, noteFrom: 'crewboard' })
 }

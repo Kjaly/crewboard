@@ -23,6 +23,17 @@ describe('parseClaudeLine', () => {
     ).toEqual({ stopReason: 'success', failed: false, usdTotal: 0.13, usage: { input: 18, output: 870, cacheRead: 21322, cacheWrite: 63255, reasoning: 0 } })
   })
 
+  it('B01 reads a rejected rate limit with its reset time and the text of a result with is_error', () => {
+    const tools = new Map<string, string>()
+    const limited = parseClaudeLine('{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"five_hour","resetsAt":1790276400}}', tools)
+    expect(limited.rateLimited).toEqual({ resetsAt: '2026-09-24T19:00:00.000Z', type: 'five_hour' })
+    expect(limited.events).toContainEqual(['rate_limited', { resetsAt: '2026-09-24T19:00:00.000Z', type: 'five_hour' }])
+    expect(parseClaudeLine('{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1790276400}}', tools).rateLimited).toBeUndefined()
+    const result = parseClaudeLine('{"type":"result","subtype":"success","is_error":true,"result":"You\'ve hit your usage limit · resets 7pm","usage":{}}', tools)
+    expect(result.turnEnd).toMatchObject({ failed: true, error: "You've hit your usage limit · resets 7pm" })
+    expect(parseClaudeLine('{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["boom"],"usage":{}}', tools).turnEnd).toMatchObject({ failed: true, error: 'boom' })
+  })
+
   it('reads a replayed stdin message (the shape claude 2026-09 emits with --replay-user-messages)', () => {
     const line = '{"type":"user","message":{"role":"user","content":"Also reply with DONE2."},"session_id":"s-1","parent_tool_use_id":null,"uuid":"u1","timestamp":"2026-09-24T13:00:00Z","isReplay":true}'
     expect(parseClaudeLine(line, new Map())).toEqual({ events: [], replay: 'Also reply with DONE2.' })

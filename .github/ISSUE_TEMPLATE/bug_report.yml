@@ -28,6 +28,6 @@ body:
     attributes:
       label: Versions and environment
       description: "`npm ls -g crewboard`, `node --version`, `dsh --version` if the plugin is involved, the worker CLI and its version, and your operating system."
-      placeholder: crewboard 0.3.0, Node 24.16, dsh 0.1.5, Claude Code 2.1.281, macOS
+      placeholder: crewboard 0.4.0, Node 24.16, dsh 0.1.5, Claude Code 2.1.281, macOS
     validations:
       required: true

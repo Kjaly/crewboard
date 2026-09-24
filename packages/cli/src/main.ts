@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { createInterface } from 'node:readline/promises'
 import { run } from './cli.js'
 import { envLang, programOf } from './i18n.js'
+import { askLine } from './io.js'
 
 const io = {
   cwd: process.cwd(),
@@ -11,14 +11,7 @@ const io = {
   out: (s: string) => void process.stdout.write(s),
   err: (s: string) => void process.stderr.write(s),
   isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
-  prompt: async (q: string) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout })
-    try {
-      return await rl.question(q)
-    } finally {
-      rl.close()
-    }
-  },
+  prompt: (q: string) => askLine(q, { input: process.stdin, output: process.stdout }),
   now: () => new Date(),
 }
 

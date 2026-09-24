@@ -148,11 +148,11 @@ describe('GET /api/cost', () => {
       startedAt: '2026-09-22T12:00:00Z',
       finishedAt: '2026-09-22T12:01:00Z',
       durationSec: 60,
-      usd: 0.25,
+      cashUsd: { value: 0.25 },
     })
     expect(value.runs[1]).toMatchObject({ agent: 'claude/opus', rawAgent: 'claude-opus', quotaDeltaPct: 2.5 })
     expect(Object.keys(value.totals).sort()).toEqual(['claude/opus', 'dsh'])
-    expect(value.totals.dsh).toMatchObject({ runs: 1, durationSec: 60, usd: 0.25 })
+    expect(value.totals.dsh).toMatchObject({ runs: 1, durationSec: 60, cashUsd: 0.25 })
     expect(value.accepted).toEqual([{ taskId: 'a', at: '2026-09-22T12:05:00Z' }])
   })
 })

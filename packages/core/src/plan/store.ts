@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { isSchemaError } from '../util/zod.js'
@@ -14,14 +14,34 @@ export const PLAN_ID = /^[a-z0-9][a-z0-9-]{0,40}$/
 export const plansDir = (root: string) => join(root, CREWBOARD_DIR, 'plans')
 export const currentPlanFile = (root: string) => join(root, CREWBOARD_DIR, 'current')
 
-/** The plan CLI commands, agent tools and the panel act on; a missing or broken pointer means the legacy plan. */
-export function currentPlanId(root: string): string {
+/** The repository's current plan as the `current` file says; a missing or broken pointer means the legacy plan. */
+export function storedCurrentPlanId(root: string): string {
   try {
     const id = readFileSync(currentPlanFile(root), 'utf8').trim()
     return PLAN_ID.test(id) ? id : LEGACY_PLAN_ID
   } catch {
     return LEGACY_PLAN_ID
   }
+}
+
+/**
+ * Plans this process shows instead of the stored current one, by repository (B22). The screen opens an
+ * archived plan to look at it: browsing must not move `current` under the CLI, the agents and other
+ * people. Only the host sets a view; the `current` file stays untouched.
+ */
+const views = new Map<string, string>()
+
+/** Show `planId` as this process's current plan of `root`; `undefined` drops the view. */
+export function setPlanView(root: string, planId: string | undefined): void {
+  if (planId === undefined) views.delete(root)
+  else views.set(root, planId)
+}
+
+/** The plan CLI commands, agent tools and the panel act on: this process's view, else the stored current plan. */
+export function currentPlanId(root: string): string {
+  const view = views.get(root)
+  if (view !== undefined && existsSync(planPath(root, view))) return view
+  return storedCurrentPlanId(root)
 }
 
 export const planPath = (root: string, planId?: string) => {
@@ -73,6 +93,18 @@ export class PlanConflictError extends Error {
   ) {
     super(`plan changed elsewhere: expected rev ${expectedRev}, found ${actualRev}`)
     this.name = 'PlanConflictError'
+  }
+}
+/**
+ * A change that names no plan landed on an archived one (B22): `current` points at the archive — `plan use`,
+ * or the screen opened it — and the next `task add` or `run` would silently write there. Naming the plan
+ * (`--plan`, a tool's bound plan) writes as before; bookkeeping of runs always names its plan.
+ */
+export class PlanArchivedError extends Error {
+  readonly code = 'plan_archived'
+  constructor(readonly planId: string) {
+    super(`Plan ${planId} is archived: nothing was written. Pass --plan ${planId} to change it anyway, or switch to an active plan with \`plan use <id>\`. / План ${planId} в архиве: ничего не записано. Чтобы всё же изменить его, укажите --plan ${planId}; или переключитесь на активный план: \`plan use <id>\`.`)
+    this.name = 'PlanArchivedError'
   }
 }
 export class ExamplePlanError extends Error {
@@ -201,6 +233,7 @@ export async function savePlan(root: string, next: Plan, expectedRev: number, no
       // Checked on the file itself, under the lock: whatever the caller loaded, the plan on disk decides.
       if (unread.length) throw new PlanIncompatibleError(file, 'write', unread)
       if (existing.example) throw new ExamplePlanError()
+      if (planId === undefined && existing.archived) throw new PlanArchivedError(id)
       currentRev = existing.rev
     } catch (err) {
       if (!(err instanceof PlanNotFoundError)) throw err
@@ -219,6 +252,7 @@ export async function updatePlan(root: string, fn: (plan: Plan) => Plan, attempt
   for (let i = 0; ; i++) {
     const current = await loadPlan(root, id)
     if (current.example) throw new ExamplePlanError()
+    if (planId === undefined && current.archived) throw new PlanArchivedError(id)
     try {
       return await savePlan(root, fn(structuredClone(current)), current.rev, new Date(), id)
     } catch (err) {

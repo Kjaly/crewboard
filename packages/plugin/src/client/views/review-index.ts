@@ -1,4 +1,5 @@
 import type { PlanCost, PlanRunCost, RepoSnapshot, TaskReviewSummary } from '../../shared/types.js'
+import { laneOf } from './graph/layout.js'
 
 export type ReviewFilters = {
   search: string
@@ -44,7 +45,8 @@ export type RunStatus = 'running' | 'waiting' | 'failed' | 'accepted' | 'returne
 export function runStatus(run: PlanRunCost, decision: string, taskStatus: string | undefined, latest: boolean): RunStatus {
   const execution = run.executionOutcome ?? run.outcome ?? (run.finishedAt ? 'unknown' : 'running')
   if (execution === 'running') return 'running'
-  if (execution === 'failed' || execution === 'cancelled') return 'failed'
+  // An incomplete run (bg1) handed nothing in: like a failed one, it is never shown as work to accept.
+  if (execution === 'failed' || execution === 'cancelled' || execution === 'incomplete') return 'failed'
   if (decision === 'accept') return 'accepted'
   if (decision === 'reject') return 'returned'
   if (taskStatus === 'in_review' && latest) return 'waiting'
@@ -109,7 +111,8 @@ export function reviewRows(repo: RepoSnapshot, cost: PlanCost): ReviewRow[] {
       waitMs,
       worker: run.canonicalWorkerId ?? run.agent,
       taskClass: summary?.taskClass ?? task?.class ?? '',
-      lane: task?.lane ?? '',
+      // The graph's lanes: decisions are their own lane, whatever stage the plan filed them under.
+      lane: task ? laneOf(task) : '',
     }
   })
 }

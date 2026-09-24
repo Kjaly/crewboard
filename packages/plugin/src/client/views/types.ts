@@ -15,4 +15,10 @@ export type ViewProps = {
   /** A lens walk (`n` / «›»): the seq bumps on every step so the same id can be walked to twice. */
   walk?: { id: string; seq: number } | null
   lensStep?(dir: 1 | -1): void
+  /** The lane the plan is focused on (sidebar tree, `?lane=`): the graph flies to it, Work and Review filter to it. */
+  lane?: { lane: string; seq: number } | null
+  /** Clears (null) or changes the lane focus — Work's «×» on its lane chip. */
+  setLane?(lane: string | null): void
+  /** The graph reports the lane its camera looks at, for the sidebar tree's highlight. */
+  onLaneInView?(lane: string | null): void
 }

@@ -1,11 +1,12 @@
-import { readFile, stat } from 'node:fs/promises'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { claudeLimitsPath, latestClaudeWeeklyPct } from '../cost/claude-limits.js'
 import { codexQuotaUsedPercent } from '../cost/codex-quota.js'
 import type { Exec } from '../exec.js'
 import { deriveViews } from '../plan/graph.js'
-import { ExamplePlanError, updatePlan } from '../plan/store.js'
+import type { Plan, Task } from '../plan/schema.js'
+import { CREWBOARD_DIR, ExamplePlanError, PlanArchivedError, currentPlanId, updatePlan } from '../plan/store.js'
 import { eventNote } from '../plan/notes.js'
 import type { AgentProfile } from '../preflight/preflight.js'
 import { cachedPreflight } from '../preflight/cache.js'
@@ -16,18 +17,25 @@ import { canonicalWorkerId } from '../routing/identity.js'
 import { loadProfileStore } from '../routing/profile-store.js'
 import { PrepareError, prepareWorktree } from '../worktree/prepare.js'
 import { EMPTY_RECIPE, loadRecipe } from '../worktree/recipe.js'
-import { type Backends, resolveProfile } from './backends.js'
+import { baseBranch, uncommittedCount } from '../worktree/merged.js'
+import { mergeCommands } from '../plan/merge.js'
+import { type Backends, resolveProfile, workerCommands } from './backends.js'
 import { type MessageLang, type MessageVars, orchText } from './messages.js'
 import { syncPlan } from './sync.js'
 
 export type LaunchErrorCode =
   | 'unknown_task'
   | 'no_runs'
+  | 'not_incomplete'
   | 'decision'
+  | 'root'
   | 'running'
+  | 'orphan_alive'
   | 'blocked'
+  | 'unmerged'
   | 'accepted'
   | 'superseded'
+  | 'dropped'
   | 'no_contract'
   | 'contract_missing'
   | 'preflight'
@@ -53,6 +61,16 @@ export class LaunchError extends Error {
 export const launchError = (lang: MessageLang | undefined, code: LaunchErrorCode, vars: MessageVars = {}, detail?: string): LaunchError =>
   new LaunchError(code, orchText(lang, code, vars), detail, vars)
 
+/**
+ * A closed task starts no run (rp1): read from the stored status, not the view, so an acceptance with a
+ * negative verdict (shown as `closed`) is refused like any other.
+ */
+export function assertOpenForRun(task: Pick<Task, 'id' | 'status'>, lang: MessageLang): void {
+  if (task.status === 'accepted') throw launchError(lang, 'accepted', { id: task.id })
+  if (task.status === 'superseded') throw launchError(lang, 'superseded', { id: task.id })
+  if (task.status === 'dropped') throw launchError(lang, 'dropped', { id: task.id })
+}
+
 export type LaunchOptions = {
   root: string
   taskId: string
@@ -72,6 +90,11 @@ export type LaunchOptions = {
   promptFile?: string
   scope?: string
   skipPreflight?: boolean
+  /**
+   * Start although a dependency is accepted but not merged (w1d). Honoured only for a person (`caller: 'person'`):
+   * the copy then starts without that work, which the person chose knowingly.
+   */
+  allowUnmerged?: boolean
   backends: Backends
   exec: Exec
   env: NodeJS.ProcessEnv
@@ -83,6 +106,27 @@ export type LaunchResult = { runId: string; agent: string; worktree: { path: str
 
 const exists = (p: string) => stat(p).then(() => true, () => false)
 
+/**
+ * What every worker is told after its contract, whatever the backend (bg1): a run ends when the worker's turn
+ * ends, so work left in the background is lost and a turn that ends «waiting» hands nothing in.
+ */
+export const WORKER_RULES = `<crewboard_worker_rules>
+Nothing wakes you after your turn ends: when you stop, the run is over.
+- Run long checks (tests, builds, stress runs) in the foreground in this same turn, with a timeout.
+- Do not start background commands or monitors, and do not end your turn to wait for a notification or to check back later.
+- End your turn only with your final report.
+</crewboard_worker_rules>
+`
+
+/** The contract (or a relaunch's combined prompt) with the worker rules after it, kept beside the plan. */
+async function workerPrompt(root: string, taskId: string, source: string, now: Date): Promise<string> {
+  const dir = join(root, CREWBOARD_DIR, 'prompts')
+  await mkdir(dir, { recursive: true })
+  const file = join(dir, `${taskId}-${now.getTime()}.md`)
+  await writeFile(file, `${(await readFile(source, 'utf8')).trimEnd()}\n\n${WORKER_RULES}`)
+  return file
+}
+
 type WorkerOrigin = 'explicit' | 'task' | 'auto'
 
 const isRu = (o: Pick<LaunchOptions, 'lang' | 'env'>): boolean => o.lang === 'ru' || (!o.lang && /^ru(?:[_\-.]|$)/i.test(o.env.LC_ALL || o.env.LANG || ''))
@@ -92,14 +136,24 @@ export const launchLang = (o: Pick<LaunchOptions, 'lang' | 'env'>): MessageLang 
 export async function launchTask(o: LaunchOptions): Promise<LaunchResult> {
   const { plan, states } = await syncPlan(o.root, o.backends, o.now(), undefined, o.planId)
   if (plan.example) throw new ExamplePlanError()
+  // Refused before a worktree or a worker exists, not at the first plan write after them (B22).
+  if (o.planId === undefined && plan.archived) throw new PlanArchivedError(currentPlanId(o.root))
   const view = deriveViews(plan, states).find((v) => v.task.id === o.taskId)
   const lang = launchLang(o)
   if (!view) throw launchError(lang, 'unknown_task', { id: o.taskId })
   if (view.task.kind === 'decision') throw launchError(lang, 'decision')
+  if (view.task.kind === 'root') throw launchError(lang, 'root', { id: o.taskId })
+  assertOpenForRun(view.task, lang)
+  // B19: the supervisor of the last run died but its worker still writes to the copy — one worker per copy.
+  const orphan = view.activeRunId ? states[view.activeRunId]?.orphan : undefined
+  if (orphan) throw launchError(lang, 'orphan_alive', { run: view.activeRunId ?? '', pid: orphan.workerPid })
   if (view.status === 'running') throw launchError(lang, 'running', { run: view.activeRunId ?? '' })
-  if (view.status === 'blocked') throw launchError(lang, 'blocked', { deps: view.blockedBy.join(', ') })
-  if (view.status === 'accepted') throw launchError(lang, 'accepted')
-  if (view.status === 'superseded') throw launchError(lang, 'superseded')
+  if (view.status === 'blocked') {
+    // A dependency counts as done only once merged: a copy branched now would not contain its accepted work (w1d).
+    const waiting = view.waitingMerge ?? []
+    if (waiting.length < view.blockedBy.length) throw launchError(lang, 'blocked', { deps: view.blockedBy.join(', ') })
+    if (!(o.allowUnmerged && o.caller === 'person')) throw await unmergedError(o, lang, plan.tasks.filter((task) => waiting.includes(task.id)))
+  }
 
   const contractRel = o.contract ?? view.task.contract
   if (!contractRel) throw launchError(lang, 'no_contract')
@@ -168,7 +222,8 @@ export async function launchTask(o: LaunchOptions): Promise<LaunchResult> {
         : undefined
   const backend = await o.backends.forAgent(profile.id)
   const startedAt = o.now().toISOString()
-  const runId = await backend.launch({ agent: profile.id, promptFile: o.promptFile ?? contract, cwd: wt.path, model: profile.model })
+  const promptFile = await workerPrompt(o.root, o.taskId, o.promptFile ?? contract, o.now())
+  const runId = await backend.launch({ agent: profile.id, promptFile, cwd: wt.path, model: profile.model })
   await updatePlan(o.root, (next) => {
     const task = next.tasks.find((t) => t.id === o.taskId)
     if (!task) throw launchError(lang, 'unknown_task', { id: o.taskId })
@@ -206,10 +261,22 @@ export async function launchTask(o: LaunchOptions): Promise<LaunchResult> {
   return { runId, agent: profile.id, worktree: { path: wt.path, branch: wt.branch, reused: wt.reused } }
 }
 
+/** The refusal names the base and the exact commands that merge each waiting dependency. */
+async function unmergedError(o: LaunchOptions, lang: MessageLang, deps: Plan['tasks']): Promise<LaunchError> {
+  const into = (await baseBranch(o.root, o.exec)) ?? 'HEAD'
+  const commands: string[] = []
+  for (const dep of deps) {
+    if (!dep.worktree) continue
+    commands.push(...mergeCommands({ root: o.root, taskId: dep.id, ...dep.worktree, uncommitted: await uncommittedCount(dep.worktree.path, o.exec) }))
+  }
+  return launchError(lang, 'unmerged', { deps: deps.map((dep) => dep.id).join(', '), into, id: o.taskId, commands: commands.map((line) => `  ${line}`).join('\n') })
+}
+
 async function preflightFailure(o: LaunchOptions, profile: AgentProfile): Promise<string | undefined> {
   if (o.skipPreflight) return undefined
   const codexUsedPercent = codexQuotaUsedPercent
-  const pf = await cachedPreflight(o.root, profile, { exec: o.exec, codexUsedPercent, lang: isRu(o) ? 'ru' : 'en' }, o.now())
+  const env = { ...o.env, HOME: o.home }
+  const pf = await cachedPreflight(o.root, profile, { exec: o.exec, codexUsedPercent, lang: isRu(o) ? 'ru' : 'en', env, commands: workerCommands(env) }, o.now())
   if (pf.ok) return undefined
   return pf.checks
     .filter((c) => !c.ok)

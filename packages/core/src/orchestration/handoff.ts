@@ -7,9 +7,13 @@ export type HandoffTask = {
   id: string
   title: string
   status: ViewStatus | string
-  kind?: 'implement' | 'review' | 'research' | 'decision'
+  kind?: 'implement' | 'review' | 'research' | 'decision' | 'root'
   worker?: string
   blockedBy?: string[]
+  /** A decision still being prepared by the orchestrator (rt1). */
+  preparing?: boolean
+  /** A root task in work by the orchestrator (rt1). */
+  byOrchestrator?: boolean
 }
 
 /**
@@ -49,6 +53,9 @@ const STRINGS: Record<HandoffLang, HandoffStrings> = {
     waits: {
       in_review: 'review the result; the person accepts it or sends it back in dsh or with orch accept / orch reject in their terminal.',
       decision: 'the person makes the decision in dsh or with orch accept / orch reject in their terminal.',
+      preparing: 'nothing yet — the orchestrator prepares the decision (options and a recommendation) with orch verify --done.',
+      own: 'nothing yet — the orchestrator does this work itself, then reports it with orch verify --done.',
+      root: 'nothing — the orchestrator starts this work itself with orch start.',
       running: 'nothing yet — a worker is running; steer it if it drifts.',
       blocked: 'nothing — the dependencies must finish first.',
       ready: 'nothing — the task can be started.',
@@ -56,6 +63,7 @@ const STRINGS: Record<HandoffLang, HandoffStrings> = {
       accepted: 'nothing — the task is accepted.',
       closed: 'nothing — the task is closed without a result.',
       superseded: 'nothing — the task was superseded.',
+      dropped: 'nothing — the task was closed as not needed.',
       unknown: 'check the task status.',
     },
   },
@@ -72,6 +80,9 @@ const STRINGS: Record<HandoffLang, HandoffStrings> = {
     waits: {
       in_review: 'проверить результат; принимает или возвращает человек — в dsh или командой orch accept / orch reject в своём терминале.',
       decision: 'решение принимает человек — в dsh или командой orch accept / orch reject в своём терминале.',
+      preparing: 'пока ничего — оркестратор готовит решение (варианты и рекомендацию) через orch verify --done.',
+      own: 'пока ничего — эту работу оркестратор делает сам, затем отчитывается через orch verify --done.',
+      root: 'ничего — эту работу оркестратор начинает сам через orch start.',
       running: 'пока ничего — воркер работает; поправьте, если уходит не туда.',
       blocked: 'ничего — сначала должны завершиться зависимости.',
       ready: 'ничего — задачу можно запускать.',
@@ -79,16 +90,19 @@ const STRINGS: Record<HandoffLang, HandoffStrings> = {
       accepted: 'ничего — задача принята.',
       closed: 'ничего — задача закрыта без результата.',
       superseded: 'ничего — задача вытеснена.',
+      dropped: 'ничего — задача закрыта как ненужная.',
       unknown: 'проверьте статус задачи.',
     },
   },
 }
 
+const openDecision = (task: HandoffTask): boolean => task.status === 'ready' && task.kind === 'decision'
+
 const waitsForPerson = (task: HandoffTask): boolean =>
-  task.status === 'in_review' || (task.status === 'ready' && task.kind === 'decision')
+  task.status === 'in_review' || (openDecision(task) && !task.preparing)
 
 const actionable = (task: HandoffTask): boolean =>
-  task.status === 'running' || waitsForPerson(task) || (task.status === 'ready' && task.kind !== 'decision')
+  task.status === 'running' || task.status === 'in_review' || task.status === 'ready'
 
 /** `orch events` fits every status; the rest only fit the state the task is actually in. */
 function commandsFor(task: HandoffTask, planId?: string): string[] {
@@ -100,11 +114,20 @@ function commandsFor(task: HandoffTask, planId?: string): string[] {
     commands.push(`orch task set ${task.id} --status ready${plan}`)
     return commands
   }
+  // The orchestrator's own work (rt1): no worker to steer or run — it is started and reported by hand.
+  if (task.kind === 'root' && (task.status === 'ready' || task.status === 'running')) {
+    commands.push(task.status === 'ready' ? `orch start ${task.id}${plan}` : `orch verify ${task.id} --done --note "…" --report <file>${plan}`)
+    return commands
+  }
+  if (openDecision(task) && task.preparing) {
+    commands.push(`orch verify ${task.id} --done --note "…"${plan}`)
+    return commands
+  }
   if (task.status === 'running') {
     commands.push(`orch steer ${task.id} --message "…"${plan}`, `orch stop ${task.id}${plan}`)
     return commands
   }
-  if (task.status === 'in_review' || (task.status === 'ready' && task.kind === 'decision')) {
+  if (task.status === 'in_review' || openDecision(task)) {
     // Accepting and rejecting are the person's (the CLI refuses them without a terminal): the agent
     // gets what it needs to prepare the review, not the verdict.
     commands.push(`orch trace ${task.id} --json${plan}`)
@@ -117,7 +140,9 @@ function commandsFor(task: HandoffTask, planId?: string): string[] {
 }
 
 function waitReason(task: HandoffTask, s: HandoffStrings): string {
-  if (task.status === 'ready' && task.kind === 'decision') return s.waits.decision
+  if (openDecision(task)) return task.preparing ? s.waits.preparing : s.waits.decision
+  if (task.kind === 'root' && task.status === 'running') return s.waits.own
+  if (task.kind === 'root' && task.status === 'ready') return s.waits.root
   if (task.status === 'blocked' && task.blockedBy?.length) {
     return `${s.waits.blocked} (${task.blockedBy.join(', ')})`
   }

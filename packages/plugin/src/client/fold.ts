@@ -2,10 +2,15 @@ import type { RepoSnapshot, TaskSnapshot } from '../shared/types.js'
 import { t } from './i18n.js'
 import { buildEdges, type Edge } from './views/graph/chain.js'
 import { laneOf } from './views/graph/layout.js'
+import { isFinished } from './lane-tree.js'
 
+/**
+ * Folding starts on plans larger than this; below it the whole plan fits a screen and a chip hides
+ * more than it saves. Inside a big plan every finished lane folds, whatever its size or age: it is
+ * history, and the live lanes above it are what the reader came for (nv1). The Decisions band is one
+ * more lane — it folds once every decision in it is closed.
+ */
 export const FOLD_MIN_PLAN = 24
-export const FOLD_MIN_LANE = 5
-export const FOLD_FRESH_HOURS = 6
 
 export type FoldDecision = { folded: Set<string>; guests: Map<string, string[]> }
 export type GraphNode = { id: string; lane: string; task?: TaskSnapshot; guest?: boolean; count?: number; summary?: string }
@@ -22,11 +27,6 @@ const membersByLane = (repo: RepoSnapshot) => {
     lanes.set(lane, [...(lanes.get(lane) ?? []), task])
   }
   return lanes
-}
-
-const recent = (value: string | undefined, now: Date) => {
-  const time = value ? Date.parse(value) : NaN
-  return Number.isFinite(time) && now.getTime() - time < FOLD_FRESH_HOURS * 60 * 60 * 1000
 }
 
 /** A live task is one the reader still needs to act on. */
@@ -56,15 +56,15 @@ function guestIds(repo: RepoSnapshot, lane: string, manualFold: boolean): string
   return [...out].slice(0, MAX_GUESTS)
 }
 
-export function decideFolds(repo: RepoSnapshot, manual: Record<string, boolean>, now: Date): FoldDecision {
+export function decideFolds(repo: RepoSnapshot, manual: Record<string, boolean>): FoldDecision {
   const folded = new Set<string>()
   const guests = new Map<string, string[]>()
   for (const [lane, members] of membersByLane(repo)) {
     const override = manual[lane]
     const laneGuests = guestIds(repo, lane, override === true)
-    const auto = repo.tasks.length > FOLD_MIN_PLAN && members.length >= FOLD_MIN_LANE
-      && members.every((task) => (task.status === 'accepted' || task.status === 'closed' || task.status === 'superseded') && !recent(task.acceptedAt, now) && !recent(task.activeSince, now))
-      && laneGuests.length <= members.length / 2
+    // A lane whose guests would outnumber half of it stays open: the chip plus its guests would take
+    // more room than the lane itself.
+    const auto = repo.tasks.length > FOLD_MIN_PLAN && members.every(isFinished) && laneGuests.length <= members.length / 2
     if (override ?? auto) {
       folded.add(lane)
       guests.set(lane, laneGuests)
@@ -76,12 +76,14 @@ export function decideFolds(repo: RepoSnapshot, manual: Record<string, boolean>,
 function statusSummary(tasks: TaskSnapshot[]): string {
   const accepted = tasks.filter((t) => t.status === 'accepted').length
   const superseded = tasks.filter((t) => t.status === 'superseded').length
+  const dropped = tasks.filter((t) => t.status === 'dropped').length
   if (accepted === tasks.length) return t('graph.fold.allAccepted')
   if (superseded === tasks.length) return t('graph.fold.allSuperseded')
   const pieces = []
   if (accepted) pieces.push(t('graph.fold.accepted', { count: accepted }))
   if (superseded) pieces.push(t('graph.fold.superseded', { count: superseded }))
-  const other = tasks.length - accepted - superseded
+  if (dropped) pieces.push(t('graph.fold.dropped', { count: dropped }))
+  const other = tasks.length - accepted - superseded - dropped
   if (other) pieces.push(t('graph.fold.inProgress', { count: other }))
   return pieces.join(' · ')
 }
@@ -124,14 +126,20 @@ export function foldGraph(repo: RepoSnapshot, decision: FoldDecision): { nodes: 
 const storageKey = (repo: RepoSnapshot) => `crewboard:fold:${repo.root}:${repo.planId ?? ''}`
 type Stored = Record<string, { folded: boolean; ids: string[] }>
 
+/** Anything but a plain object (`null`, an array, a number) reads as «no choices»; a bad lane entry is skipped. */
+function readStored(key: string): Stored {
+  const value: unknown = JSON.parse(globalThis.localStorage?.getItem(key) ?? '{}')
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Stored : {}
+}
+
 /** A new task in a lane retires only that lane's manual choice. */
 export function readManualFolds(repo: RepoSnapshot): Record<string, boolean> {
   try {
-    const stored = JSON.parse(globalThis.localStorage?.getItem(storageKey(repo)) ?? '{}') as Stored
+    const stored = readStored(storageKey(repo))
     const result: Record<string, boolean> = {}
     for (const [lane, members] of membersByLane(repo)) {
       const choice = stored[lane]
-      if (choice && members.every((task) => choice.ids.includes(task.id))) result[lane] = choice.folded
+      if (choice && typeof choice.folded === 'boolean' && Array.isArray(choice.ids) && members.every((task) => choice.ids.includes(task.id))) result[lane] = choice.folded
     }
     return result
   } catch { return {} }
@@ -140,7 +148,8 @@ export function readManualFolds(repo: RepoSnapshot): Record<string, boolean> {
 export function writeManualFold(repo: RepoSnapshot, lane: string, folded: boolean): void {
   try {
     const key = storageKey(repo)
-    const stored = JSON.parse(globalThis.localStorage?.getItem(key) ?? '{}') as Stored
+    let stored: Stored
+    try { stored = readStored(key) } catch { stored = {} }
     stored[lane] = { folded, ids: (membersByLane(repo).get(lane) ?? []).map((t) => t.id) }
     globalThis.localStorage?.setItem(key, JSON.stringify(stored))
   } catch { /* a blocked storage must not block the control */ }

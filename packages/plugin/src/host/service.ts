@@ -3,7 +3,7 @@ import { homedir } from 'node:os'
 import { BUILD_ID } from '../shared/build.js'
 import { basename, join } from 'node:path'
 import { type Backends, type DshWorkspace, CREWBOARD_DIR, advanceDraftJobs, recoverDraftOrphans, type RepoPreferenceMap, type RepoSnapshot, buildRepoSnapshot, createRepoFamilyResolver, gcRecheckAccepted, loadPlan, mergeWorkspaces, nodeExec, discoverWorktreeRepos, folderKey, type Exec, type RepositoryRef, resolveRouting, splitSuggestion, worktreeConfigPath, loadProfileStore, markOutsidePreset, type SidebarOrder } from '@crewboard/core'
-import type { OrchestraRepoSnapshot, OrchestraSnapshot, WorkerInfo } from '../shared/types.js'
+import type { OrchestraRepoSnapshot, OrchestraSnapshot, WorkerInfo, WorkerSettingsIssue } from '../shared/types.js'
 import type { ChatBindings } from './chat.js'
 import type { OrchestraConfig } from './config.js'
 
@@ -40,6 +40,8 @@ export type ServiceDeps = {
   /** Runs `git worktree list` for discovery; the real git by default. */
   exec?: Exec
   workersFor?(): Promise<WorkerInfo[]>
+  /** What is wrong with the saved worker settings (core `workerSettingsProblem`); shown as a banner. */
+  workerSettingsFor?(): Promise<WorkerSettingsIssue | undefined>
   /** Per-repository pinned/hidden flags from the orchestra profile store. */
   prefsFor?(): Promise<RepoPreferenceMap>
   /** The owner's manual sidebar order from the orchestra profile store; absent means automatic. */
@@ -69,6 +71,10 @@ export class OrchestraService {
   private readonly running = new Set<Promise<void>>()
   private stopped = false
   private workers: WorkerInfo[] = []
+  /** Broken worker settings found by the last full refresh; a failure there never stops the repositories. */
+  private workerSettings: WorkerSettingsIssue | undefined
+  /** The last worker-routing failure a repository refresh met; it becomes the banner when nothing more precise is known. */
+  private routingFailure: string | undefined
   /** Repositories already scanned for pre-job draft runs; the scan runs once per host process. */
   private readonly orphansScanned = new Set<string>()
   /** The last sidebar order the store reported; snapshots keep serving it until a refresh re-reads. */
@@ -98,6 +104,7 @@ export class OrchestraService {
       generatedAt: this.deps.now().toISOString(),
       build: BUILD_ID,
       workers: this.workers,
+      ...(this.workerSettings ? { workerSettings: this.workerSettings } : this.routingFailure ? { workerSettings: { code: 'unreadable' as const, detail: this.routingFailure } } : {}),
       ...(this.order && (this.order.repos?.length || Object.keys(this.order.plans ?? {}).length) ? { order: this.order } : {}),
       repos: this.repositories()
         .map((r) => this.snapshots.get(r.root))
@@ -127,7 +134,13 @@ export class OrchestraService {
   }
 
   private async refreshNow(root?: string): Promise<void> {
-    if (this.deps.workersFor) this.workers = await this.deps.workersFor()
+    // Worker settings are read apart from the repositories: a broken file keeps the last worker list and
+    // becomes a banner, the traversal below still serves every repository (B07).
+    let workersFailure: string | undefined
+    if (this.deps.workersFor) this.workers = await this.deps.workersFor().catch((err: unknown) => { workersFailure = messageOf(err); return this.workers })
+    if (this.deps.workerSettingsFor) this.workerSettings = await this.deps.workerSettingsFor().catch((err: unknown) => ({ code: 'unreadable' as const, detail: messageOf(err) }))
+    if (!this.workerSettings && workersFailure) this.workerSettings = { code: 'unreadable', detail: workersFailure }
+    if (!root) this.routingFailure = undefined
     if (this.deps.orderFor) this.order = await this.deps.orderFor().catch(() => this.order)
     if (!root) this.discovered = await discoverWorktreeRepos(this.listed(), this.deps.exec ?? nodeExec).catch(() => this.discovered)
     const repos = this.repositories()
@@ -161,9 +174,17 @@ export class OrchestraService {
         const chats = this.deps.chatsFor ? await this.deps.chatsFor(root).catch(() => undefined) : undefined
         const enriched = await withChats(root, s, chats)
         const env = this.deps.env ?? process.env
-        const plans = await Promise.all((enriched.plans ?? []).map(async (plan) => ({ ...plan, effectiveRouting: await resolveRouting(root, plan.id, env) })))
-        // An unreadable plan has no routing to show; its snapshot still lands, carrying the error (pq1).
-        const effectiveRouting = await resolveRouting(root, enriched.planId, env).catch((err: unknown) => { if (s.degraded && s.error) return undefined; throw err })
+        // Routing that cannot be resolved (an unreadable plan — pq1 — or broken worker settings — B07) leaves
+        // the snapshot without it; the repository itself is always served.
+        const routingOf = (planId: string | undefined) => resolveRouting(root, planId, env).catch((err: unknown) => {
+          if (!(s.degraded && s.error)) this.routingFailure = messageOf(err)
+          return undefined
+        })
+        const plans = await Promise.all((enriched.plans ?? []).map(async (plan) => {
+          const routing = await routingOf(plan.id)
+          return routing ? { ...plan, effectiveRouting: routing } : plan
+        }))
+        const effectiveRouting = await routingOf(enriched.planId)
         const aliases = (await loadProfileStore(env, env.HOME ?? homedir()).catch(() => ({ aliases: {} }))).aliases
         const tasks = effectiveRouting ? markOutsidePreset(enriched.tasks, effectiveRouting, aliases) : enriched.tasks
         const resolved = await this.families.resolve(root).catch(() => ({ root, name: basename(root) }))
@@ -241,3 +262,5 @@ export class OrchestraService {
     }
   }
 }
+
+const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))

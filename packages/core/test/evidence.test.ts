@@ -56,9 +56,17 @@ describe('terminal run evidence', () => {
     const detail = await getTaskDetail(root, 'a', dead, async () => { throw new Error('git must not be called') })
     expect(detail.report?.text).toContain('Выполнил pnpm test')
     expect(detail.changedFiles).toEqual(['file.txt'])
-    expect(detail.verdict.facts.map((f) => f.code)).toContain('checks_not_run')
+    expect(detail.verdict?.facts.map((f) => f.code)).toContain('checks_not_run')
     await acceptTask(root, 'a', NOW, detail.verdict)
     expect((await loadPlan(root)).tasks[0]?.notes.at(-1)).toMatchObject({ type: 'accept', event: { kind: 'accepted', evidence: run.evidence }, verdict: { kind: 'result' } })
+  })
+
+  it('V-B12/finished-events a finished run with evidence still shows the events its backend kept', async () => {
+    const root = await fixture()
+    await syncPlan(root, backend('Результат: получен\nготово'), NOW)
+    expect((await loadPlan(root)).tasks[0]?.runs[0]?.evidence).toBeDefined()
+    const detail = await getTaskDetail(root, 'a', backend('Результат: получен\nготово'), nodeExec)
+    expect(detail.events.map((e) => e.kind)).toEqual(['final'])
   })
 
   it('keeps old runs on the live path and separates unreported from unreadable', async () => {
@@ -72,7 +80,7 @@ describe('terminal run evidence', () => {
     await syncPlan(unreadable, backend(undefined, true), NOW)
     const detail = await getTaskDetail(unreadable, 'a', backend(), nodeExec)
     expect(detail.evidence?.checks.map((c) => c.state)).toEqual(['unreadable', 'unreadable'])
-    expect(detail.verdict.facts.some((f) => f.code === 'checks_unreadable')).toBe(true)
+    expect(detail.verdict?.facts.some((f) => f.code === 'checks_unreadable')).toBe(true)
     expect(JSON.parse(await readFile(join(unreadable, '.orchestration/runs/run_test-a/evidence.json'), 'utf8')).finalAnswerState).toBe('unreadable')
   })
 })

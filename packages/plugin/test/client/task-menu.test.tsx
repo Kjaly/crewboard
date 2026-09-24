@@ -104,3 +104,17 @@ it('clamps the menu inside the viewport', async () => {
   expect((container.querySelector('.orc-task-menu') as HTMLElement).style.top).toBe(`${window.innerHeight - 268}px`)
   rect.mockRestore()
 })
+
+// w1f: a task no longer needed is closed from the menu with a reason; the host asks the person to confirm.
+it('closes a task as not needed with a reason, and offers it only while the task is open', async () => {
+  const user = userEvent.setup()
+  const drop = vi.spyOn(api, 'drop').mockResolvedValue({ ok: true, value: { task: 'parent', status: 'dropped' } as never })
+  setup('ready')
+  await user.click(screen.getByRole('menuitem', { name: 'Close as not needed…' }))
+  await user.type(screen.getByRole('textbox', { name: 'Why is the task not needed?' }), 'Done by hand')
+  await user.click(screen.getByRole('button', { name: 'Close task' }))
+  expect(drop).toHaveBeenCalledWith('/repo', 'parent', 'Done by hand')
+  cleanup()
+  setup('running')
+  expect(screen.queryByRole('menuitem', { name: 'Close as not needed…' })).toBeNull()
+})

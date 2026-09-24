@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { loadPlan } from '@crewboard/core'
+import { WORKER_RULES, loadPlan } from '@crewboard/core'
 import { makeRepo } from '../../core/test/git-helpers.js'
 import { run } from '../src/cli.js'
 import { makeHarness } from './harness.js'
@@ -21,7 +21,7 @@ beforeEach(async () => {
   const home = await mkdtemp(join(tmpdir(), 'orch-home-'))
   await mkdir(join(home, '.config/crewboard'), { recursive: true })
   await writeFile(join(home, '.config/crewboard/profiles.json'), JSON.stringify({ version: 1, routing: { classes: { code: ['devin'], design: ['devin'], review: ['devin'], research: ['devin'] }, disabled: {} }, aliases: {}, profiles: { devin: { transport: 'devin-acp', model: 'swe-2-high', displayName: 'Devin', enabled: true } } }))
-  env = { ...process.env, LC_ALL: 'en_US.UTF-8', CREWBOARD_DEVIN_COMMAND: process.execPath, CREWBOARD_DEVIN_ARGS: JSON.stringify([FAKE_DEVIN, 'hold']), HOME: home }
+  env = { ...process.env, LC_ALL: 'en_US.UTF-8', CREWBOARD_DEVIN_COMMAND: process.execPath, CREWBOARD_DEVIN_ARGS: JSON.stringify([FAKE_DEVIN, 'hold', 'report']), HOME: home }
   await mkdir(join(root, '.orchestration'), { recursive: true })
   await writeFile(join(root, '.orchestration/recipes.json'), JSON.stringify({ setup: ['echo ready > prepared.txt'], baseline: 'test -f prepared.txt' }))
   await writeFile(join(root, 'task-t1.md'), '<task>write tests</task>\n')
@@ -61,7 +61,8 @@ describe('orch run lifecycle', () => {
     expect(task1).toMatchObject({ worker: 'devin', worktree: { branch: 'orch/t1-write-tests' } })
     const rpc = (await readFile(join(task1!.worktree!.path, 'rpc.jsonl'), 'utf8')).trim().split('\n').map(l => JSON.parse(l))
     expect(rpc.find(m => m.method === 'session/new').params.cwd).toBe(task1?.worktree?.path)
-    expect(rpc.find(m => m.method === 'session/prompt').params.prompt[0].text).toBe('<task>write tests</task>\n')
+    // The contract, then the rules every worker gets (bg1).
+    expect(rpc.find(m => m.method === 'session/prompt').params.prompt[0].text).toBe(`<task>write tests</task>\n\n${WORKER_RULES}`)
 
     // 2. running status and a second run is refused
     h.reset()
@@ -182,6 +183,46 @@ describe('orch run lifecycle', () => {
     expect(await run(['stop', 't1'], h.io)).toBe(0)
     const id=(await loadPlan(root)).tasks[0]!.runs[0]!.runId
     await until(async () => (await state(id)).status === 'cancelled')
+  })
+
+  it('the first run of a new task prepares its copy and starts the worker in one call', async () => {
+    const h = makeHarness({ cwd: root, env })
+    await run(['init'], h.io)
+    await run(['task', 'add', 't1', '--title', 'T', '--contract', 'task-t1.md'], h.io)
+    h.reset()
+    // A brand-new task: no worktree yet, so this one call runs the recipe's setup and baseline first.
+    expect(await run(['run', 't1', '-a', 'devin', '--skip-preflight'], h.io), h.err()).toBe(0)
+    expect(h.out()).toMatch(/t1: devin started \(run_devin-/)
+    expect(h.out()).not.toContain('reused')
+    const task = (await loadPlan(root)).tasks.find((t) => t.id === 't1')
+    expect(task?.runs).toHaveLength(1)
+    await ready(task?.runs[0]?.runId as string)
+  })
+
+  it('a refused run ends its output with the reason, however long the baseline output is', async () => {
+    const h = makeHarness({ cwd: root, env })
+    await run(['init'], h.io)
+    await run(['task', 'add', 't2', '--title', 'T2', '--contract', 'task-t1.md'], h.io)
+    // A test runner's summary ends in blank lines: seen 2026-09-24, `orch run sy1 | tail -1` printed nothing useful.
+    await writeFile(join(root, '.orchestration/recipes.json'), JSON.stringify({ baseline: 'printf "FAIL a.test.ts\\n\\n Test Files  1 failed\\n\\n\\n"; exit 1' }))
+    h.reset()
+    expect(await run(['run', 't2', '-a', 'devin', '--skip-preflight'], h.io)).toBe(1)
+    const lines = h.err().split('\n')
+    expect(lines.at(-1)).toBe('')
+    expect(lines.at(-2)).toBe('✗ t2 was not started: The baseline run is red — the task is not sent to a worker.')
+    expect(h.err()).toContain('Test Files  1 failed')
+    expect((await loadPlan(root)).tasks.find((t) => t.id === 't2')?.runs).toEqual([])
+    const ru = makeHarness({ cwd: root, env: { ...env, LC_ALL: 'ru_RU.UTF-8' } })
+    expect(await run(['--lang', 'ru', 'run', 't2', '-a', 'devin', '--skip-preflight'], ru.io)).toBe(1)
+    expect(ru.err().split('\n').at(-2)).toBe('✗ t2 не запущена: Базовый прогон красный — задача не уходит воркеру.')
+  })
+
+  it('a one-line refusal of run stays one line', async () => {
+    const h = makeHarness({ cwd: root, env })
+    await run(['init'], h.io)
+    h.reset()
+    expect(await run(['run', 'ghost', '-a', 'devin', '--skip-preflight'], h.io)).toBe(1)
+    expect(h.err().trimEnd().split('\n')).toHaveLength(1)
   })
 
   it('refuses to run a blocked task, a decision and a red baseline', async () => {

@@ -72,7 +72,7 @@ const CSS = `
 .orc-preset__title{margin:0;color:var(--orc-fg);font:var(--dsw-font-strong-xs-13,600 13px/20px system-ui,sans-serif)}
 .orc-preset__field{display:grid;grid-template-columns:88px minmax(0,1fr);align-items:center;gap:8px;color:var(--orc-fg2);font-size:12px}
 .orc-preset__field>span:first-child{color:var(--orc-fg3)}
-.orc-preset__help,.orc-preset__fallback{color:var(--orc-fg3)}
+.orc-preset__fallback{color:var(--orc-fg3)}
 .orc-preset__field .orc-select{width:100%}
 .orc-preset__effective{margin:4px 0 0;padding-top:8px;border-top:1px solid var(--orc-hair);color:var(--orc-fg3);font-size:12px}
 .orc-preset__order{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 12px;color:var(--orc-fg2);font-size:12px;line-height:18px}
@@ -81,6 +81,7 @@ const CSS = `
 .orc-preset__settings{align-self:flex-start;margin-top:2px;padding:4px 0;border:0;background:transparent;color:var(--orc-accent);font:inherit;font-size:12px;cursor:pointer}.orc-preset__settings:hover{text-decoration:underline}
 .orc-broken{display:grid;gap:8px;justify-items:start;margin:24px;padding:14px 16px;border:1px solid var(--orc-line);border-radius:8px;background:var(--orc-layer1);color:var(--orc-fg2);font-size:13px}.orc-broken p{margin:0;color:var(--orc-fg)}.orc-broken code{font:12px/18px var(--orc-mono);color:var(--orc-fg3);overflow-wrap:anywhere}
 .orc-conn--stale{color:var(--orc-warn,#d6a444)}
+.orc-settings-banner{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin:8px 12px 0;padding:8px 12px;border:1px solid color-mix(in srgb,var(--orc-warn) 45%,var(--orc-line));border-radius:7px;background:color-mix(in srgb,var(--orc-warn) 10%,var(--orc-layer1));color:var(--orc-fg);font-size:13px}.orc-settings-banner p{margin:0;flex:1 1 320px}.orc-settings-banner code{font:12px/18px var(--orc-mono);color:var(--orc-fg3);overflow-wrap:anywhere;flex-basis:100%}
 .orc-settings-screen{max-width:880px;margin:0 auto;padding:20px 20px 48px}
 .orc-settings-screen__head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
 .orc-settings-screen__head h1{margin:0;color:var(--orc-fg);font-size:18px;line-height:26px;font-weight:650}
@@ -89,6 +90,10 @@ const CSS = `
 .orc-view-menu{display:none}
 .orc-main{container-type:inline-size}
 .orc-work__totals{margin:12px 0 0;color:var(--orc-fg2);font-size:12px}
+.orc-work__lane{margin:12px 0 0}
+.orc-work__lanechip{display:inline-flex;align-items:center;gap:6px}
+.orc-work__laneclear{padding:0 4px;border:0;border-radius:5px;background:transparent;color:var(--orc-fg3);font:inherit;line-height:1;cursor:pointer}
+.orc-work__laneclear:hover{background:var(--orc-hover);color:var(--orc-fg)}
 .orc-work__toggle{border:0;background:none;color:inherit;cursor:pointer;text-align:left}
 .orc-work__filters{display:flex;flex-wrap:wrap;gap:5px;padding:8px}
 .orc-work__last{margin:0 8px 8px;color:var(--orc-fg3);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -114,7 +119,7 @@ const CSS = `
 .orc-needs__tasks{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px}
 .orc-needs__task{max-width:100%;padding:0;border:0;background:none;color:var(--orc-fg);font:inherit;font-weight:600;text-align:left;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .orc-needs__task:hover{text-decoration:underline}
-.orc-needs__failed{margin-top:6px!important}.orc-needs__failed b{color:var(--orc-error);font-weight:650}
+.orc-needs__failed{margin-top:6px!important}.orc-needs__failed b{color:var(--orc-error);font-weight:650}.orc-needs__unmerged{margin-top:6px!important}.orc-needs__unmerged b{color:var(--orc-warn);font-weight:650}
 .orc-needs__act{display:flex;align-items:center;gap:12px;flex:none}
 .orc-needs__count{font-size:34px;line-height:1;font-weight:750;font-variant-numeric:tabular-nums;color:var(--orc-fg3)}
 .orc-needs--warn .orc-needs__count{color:var(--orc-warn)}.orc-needs--calm .orc-needs__count{color:var(--orc-ok)}
@@ -227,7 +232,6 @@ const CSS = `
 .orc-top__spacer{flex:1 1 auto}
 .orc-select{min-height:24px;padding:2px 6px;border-radius:6px;border:1px solid var(--orc-line);background:var(--orc-layer2);color:var(--orc-fg);font:inherit}
 .orc-top>.orc-select{max-width:150px;flex:0 1 150px;min-width:80px}
-.orc-repo-mark{max-width:135px;overflow:hidden;text-overflow:ellipsis;flex:none}
 .orc-chip{display:inline-flex;align-items:center;gap:5px;min-height:24px;padding:2px 9px;border-radius:999px;border:1px solid transparent;background:var(--orc-layer2);color:var(--orc-fg2);font:var(--dsw-font-xxs-12,12px/18px system-ui,sans-serif);cursor:pointer;white-space:nowrap}
 .orc-chip:hover{background:var(--orc-hover)}
 .orc-chip[aria-pressed="true"]{border-color:currentColor}
@@ -281,18 +285,13 @@ const CSS = `
 .orc-plans__badge:hover{background:var(--orc-hover);color:var(--orc-fg)}
 .orc-plans__badge[aria-current="true"]{background:var(--orc-active);border-color:var(--orc-line);color:var(--orc-fg);
   box-shadow:inset 2px 0 0 var(--orc-accent)}
-.orc-plans__badge--arch{opacity:.55}
 .orc-plans__dot{position:absolute;top:-3px;right:-3px;width:8px;height:8px;border:2px solid var(--orc-layer1);border-radius:50%}
 .orc-plans__dot--warn{background:var(--orc-warn)}
 .orc-plans__dot--error{background:var(--orc-error)}
 .orc-plans__dot--run{background:var(--orc-accent-strong)}
-.orc-plans__dot--info{background:var(--orc-accent)}
 .orc-plans__head{display:flex;align-items:center;gap:6px;padding:9px 12px 3px}
 .orc-plans__title{flex:1 1 auto;min-width:0;margin:0;color:var(--orc-fg2);
   font:var(--dsw-font-xxs-12,12px/18px system-ui,sans-serif);text-transform:uppercase;letter-spacing:.03em}
-.orc-plans__new{flex:none;min-height:22px;padding:1px 7px;border:0;border-radius:6px;background:transparent;
-  color:var(--orc-fg3);font:var(--dsw-font-xxs-12,12px/18px system-ui,sans-serif);cursor:pointer;white-space:nowrap}
-.orc-plans__new:hover{background:var(--orc-hover);color:var(--orc-fg)}
 .orc-plans__hide{flex:none;min-width:24px;min-height:24px;padding:0;border:0;border-radius:6px;
   background:transparent;color:var(--orc-fg3);font-size:15px;line-height:1;cursor:pointer}
 .orc-plans__hide:hover{background:var(--orc-hover);color:var(--orc-fg)}
@@ -300,34 +299,6 @@ const CSS = `
 .orc-plans__field{width:100%;min-height:28px;padding:4px 8px;border:1px solid var(--orc-line);border-radius:7px;
   background:var(--orc-layer2);color:var(--orc-fg);font:inherit}
 .orc-plans__error{margin:2px 10px 0}
-.orc-plans__list{flex:0 1 auto;min-height:0;overflow:auto;margin:0;padding:4px 8px;list-style:none}
-.orc-plan{position:relative;display:flex;align-items:flex-start;gap:2px}
-.orc-plan__main{flex:1 1 auto;min-width:0;display:block;min-height:24px;padding:6px 8px;border:1px solid transparent;
-  border-radius:8px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
-.orc-plan__main:hover{background:var(--orc-hover)}
-.orc-plan__main[aria-current="true"]{background:var(--orc-active);border-color:var(--orc-line);
-  box-shadow:inset 2px 0 0 var(--orc-accent)}
-.orc-plan__goal{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.orc-plan__meta{display:flex;gap:8px;margin-top:1px;color:var(--orc-fg3);
-  font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);white-space:nowrap;overflow:hidden}
-.orc-plan__stat--warn{color:var(--orc-warn)}
-.orc-plan__stat--alert{color:var(--orc-error)}
-.orc-plan--arch .orc-plan__goal{color:var(--orc-fg3);font-weight:500}
-.orc-plan__menu-btn{flex:none;min-width:24px;min-height:24px;margin-top:5px;padding:0;border:0;border-radius:6px;
-  background:transparent;color:var(--orc-fg3);line-height:1;cursor:pointer}
-.orc-plan__menu-btn:hover{background:var(--orc-hover);color:var(--orc-fg)}
-.orc-planmenu{position:absolute;right:4px;top:100%;z-index:25;display:flex;flex-direction:column;align-items:stretch;
-  min-width:170px;padding:4px;border:1px solid var(--orc-line);border-radius:9px;background:var(--orc-layer2);
-  box-shadow:0 8px 24px #00000059;animation:orc-sheet-in 140ms cubic-bezier(.23,1,.32,1) both;transform-origin:top right}
-.orc-planmenu .orc-link{min-height:26px}
-.orc-plan__rename{flex:1 1 auto;padding:4px 0}
-.orc-plans__arch{flex:none;padding:2px 8px 8px;border-top:1px solid var(--orc-hair)}
-.orc-plans__list--arch{overflow:visible;padding:2px 0 0}
-.orc-plans__drafts{flex:none;max-height:34%;overflow:auto;margin-top:6px;padding:5px 8px 8px;border-top:1px solid var(--orc-hair)}
-.orc-plans__drafts h3{margin:2px 8px;color:var(--orc-fg3);font-size:12px;font-weight:600}
-.orc-plans__draft-list{overflow:visible;padding:2px 0 0}
-.orc-plans__badge--draft{border-style:dashed;color:var(--orc-fg3)}
-.orc-plan__stat--alert{color:var(--orc-error)}
 /* The repository sidebar: search, the cross-repo «Needs you» inbox, then the tree. Quiet by
    default — counters and colour appear only where something asks for a person. */
 .orc-plans__inboxdot{flex:none;min-width:24px;height:22px;padding:0 6px;border:0;border-radius:11px;
@@ -421,6 +392,26 @@ const CSS = `
 .orc-srow__kids{margin:0;padding:0;list-style:none}
 .orc-srow__grouphead{display:block;padding:4px 0 1px 30px;color:var(--orc-fg3);font-size:10px;font-weight:600;
   text-transform:uppercase;letter-spacing:.05em}
+/* The open plan's lane tree (nv1): a third level styled like a file tree — a disclosure triangle on
+   the two group rows, an indent guide down the lanes, rows as tall as every other sidebar row. */
+.orc-tree__list .orc-lanetree{padding-left:22px}
+.orc-srow__lanegroup{height:28px;color:var(--orc-fg3);font-size:12px}
+.orc-srow__lanegroup--past .orc-srow__name{color:var(--orc-fg3)}
+.orc-lanegroup__arrow{flex:none;width:10px;font-size:8px;line-height:1;color:var(--orc-fg3);transition:transform 150ms ease}
+.orc-lanegroup__arrow--open{transform:rotate(90deg)}
+.orc-tree__list .orc-lanes{margin:0 0 0 12px;padding:0 0 0 6px;border-left:1px solid var(--orc-line)}
+.orc-srow__main--lane{gap:8px;color:var(--orc-fg2)}
+.orc-srow__main--past{color:var(--orc-fg3)}
+.orc-srow__main--inview{background:var(--orc-active);border-color:var(--orc-line)}
+.orc-lanedot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--orc-fg3);opacity:.7}
+.orc-lanedot--waiting{background:var(--orc-warn);opacity:1}
+.orc-lanedot--running{background:var(--orc-accent-strong);opacity:1}
+.orc-lanecounts{flex:none;display:inline-flex;gap:6px;color:var(--orc-fg3);font-size:11px;
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.orc-lanecount--running{color:var(--orc-accent-strong)}
+.orc-lanecount--review{color:var(--orc-warn)}
+.orc-lanecount--ready{color:var(--orc-accent)}
+.orc-lanecount--queued,.orc-lanecount--accepted{color:var(--orc-fg3)}
 /* The ⋯ button steps into the status slot on hover or focus — the same slot swap as the
    folder/arrow affordance. */
 .orc-srow__menu{position:absolute;right:4px;top:50%;translate:0 -50%;z-index:2;width:24px;height:24px;padding:0;
@@ -530,11 +521,8 @@ const CSS = `
 .orc-draft__reason{color:var(--orc-error);font-size:12px}
 .orc-draft__confirm{display:inline-flex;align-items:center;flex-wrap:wrap;gap:6px;color:var(--orc-fg2)}
 .orc-draft__confirm button{padding:4px 8px;border:1px solid var(--orc-line);border-radius:6px;background:var(--orc-layer2);color:var(--orc-fg);font:inherit;cursor:pointer}
-/* The header's plan dropdown is the narrow-window replacement for the column. */
-.orc-planpick{display:none;max-width:220px}
 /* ≤1100px: the rail keeps its 44px strip and the open list slides over main instead of pushing it. */
 @media (max-width:1100px){
-  .orc-planpick{display:inline-block}
   .orc-root{--orc-rail-w:44px;transition:none}
   .orc-plans__slim{opacity:1;visibility:visible;transition:none}
   .orc-root--rail-open .orc-plans{overflow:visible}
@@ -548,19 +536,14 @@ const CSS = `
 @container (max-width:1400px){
   .orc-top>.orc-select{max-width:110px;flex-basis:110px}
   .orc-goal{max-width:100px;min-width:0}
-  .orc-top:has(.orc-planpick) .orc-goal{display:none}
-  .orc-planpick{max-width:120px}
   .orc-preset__trigger{max-width:150px}
-  .orc-repo-mark{max-width:105px}
   .orc-view-menu .orc-select{max-width:90px}
 }
 @container (max-width:1100px){.orc-top>.orc-seg{display:none}.orc-view-menu{display:block}}
 @container (max-width:900px){
   .orc-top>.orc-select{max-width:72px;min-width:0;flex-basis:72px}
   .orc-goal{max-width:65px}
-  .orc-planpick{max-width:80px}
   .orc-preset__trigger{max-width:120px}
-  .orc-repo-mark{max-width:88px}
   .orc-view-menu .orc-select{max-width:78px}
 }
 
@@ -645,7 +628,7 @@ const CSS = `
 @keyframes orc-sheet-in{from{opacity:0;transform:translateY(-4px) scale(.985)}to{opacity:1;transform:none}}
 .orc-sheet__head{display:flex;align-items:center;gap:8px;padding:8px 12px 6px;color:var(--orc-fg2);
   font:var(--dsw-font-xxs-12,12px/18px system-ui,sans-serif);text-transform:uppercase;letter-spacing:.03em}
-.orc-sheet__list{flex:1 1 auto;min-height:0;overflow:auto;margin:0;padding:0 6px;list-style:none;overscroll-behavior:contain}
+.orc-sheet__list{flex:1 1 auto;min-height:0;overflow:auto;margin:0;padding:0 6px;overscroll-behavior:contain}
 .orc-sheet__item{display:flex;align-items:flex-start;gap:8px;padding:5px 6px;border-radius:8px}
 .orc-sheet__item:hover{background:var(--orc-hover)}
 .orc-sheet__item+.orc-sheet__item{border-top:1px solid var(--orc-sep)}
@@ -656,6 +639,10 @@ const CSS = `
   font:var(--dsw-font-xxs-12,12px/18px system-ui,sans-serif);cursor:pointer}
 .orc-sheet__open:hover{background:var(--orc-hover);color:var(--orc-fg)}
 .orc-sheet__foot{padding:8px 12px 10px;border-top:1px solid var(--orc-hair)}
+.orc-sheet__rows{margin:0;padding:0;list-style:none}
+.orc-sheet__group{margin:6px 6px 2px;color:var(--orc-fg2);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);text-transform:uppercase;letter-spacing:.03em}
+.orc-sheet__group-hint{margin:0 6px 4px}
+.orc-sheet__risk{color:var(--orc-warn)}
 .orc-sheet__foot .orc-actions{margin-top:0}
 
 /* Task panel */
@@ -672,22 +659,9 @@ const CSS = `
 .orc-now--warn{border-color:var(--orc-warn);color:var(--orc-fg)}
 .orc-now--alert{border-color:var(--orc-error);color:var(--orc-fg)}
 .orc-now small{display:block;margin-top:3px;color:var(--orc-fg3)}
-/* «Запуск»: the running run's identity — worker, worktree, contract — so «Запустить» is never a leap. */
-.orc-run{margin-top:8px;border:1px solid var(--orc-hair);border-radius:8px;background:var(--orc-layer2);padding:7px 10px}
-.orc-run__row{display:flex;gap:8px;padding:1px 0;font:var(--dsw-font-xxs-12,12px/18px system-ui,sans-serif)}
-.orc-run__k{flex:0 0 58px;color:var(--orc-fg3)}
-.orc-run__v{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:4px;color:var(--orc-fg2)}
-.orc-run__v code{font-family:var(--orc-mono);font-size:11px}
 .orc-path{display:inline-block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
-.orc-run__branch{display:flex;min-width:0;align-items:baseline;gap:4px;white-space:nowrap;color:var(--orc-fg3)}
-.orc-run__branch code{color:var(--orc-fg2)}
-.orc-run__copy{min-width:22px;min-height:20px;margin:-1px 2px 0;padding:0 4px;border:0;border-radius:5px;
-  background:transparent;color:var(--orc-fg3);font-size:11px;line-height:1;cursor:pointer;vertical-align:1px}
-.orc-run__copy:hover{background:var(--orc-hover);color:var(--orc-fg)}
-.orc-run__copy{flex:none}
 .orc-run__link{padding:0 2px;border:0;border-radius:5px;background:transparent;color:var(--orc-accent);font:inherit;cursor:pointer}
 .orc-run__link:hover{background:var(--orc-hover);color:var(--orc-fg)}
-.orc-run__hint{margin:5px 0 0;color:var(--orc-fg3);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif)}
 .orc-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px}
 .orc-panel .orc-actions{flex-wrap:nowrap;min-width:0}
 .orc-panel .orc-actions>.orc-btn,.orc-panel .orc-actions>.orc-select{min-width:0;white-space:nowrap}
@@ -698,6 +672,7 @@ const CSS = `
 .orc-btn--ghost{background:var(--orc-layer2);color:var(--orc-fg2);border-color:var(--orc-line);font-weight:500}
 .orc-btn--ghost:hover{background:var(--orc-hover);color:var(--orc-fg)}
 .orc-hint{margin-top:6px;color:var(--orc-fg3);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif)}
+.orc-merge__commands{margin:6px 0 4px;padding:6px 8px;border:1px solid var(--orc-line);border-radius:6px;background:var(--orc-layer1);color:var(--orc-fg2);font:11px/16px var(--orc-mono);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}
 .orc-error{margin-top:6px;color:var(--orc-error);font:var(--dsw-font-xxs-12,12px/18px system-ui,sans-serif)}
 .orc-form{display:flex;flex-direction:column;gap:6px;margin-top:8px}
 .orc-field{width:100%;min-height:52px;padding:6px 8px;border:1px solid var(--orc-line);border-radius:8px;background:var(--orc-layer2);color:var(--orc-fg);font:inherit;resize:vertical}
@@ -794,6 +769,9 @@ const CSS = `
 .orc-report__p{margin:0}
 .orc-report__p+.orc-report__p{margin-top:6px}
 .orc-report__list{margin:4px 0 0;padding-left:18px}
+.orc-report__heading{margin:10px 0 2px;color:var(--orc-fg2);font:var(--dsw-font-xxs-12,12px/18px system-ui,sans-serif);font-weight:600;letter-spacing:.01em}
+.orc-report__heading:first-child{margin-top:0}
+.orc-report__tick{color:var(--orc-fg3)}
 .orc-report__list li{padding:1px 0}
 .orc-report__list li::marker{color:var(--orc-fg3)}
 .orc-report__body code{padding:0 3px;border-radius:4px;background:var(--orc-bg);font-family:var(--orc-mono);font-size:11px}
@@ -910,6 +888,37 @@ const CSS = `
 .orc-garrow--bad{fill:var(--orc-error)}
 .orc-gedge-mark{position:absolute;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;pointer-events:none;animation:orc-mark 1.8s ease-out both}
 @keyframes orc-mark{0%{opacity:0;transform:scale(.6)}12%{opacity:1;transform:scale(1)}80%{opacity:1}100%{opacity:0}}
+
+/* Far level of detail (camera DETAIL_SCALE): below it a title is grey noise, so a card becomes a block
+   in its state colour and the words step out. Nothing changes size — the switch is a crossfade, and
+   hidden text is visibility:hidden after the fade, so the browser paints none of it while zooming. */
+.orc-gnode__body{transition:background-color 180ms ease-out,border-color 180ms ease-out}
+.orc-gnode__body>*,.orc-glane__head,.orc-gnode__review{transition:opacity 180ms ease-out,visibility 0s linear 0s,background-color 220ms ease}
+.orc-graph--far .orc-gnode__body{background:var(--orc-tone,var(--orc-fg3));border-color:transparent;box-shadow:none}
+.orc-graph--far .orc-gnode__body[aria-pressed="true"]{border-color:var(--orc-fg);box-shadow:0 0 0 2px var(--orc-active)}
+.orc-graph--far .orc-gnode__body:hover{background:var(--orc-tone,var(--orc-fg3));border-color:var(--orc-fg)}
+.orc-graph--far .orc-gnode__body>*,.orc-graph--far .orc-glane__head,.orc-graph--far .orc-gnode__review{opacity:0;visibility:hidden;transition:opacity 180ms ease-out,visibility 0s linear 180ms}
+/* Edges step back to a trace; the critical path and the hovered or selected task's chain stay, drawn
+   at a constant screen width so they do not thin out to nothing with the zoom. */
+.orc-graph--far .orc-gedge{opacity:.14;vector-effect:non-scaling-stroke}
+.orc-graph--far .orc-gedge--crit{opacity:.9;stroke:var(--orc-fg2);stroke-width:2}
+.orc-graph--far .orc-gedge--on{opacity:1;stroke:var(--orc-fg);stroke-width:2}
+.orc-graph--far .orc-gedge--off:not(.orc-gedge--crit){opacity:.06}
+/* Lane names in the far view: an overlay in screen pixels (lane-labels.ts places them), so 11 px at any
+   zoom. Anchored at their left edge, vertically centred on the lane, cut short before the plan starts. */
+.orc-glabels{position:absolute;inset:0;overflow:hidden;pointer-events:none;opacity:0;visibility:hidden;transition:opacity 180ms ease-out,visibility 0s linear 180ms}
+.orc-graph--far .orc-glabels{opacity:1;visibility:visible;transition:opacity 180ms ease-out,visibility 0s linear 0s}
+.orc-glabel{position:absolute;left:0;top:0;max-width:116px;margin-top:-6px;padding:0 4px;border-radius:4px;overflow:hidden;text-overflow:ellipsis;
+  background:color-mix(in srgb,var(--orc-bg) 82%,transparent);color:var(--orc-fg2);font:var(--dsw-font-xxxs-11,11px/12px system-ui,sans-serif);
+  line-height:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
+.orc-gtip{position:absolute;z-index:8;display:flex;flex-direction:column;gap:1px;max-width:260px;padding:6px 9px;transform:translate(-50%,calc(-100% - 8px));
+  border:1px solid var(--orc-line);border-radius:7px;background:var(--orc-layer2);box-shadow:0 2px 8px #0000004d;pointer-events:none;
+  font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif)}
+.orc-gtip--below{transform:translate(-50%,8px)}
+.orc-gtip__id{color:var(--orc-fg3);font-weight:700}
+.orc-gtip__title{color:var(--orc-fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.orc-gtip__worker{color:var(--orc-fg2)}
+@media (prefers-reduced-motion:reduce){.orc-gnode__body,.orc-gnode__body>*,.orc-glane__head,.orc-gnode__review,.orc-glabels,.orc-graph--far .orc-glabels,.orc-graph--far .orc-gnode__body>*,.orc-graph--far .orc-glane__head,.orc-graph--far .orc-gnode__review{transition:none}}
 
 /* The tools keep clear of the minimap corner; below 640px the map is gone and the row is free again. */
 .orc-gtools{position:absolute;left:10px;bottom:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;max-width:calc(100% - 194px)}
@@ -1189,6 +1198,8 @@ const CSS = `
 /* The report's first line under the title: grey, one line, so the queue stays scannable. */
 .orc-qrow__report{display:block;margin-top:2px;color:var(--orc-fg3);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.orc-qrow__verdict{display:block;margin-top:2px;color:var(--orc-fg2);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.orc-qrow__verdict .orc-verdict__mark{margin-right:5px}
 .orc-qrow__detail{margin-top:6px}
 .orc-qrow__files{margin:0;padding:0;list-style:none;color:var(--orc-fg2);
   font:var(--dsw-font-xxxs-11,11px/16px ui-monospace,monospace);font-family:var(--orc-mono)}
@@ -1251,13 +1262,7 @@ const CSS = `
   .orc-glane{border-color:var(--orc-fg3)}
 }
 
-/* Рабочие копии. В строке запуска причина, по которой копия остаётся, набрана тише пути:
-   путь — то, что открывают, причина — то, что читают один раз и больше к ней не возвращаются. */
-.orc-run__reason{flex:none;color:var(--orc-fg3);font-size:11px}
-.orc-run__v>.orc-path{flex:0 1 auto}
-.orc-run__v>.orc-run__link{flex:none}
-
-/* Список копий в настройках. Размер выровнен по цифрам, чтобы столбец читался сверху вниз,
+/* Рабочие копии. Список копий в настройках. Размер выровнен по цифрам, чтобы столбец читался сверху вниз,
    а не пересчитывался глазами; причина уходит на свою строку, когда места на неё не хватает. */
 .orc-worktrees__summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .orc-worktrees__summary>span{flex:1 1 auto;font-variant-numeric:tabular-nums}
@@ -1276,8 +1281,6 @@ const CSS = `
   .orc-worktrees__reason{grid-column:1/-1}
 }
 
-.orc-example-image{display:block;max-width:100%;max-height:260px;object-fit:contain;padding:16px;border:1px solid var(--orc-line);border-radius:7px;background:var(--orc-layer1)}
-.orc-welcome__settings{max-width:960px;margin:0 auto;padding:16px 24px}.orc-welcome__settings>button{margin-bottom:12px}
 /* First run */
 .orc-root>.orc-welcome{grid-column:1/-1}
 .orc-welcome{max-width:1050px;margin:0 auto;padding:clamp(28px,6vh,76px) 28px 60px;color:var(--orc-fg)}
@@ -1299,10 +1302,8 @@ const CSS = `
 .orc-welcome__ok{background:color-mix(in srgb,var(--orc-ok) 15%,transparent);color:var(--orc-ok)}
 .orc-welcome__wait{border:1px solid var(--orc-line);color:var(--orc-fg3)}
 .orc-welcome__card .orc-link{padding:0;border:0;background:none;color:var(--orc-accent);cursor:pointer;font:inherit;font-size:12px;text-align:left}
-.orc-plan__remove,.orc-plans__remove{border:0;background:none;color:var(--orc-fg3);cursor:pointer;font-size:16px}.orc-plan__remove:hover,.orc-plans__remove:hover{color:var(--orc-error)}
-.orc-plans__badges>li{position:relative}.orc-plans__remove{position:absolute;right:-1px;bottom:-7px;font-size:12px}
+.orc-plans__badges>li{position:relative}
 .orc-synthetic{margin:0;padding:6px 10px;border:1px dashed var(--orc-line);border-radius:6px;color:var(--orc-fg2);font-size:12px}
-.orc-plan__example{color:var(--orc-accent);font-size:11px;font-weight:500}
 .orc-welcome__choice{width:100%;display:flex;flex-direction:column;align-items:flex-start;gap:4px;margin:0 0 8px;padding:14px 16px;border:1px solid var(--orc-line);border-radius:9px;background:var(--orc-layer2);color:var(--orc-fg);text-align:left;cursor:pointer}
 .orc-welcome__choice:hover{border-color:var(--orc-accent);background:var(--orc-hover)}
 .orc-welcome__choice--primary{border-color:color-mix(in srgb,var(--orc-accent) 55%,transparent)}
@@ -1385,6 +1386,7 @@ const STATUS_COLOR: Record<ViewStatus, string> = {
   closed: 'var(--orc-fg3)',
   blocked: 'var(--orc-fg3)',
   superseded: 'var(--orc-fg3)',
+  dropped: 'var(--orc-fg3)',
 }
 
 /** Single status table for every view: never colour alone — a glyph and a word always come with it. */
@@ -1393,10 +1395,14 @@ export function statusTone(status: ViewStatus): StatusTone {
 }
 
 /** Human decisions keep the ◆ of the spec whatever their status. */
-export function taskTone(task: { status: ViewStatus; kind: string; closed?: 'negative'; check?: CheckState }): StatusTone {
+export function taskTone(task: { status: ViewStatus; kind: string; closed?: 'negative'; check?: CheckState; byOrchestrator?: true; preparing?: true }): StatusTone {
   if (task.closed === 'negative') return { label: t('status.closedNegative'), glyph: '○', color: 'var(--orc-fg3)' }
   // Finished work the orchestrator is still checking: calm, not yet the person's turn (vr1).
   if (task.status === 'in_review' && isChecking(task.check)) return { label: t('status.checking'), glyph: '◌', color: 'var(--orc-fg2)' }
+  // A decision the orchestrator still prepares (rt1): calm too, not yet the person's turn.
+  if (task.preparing) return { label: t('status.preparing'), glyph: '◆', color: 'var(--orc-fg2)' }
   const tone = statusTone(task.status)
+  // The orchestrator's own work (rt1) keeps ▣ whatever its status, like ◆ for decisions.
+  if (task.kind === 'root') return { ...tone, glyph: '▣', ...(task.byOrchestrator ? { label: t('status.byOrchestrator') } : {}) }
   return task.kind === 'decision' ? { ...tone, glyph: '◆' } : tone
 }

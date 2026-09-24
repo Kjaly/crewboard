@@ -6,6 +6,7 @@ import {
   type Exec,
   PlanConflictError,
   TASK_CLASSES,
+  TASK_KINDS,
   type TaskView,
   type ViewStatus,
   acceptTask,
@@ -24,6 +25,7 @@ import {
   ensureGitExclude,
   initPlan,
   isChecking,
+  ownWorkUnchecked,
   loadPlan,
   listPlans,
   loadRouting,
@@ -37,9 +39,23 @@ import {
   setCurrentPlan,
   setPlanArchived,
   supersedeTask,
+  dropTask,
   updatePlan,
   splitPlan,
   currentPlanId,
+  resolveOrchestratorCheck,
+  setTaskKind,
+  CheckError,
+  registryPath,
+  loadRegistry,
+  saveWorker,
+  saveWorkerProfile,
+  removeWorker,
+  awaitsMerge,
+  baseBranch,
+  mergeCommands,
+  recordMerges,
+  uncommittedCount,
 } from '@crewboard/core'
 import { homeOf, listFlag, makeBackends, repoRoot } from '../context.js'
 import { type Io, UserError, confirmHuman } from '../io.js'
@@ -49,8 +65,8 @@ import { resolveRouting } from '@crewboard/core'
 import { cmdPlanDraft } from './drafts.js'
 import { registerPlace } from './repos.js'
 
-const ICON: Record<ViewStatus, string> = { backlog: '·', ready: '○', running: '●', in_review: '◐', accepted: '✓', closed: '✗', blocked: '⏸', superseded: '⊘' }
-const KINDS = ['implement', 'review', 'research', 'decision'] as const
+const ICON: Record<ViewStatus, string> = { backlog: '·', ready: '○', running: '●', in_review: '◐', accepted: '✓', closed: '✗', blocked: '⏸', superseded: '⊘', dropped: '⊘' }
+const KINDS = TASK_KINDS
 
 export async function cmdInit(argv: string[], io: Io, exec: Exec): Promise<number> {
   const { values } = parseArgs({ args: argv, options: { goal: { type: 'string' } } })
@@ -68,11 +84,21 @@ export async function cmdInit(argv: string[], io: Io, exec: Exec): Promise<numbe
 }
 
 function formatView(v: TaskView, width: number, io: Io): string {
+  // Accepted but unmerged dependencies are named apart (w1d): what they wait for is a merge, not work.
+  const waitingMerge = v.waitingMerge ?? []
+  const others = v.blockedBy.filter((id) => !waitingMerge.includes(id))
   const extra = [
     v.task.worker,
-    v.status === 'blocked' ? cliT(io.lang ?? 'en', 'plan.waiting', { ids: v.blockedBy.join(', ') }) : undefined,
+    v.status === 'blocked' && others.length ? cliT(io.lang ?? 'en', 'plan.waiting', { ids: others.join(', ') }) : undefined,
+    waitingMerge.length ? cliT(io.lang ?? 'en', 'plan.waitingMerge', { ids: waitingMerge.join(', ') }) : undefined,
+    v.unmerged ? cliT(io.lang ?? 'en', 'plan.unmerged') : undefined,
     v.needsHuman ? cliT(io.lang ?? 'en', 'plan.humanDecision') : undefined,
-    v.check ? cliT(io.lang ?? 'en', v.check === 'checked' ? 'plan.checked' : 'plan.checking') : undefined,
+    v.task.kind === 'root' ? cliT(io.lang ?? 'en', 'plan.rootTask') : undefined,
+    v.byOrchestrator ? cliT(io.lang ?? 'en', 'plan.byOrchestrator') : undefined,
+    v.preparing ? cliT(io.lang ?? 'en', 'plan.preparing') : undefined,
+    // B12: a task back in «ready» after a failed run says so, not only «ready».
+    v.status !== 'running' && v.lastOutcome === 'failed' ? cliT(io.lang ?? 'en', 'plan.lastRunFailed') : undefined,
+    v.check ? cliT(io.lang ?? 'en', v.check !== 'checked' ? 'plan.checking' : v.task.kind === 'decision' ? 'plan.prepared' : 'plan.checked') : undefined,
     v.activeRunId,
   ].filter(Boolean)
   return `${ICON[v.status]} ${v.task.id.padEnd(width)}  ${v.task.title}${extra.length ? ` · ${extra.join(' · ')}` : ''}\n`
@@ -82,22 +108,23 @@ export async function cmdStatus(argv: string[], io: Io, exec: Exec): Promise<num
   const { values } = parseArgs({ args: argv, options: { json: { type: 'boolean' }, plan: { type: 'string' } } })
   const root = await repoRoot(io, exec)
   const { plan, states, degraded } = await syncPlan(root, io, makeBackends(io, exec, root), values.plan)
-  const views = deriveViews(plan, states)
+  const views = deriveViews(plan, states, { prepareDecisions: (await resolveOrchestratorCheck(root, values.plan ?? currentPlanId(root), plan)).enabled })
   const ready = readySet(views)
+  const unmerged = views.filter((v) => v.unmerged).map((v) => v.task.id)
   const critical = criticalPath(plan)
   const effectiveRouting = await resolveRouting(root, undefined, io.env)
   let chat: { sessionId: string } | undefined
   try { chat = JSON.parse(await readFile(join(root, '.orchestration', 'chats.json'), 'utf8'))[values.plan ?? currentPlanId(root)] } catch { /* no chat bound */ }
   if (values.json) {
-    const rows = views.map((v) => ({ id: v.task.id, title: v.task.title, status: v.status, blockedBy: v.blockedBy, needsHuman: v.needsHuman, activeRunId: v.activeRunId ?? null, worker: v.task.worker ?? null, ...(v.check ? { check: v.check, ...(v.task.check?.note ? { checkNote: v.task.check.note } : {}) } : {}) }))
-    io.out(`${JSON.stringify({ goal: plan.goal, rev: plan.rev, chat: chat?.sessionId, views: rows, ready, criticalPath: critical, degraded, effectiveRouting }, null, 2)}\n`)
+    const rows = views.map((v) => ({ id: v.task.id, title: v.task.title, kind: v.task.kind, status: v.status, blockedBy: v.blockedBy, needsHuman: v.needsHuman, activeRunId: v.activeRunId ?? null, worker: v.task.worker ?? null, ...(v.check ? { check: v.check, ...(v.task.check?.note ? { checkNote: v.task.check.note } : {}) } : {}), ...(v.byOrchestrator ? { byOrchestrator: true } : {}), ...(v.preparing ? { preparing: true } : {}), ...(v.waitingMerge ? { waitingMerge: v.waitingMerge } : {}), ...(v.unmerged ? { unmerged: true } : {}), ...(v.lastOutcome ? { lastOutcome: v.lastOutcome } : {}) }))
+    io.out(`${JSON.stringify({ goal: plan.goal, rev: plan.rev, chat: chat?.sessionId, views: rows, ready, unmerged, criticalPath: critical, degraded, effectiveRouting }, null, 2)}\n`)
     return 0
   }
   io.out(`${plan.goal || cliT(io.lang ?? 'en', 'plan.statusFallback')} · rev ${plan.rev}${degraded ? cliT(io.lang ?? 'en', 'plan.degraded') : ''}${chat ? cliT(io.lang ?? 'en', 'plan.chatLead', { id: chat.sessionId }) : ''}\n\n`)
   io.out(`${cliT(io.lang ?? 'en', 'presets.active', { label: effectiveRouting.preset.builtin ? cliT(io.lang ?? 'en', 'presets.builtin') : effectiveRouting.preset.label, source: cliT(io.lang ?? 'en', `presets.source.${effectiveRouting.source}`) })}\n`)
   const width = Math.max(4, ...views.map((v) => v.task.id.length))
   for (const v of views) io.out(formatView(v, width, io))
-  io.out(`\n${cliT(io.lang ?? 'en', 'status.ready')}: ${ready.length ? ready.join(', ') : '—'}\n${cliT(io.lang ?? 'en', 'status.critical')}: ${critical.length ? critical.join(' → ') : '—'}\n`)
+  io.out(`\n${cliT(io.lang ?? 'en', 'status.ready')}: ${ready.length ? ready.join(', ') : '—'}\n${unmerged.length ? `${cliT(io.lang ?? 'en', 'status.unmerged', { count: unmerged.length })}: ${unmerged.join(', ')}\n` : ''}${cliT(io.lang ?? 'en', 'status.critical')}: ${critical.length ? critical.join(' → ') : '—'}\n`)
   return 0
 }
 
@@ -166,9 +193,20 @@ export async function cmdTask(argv: string[], io: Io, exec: Exec): Promise<numbe
   if (values.status && values.status !== 'backlog' && values.status !== 'ready') {
     throw new UserError(cliT(io.lang ?? 'en', 'plan.statusOnly'), 2)
   }
+  if (values.kind !== undefined && !(KINDS as readonly string[]).includes(values.kind)) throw new UserError(cliT(io.lang ?? 'en', 'plan.badKind', { kind: values.kind }), 2)
   await updatePlan(root, (plan) => {
     const task = plan.tasks.find((t) => t.id === id)
     if (!task) throw new UserError(cliT(io.lang ?? 'en', 'plan.noTask', { id }))
+    // A dropped task is closed for good (w1f): it does not come back to the queue through `--status ready`.
+    if (values.status && task.status === 'dropped') throw new UserError(cliT(io.lang ?? 'en', 'plan.statusDropped', { id }))
+    if (values.kind !== undefined) {
+      try {
+        setTaskKind(task, values.kind as (typeof KINDS)[number])
+      } catch (err) {
+        if (err instanceof CheckError) throw new UserError(cliT(io.lang ?? 'en', 'plan.kindClosed', { id, status: task.status }))
+        throw err
+      }
+    }
     if (values.title) task.title = values.title
     if (values.lane) task.lane = values.lane
     if (values.deps !== undefined) task.deps = listFlag(values.deps)
@@ -194,20 +232,31 @@ export async function cmdAccept(argv: string[], io: Io, exec: Exec): Promise<num
   const verdict = detail.verdict
   // Accepting before the orchestrator finished checking is allowed, but said out loud (vr1).
   const view = deriveViews(await loadPlan(root, values.plan)).find((v) => v.task.id === id)
-  const unchecked = isChecking(view?.check) ? `${cliT(io.lang ?? 'en', 'plan.acceptUnchecked', { id })}\n` : ''
-  const question = unchecked + (verdict.kind === 'negative'
-    ? cliT(io.lang ?? 'en', 'plan.acceptNegative', { id, reason: verdict.why ? ` ${verdict.why}.` : '' })
-    : verdict.kind === 'disputed'
-      ? cliT(io.lang ?? 'en', 'plan.acceptDisputed', { id, mismatch: verdict.mismatch ?? cliT(io.lang ?? 'en', 'plan.factsMismatch') })
-      : cliT(io.lang ?? 'en', 'plan.acceptQuestion', { id }))
-  if (!(await confirmHuman(io, question))) {
-    io.out(`${cliT(io.lang ?? 'en', 'plan.cancelled')}\n`)
-    return 1
-  }
+  // Likewise a decision or a root task the orchestrator has not prepared or reported (rt1).
+  const unchecked = isChecking(view?.check) ? `${cliT(io.lang ?? 'en', 'plan.acceptUnchecked', { id })}\n` : view && ownWorkUnchecked(view.task.kind, view.check) ? `${cliT(io.lang ?? 'en', 'plan.acceptOwnUnchecked', { id })}\n` : ''
+  const lang = io.lang ?? 'en'
+  // Work the copy holds without a commit is not on the task branch: a merge would not bring it (w1d).
+  const uncommitted = detail.worktree ? await uncommittedCount(detail.worktree.path, exec) : undefined
+  const loose = uncommitted ? `${cliT(lang, 'plan.acceptUncommitted', { id, count: uncommitted })}\n` : ''
+  // A decision has no verdict (w1b, B05): the question names the choice, not a claim to dispute.
+  const question = unchecked + loose + (!verdict
+    ? cliT(lang, 'plan.acceptDecision', { id })
+    : verdict.kind === 'negative'
+      ? cliT(lang, 'plan.acceptNegative', { id, reason: verdict.why ? ` ${cliT(lang, `verdict.reason.${verdict.why}`)}.` : '' })
+      : verdict.kind === 'disputed'
+        ? cliT(lang, 'plan.acceptDisputed', { id, mismatch: verdict.mismatch ? cliT(lang, `verdict.reason.${verdict.mismatch}`) : cliT(lang, 'plan.factsMismatch') })
+        : cliT(lang, 'plan.acceptQuestion', { id }))
+  if (!(await confirmHuman(io, question))) return 1
   await acceptTask(root, id, io.now(), verdict, undefined, values.plan)
   const cleanup = await gcAfterAccept(root, [id], { exec, now: io.now, policyPath: worktreeConfigPath(io.env, homeOf(io)), planId: values.plan })
   io.out(cliT(io.lang ?? 'en', 'plan.accepted', { id }))
   if (cleanup.removed.includes(id)) io.out(`${cliT(io.lang ?? 'en', 'plan.copyRemoved')}\n`)
+  // Accepted is not merged (w1d): the next step is said with the exact commands; Crewboard does not merge by itself.
+  const task = (await recordMerges(root, await loadPlan(root, values.plan), exec, io.now(), values.plan)).tasks.find((t) => t.id === id)
+  if (task?.worktree && awaitsMerge(task)) {
+    const commands = mergeCommands({ root, taskId: id, ...task.worktree, uncommitted: await uncommittedCount(task.worktree.path, exec) })
+    io.out(cliT(io.lang ?? 'en', 'plan.acceptedUnmerged', { id, into: (await baseBranch(root, exec)) ?? 'HEAD', commands: commands.map((line) => `    ${line}`).join('\n') }))
+  }
   return 0
 }
 
@@ -216,10 +265,7 @@ export async function cmdReject(argv: string[], io: Io, exec: Exec): Promise<num
   const { values } = parseArgs({ args: rest, options: { reason: { type: 'string' }, plan: { type: 'string' } } })
   if (!id || !values.reason) throw new UserError(cliT(io.lang ?? 'en', 'plan.usageReject'), 2)
   const root = await repoRoot(io, exec)
-  if (!(await confirmHuman(io, cliT(io.lang ?? 'en', 'plan.rejectQuestion', { id, reason: values.reason })))) {
-    io.out(`${cliT(io.lang ?? 'en', 'plan.cancelled')}\n`)
-    return 1
-  }
+  if (!(await confirmHuman(io, cliT(io.lang ?? 'en', 'plan.rejectQuestion', { id, reason: values.reason })))) return 1
   await rejectTask(root, id, values.reason, io.now(), values.plan)
   io.out(cliT(io.lang ?? 'en', 'plan.rejected', { id }))
   return 0
@@ -230,12 +276,26 @@ export async function cmdSupersede(argv: string[], io: Io, exec: Exec): Promise<
   const { values } = parseArgs({ args: rest, options: { by: { type: 'string' }, plan: { type: 'string' } } })
   if (!id || !values.by) throw new UserError(cliT(io.lang ?? 'en', 'plan.usageSupersede'), 2)
   const root = await repoRoot(io, exec)
-  if (!(await confirmHuman(io, cliT(io.lang ?? 'en', 'plan.supersedeQuestion', { id, by: values.by })))) {
+  if (!(await confirmHuman(io, cliT(io.lang ?? 'en', 'plan.supersedeQuestion', { id, by: values.by })))) return 1
+  await supersedeTask(root, id, values.by, io.now(), values.plan)
+  io.out(cliT(io.lang ?? 'en', 'plan.superseded', { id, by: values.by }))
+  return 0
+}
+
+/** `drop <id> --reason`: a person closes a task that is no longer needed; it never becomes ready again (w1f). */
+export async function cmdDrop(argv: string[], io: Io, exec: Exec): Promise<number> {
+  const [id, ...rest] = argv
+  const { values } = parseArgs({ args: rest, options: { reason: { type: 'string' }, plan: { type: 'string' } } })
+  if (!id || !values.reason?.trim()) throw new UserError(cliT(io.lang ?? 'en', 'plan.usageDrop'), 2)
+  const root = await repoRoot(io, exec)
+  if (!(await confirmHuman(io, cliT(io.lang ?? 'en', 'plan.dropQuestion', { id, reason: values.reason })))) {
     io.out(`${cliT(io.lang ?? 'en', 'plan.cancelled')}\n`)
     return 1
   }
-  await supersedeTask(root, id, values.by, io.now(), values.plan)
-  io.out(cliT(io.lang ?? 'en', 'plan.superseded', { id, by: values.by }))
+  // A run that already ended but was not synced yet must not read as «running».
+  await syncPlan(root, io, makeBackends(io, exec, root), values.plan)
+  await dropTask(root, id, values.reason.trim(), io.now(), values.plan, io.lang)
+  io.out(cliT(io.lang ?? 'en', 'plan.dropped', { id }))
   return 0
 }
 
@@ -307,7 +367,6 @@ export async function cmdWorkers(argv: string[], io: Io, _exec: Exec): Promise<n
   const { positionals, values } = parseArgs({ args: rest, allowPositionals: true, options: { reason: { type: 'string' }, kind: { type: 'string' }, model: { type: 'string' }, label: { type: 'string' }, billing: { type: 'string' }, transport: { type: 'string' }, effort: { type: 'string' } } })
   const path = profileStorePath(io.env, homeOf(io))
   const routing = await loadRouting(path, io.env, homeOf(io))
-  const { registryPath, loadRegistry, saveWorker, saveWorkerProfile, removeWorker } = await import('@crewboard/core')
   const workersFile = registryPath(io.env, homeOf(io))
   switch (sub) {
     case 'list': {

@@ -1,7 +1,8 @@
 import { type RefObject, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PlanCost, RepoSnapshot, TaskSnapshot } from '../../shared/types.js'
 import type { Verdict } from '@crewboard/core'
-import { waitsForHuman } from '../../../../core/src/plan/graph.js'
+import { ownWorkUnchecked, waitsForHuman } from '../../../../core/src/plan/graph.js'
+import { cleanToAccept } from '../../../../core/src/orchestration/verdict.js'
 import { useAction } from '../actions.js'
 import { api } from '../api.js'
 import { t, useLang } from '../i18n.js'
@@ -91,10 +92,12 @@ function Sheet({
   onSelect(id: string): void
   onClose(): void
 }) {
-  // Exclusions rather than a selection: a task that arrives while the sheet is open is checked, as it would be on open.
+  // w1b (B03): only clean work starts checked; negative, disputed, unknown and unchecked work waits in its own
+  // group, unchecked. `flipped` holds the person's own ticks against that default, so a task that arrives while
+  // the sheet is open gets the default too.
   const lang = useLang()
-  const [excluded, setExcluded] = useState<ReadonlySet<string>>(() => new Set())
-  const [verdicts, setVerdicts] = useState<Record<string, Verdict | null>>({})
+  const [flipped, setFlipped] = useState<ReadonlySet<string>>(() => new Set())
+  const [verdicts, setVerdicts] = useState<Record<string, Verdict | null | undefined>>({})
   const [placement, setPlacement] = useState<Placement | null>(null)
   const box = useRef<HTMLDivElement>(null)
   const prefix = useId()
@@ -102,7 +105,13 @@ function Sheet({
   const { cost } = usePlanCost(repo.root, repo.rev)
   // biome-ignore lint/correctness/useExhaustiveDependencies: Locale changes intentionally refresh the translated result.
   const waits = useMemo(() => waitLabels(cost, new Date()), [cost, lang])
-  const chosen = tasks.filter((t) => !excluded.has(t.id)).map((t) => t.id)
+  const loaded = tasks.every((task) => task.id in verdicts)
+  const clean = (task: TaskSnapshot) => cleanToAccept(task, verdicts[task.id])
+  const picked = (task: TaskSnapshot) => loaded && clean(task) !== flipped.has(task.id)
+  const cleanTasks = tasks.filter(clean)
+  const riskyTasks = tasks.filter((task) => !clean(task))
+  const chosen = tasks.filter(picked)
+  const chosenClean = chosen.filter(clean).length
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: The listed key intentionally triggers a refresh when its underlying data changes.
   useEffect(() => {
@@ -110,6 +119,7 @@ function Sheet({
     setVerdicts({})
     void Promise.all(tasks.map(async (task) => {
       const result = await api.task(repo.root, task.id).catch(() => null)
+      // A decision has no verdict (B05); for other work a failed read is «unknown», which is at risk.
       return [task.id, result?.ok ? result.value.verdict : null] as const
     })).then((entries) => { if (live) setVerdicts(Object.fromEntries(entries)) })
     return () => { live = false }
@@ -140,14 +150,50 @@ function Sheet({
   }, [anchor, onClose])
 
   const toggle = (id: string) =>
-    setExcluded((prev) => {
+    setFlipped((prev) => {
       const next = new Set(prev)
       if (!next.delete(id)) next.add(id)
       return next
     })
 
+  // Select all flips every task off its default that is not picked yet; clearing flips the picked ones back.
+  const setAll = (on: boolean) => setFlipped(new Set(tasks.filter((task) => clean(task) !== on).map((task) => task.id)))
+
   const send = async () => {
-    if ((await action.call(() => api.acceptBatch(repo.root, chosen))) === true) onClose()
+    if ((await action.call(() => api.acceptBatch(repo.root, chosen.map((task) => task.id)))) === true) onClose()
+  }
+
+  const riskOf = (task: TaskSnapshot): string | null => {
+    const verdict = verdicts[task.id]
+    if (verdict?.kind === 'negative') return `${t('verdict.negative')} · ${verdict.why ? t(`verdict.why.${verdict.why}`) : t('verdict.negative')}`
+    if (verdict?.kind === 'disputed') return `${t('verdict.disputed')} · ${verdict.mismatch ? t(`verdict.mismatch.${verdict.mismatch}`) : t('verdict.disputed')}`
+    if (!verdict && task.kind !== 'decision') return t('queue.batch.verdictUnknown')
+    return null
+  }
+
+  const row = (task: TaskSnapshot) => {
+    const id = `${prefix}-${task.id}`
+    const meta = [task.id, task.kind === 'root' ? t('status.orchestrator') : task.worker, waits.get(task.id)].filter(Boolean).join(' · ')
+    const risk = riskOf(task)
+    return (
+      <li key={task.id} className="orc-sheet__item">
+        <input type="checkbox" className="orc-check" id={id} checked={picked(task)} disabled={!loaded} onChange={() => toggle(task.id)} />
+        <label className="orc-sheet__label" htmlFor={id}>
+          <span className="orc-card__title">
+            {task.kind === 'decision' || task.kind === 'root' ? (
+              <span className="orc-sheet__kind" aria-hidden="true">{task.kind === 'root' ? '▣' : '◆'}</span>
+            ) : null}
+            {task.title}
+          </span>
+          <span className="orc-meta">{meta}</span>
+          {risk ? <span className="orc-meta orc-sheet__risk">{risk}</span> : null}
+          {ownWorkUnchecked(task.kind, task.check) ? <span className="orc-meta orc-sheet__unchecked">{t('queue.batch.unchecked')}</span> : null}
+        </label>
+        <button type="button" className="orc-sheet__open" onClick={() => onSelect(task.id)}>
+          {t('queue.batch.open')}
+        </button>
+      </li>
+    )
   }
 
   return (
@@ -162,47 +208,28 @@ function Sheet({
       <div className="orc-sheet__head">
         <span>{t('queue.batch.title')}</span>
         <span className="orc-top__spacer" />
-        <button
-          type="button"
-          className="orc-more"
-          onClick={() => setExcluded(chosen.length === 0 ? new Set() : new Set(tasks.map((t) => t.id)))}
-        >
+        <button type="button" className="orc-more" disabled={!loaded} onClick={() => setAll(chosen.length === 0)}>
           {chosen.length === 0 ? t('queue.batch.selectAll') : t('queue.batch.clearAll')}
         </button>
       </div>
 
-      <ul className="orc-sheet__list">
-        {tasks.map((task) => {
-          const id = `${prefix}-${task.id}`
-          const meta = [task.id, task.worker, waits.get(task.id)].filter(Boolean).join(' · ')
-          const verdict = verdicts[task.id]
-          const risk = verdict?.kind === 'negative'
-            ? `${t('verdict.negative')} · ${verdict.why ? t(`verdict.why.${verdict.why}`) : t('verdict.negative')}`
-            : verdict?.kind === 'disputed'
-              ? `${t('verdict.disputed')} · ${verdict.mismatch ? t(`verdict.mismatch.${verdict.mismatch}`) : t('verdict.disputed')}`
-              : null
-          return (
-            <li key={task.id} className="orc-sheet__item">
-              <input type="checkbox" className="orc-check" id={id} checked={!excluded.has(task.id)} onChange={() => toggle(task.id)} />
-              <label className="orc-sheet__label" htmlFor={id}>
-                <span className="orc-card__title">
-                  {task.kind === 'decision' ? (
-                    <span className="orc-sheet__kind" aria-hidden="true">◆</span>
-                  ) : null}
-                  {task.title}
-                </span>
-                <span className="orc-meta">{meta}</span>
-                {!excluded.has(task.id) && risk ? <span className="orc-meta">{risk}</span> : null}
-              </label>
-              <button type="button" className="orc-sheet__open" onClick={() => onSelect(task.id)}>
-                {t('queue.batch.open')}
-              </button>
-            </li>
-          )
-        })}
-      </ul>
+      {!loaded ? <p className="orc-meta orc-sheet__group">{t('queue.batch.loading')}</p> : null}
+      <div className="orc-sheet__list">
+        {!loaded ? <ul className="orc-sheet__rows">{tasks.map(row)}</ul> : <>
+          {cleanTasks.length ? <section aria-label={t('queue.batch.clean', { count: cleanTasks.length })}>
+            <h3 className="orc-sheet__group">{t('queue.batch.clean', { count: cleanTasks.length })}</h3>
+            <ul className="orc-sheet__rows">{cleanTasks.map(row)}</ul>
+          </section> : null}
+          {riskyTasks.length ? <section aria-label={t('queue.batch.risky', { count: riskyTasks.length })}>
+            <h3 className="orc-sheet__group">{t('queue.batch.risky', { count: riskyTasks.length })}</h3>
+            <p className="orc-meta orc-sheet__group-hint">{t('queue.batch.riskyHint')}</p>
+            <ul className="orc-sheet__rows">{riskyTasks.map(row)}</ul>
+          </section> : null}
+        </>}
+      </div>
 
       <div className="orc-sheet__foot">
+        {loaded && chosen.length ? <p className="orc-meta">{t('queue.batch.summary', { clean: chosenClean, risky: chosen.length - chosenClean })}</p> : null}
         <div className="orc-actions">
           <button type="button" className="orc-btn" disabled={action.pending || chosen.length === 0} onClick={send}>
             {t('queue.batch.acceptSelected', { count: chosen.length })}

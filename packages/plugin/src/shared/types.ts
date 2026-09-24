@@ -48,7 +48,9 @@ export type OrchestraRepoSnapshot = Omit<RepoSnapshot, 'plans'> & {
   missing?: boolean
 }
 export type { SidebarOrder }
-export type OrchestraSnapshot = { generatedAt: string; repos: OrchestraRepoSnapshot[]; workers: WorkerInfo[]; build?: string; order?: SidebarOrder }
+/** Broken worker settings: the repositories are still served, the screen shows this as a banner (B07). */
+export type WorkerSettingsIssue = { code: 'unreadable'; detail: string; path?: string } | { code: 'incomplete'; classes: TaskClass[]; path: string }
+export type OrchestraSnapshot = { generatedAt: string; repos: OrchestraRepoSnapshot[]; workers: WorkerInfo[]; build?: string; order?: SidebarOrder; workerSettings?: WorkerSettingsIssue }
 
 /**
  * A run's cost with the plan coordinates the timeline and review screens need: which task it
@@ -59,7 +61,7 @@ export type PlanRunCost = RunCost & {
   taskTitle: string
   startedAt: string
   finishedAt?: string
-  outcome?: 'completed' | 'failed' | 'cancelled'
+  outcome?: 'completed' | 'failed' | 'cancelled' | 'incomplete'
   terminalProvenance?: 'plan' | 'backend'
   attemptIndex?: number
   attemptParentRunId?: string

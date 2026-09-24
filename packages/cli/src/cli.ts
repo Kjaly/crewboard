@@ -16,6 +16,7 @@ import {
   LaunchError,
   PlanConflictError,
   PlanCorruptError,
+  PlanArchivedError,
   PlanIncompatibleError,
   PlanIdError,
   PlanInvalidError,
@@ -30,11 +31,11 @@ import {
   plansDir,
 } from '@crewboard/core'
 import { cmdPreflight, cmdWorktree } from './commands/env.js'
-import { cmdAccept, cmdChat, cmdInit, cmdPlan, cmdReject, cmdStatus, cmdSupersede, cmdTask, cmdWorkers } from './commands/plan.js'
+import { cmdAccept, cmdChat, cmdInit, cmdPlan, cmdReject, cmdStatus, cmdSupersede, cmdDrop, cmdTask, cmdWorkers } from './commands/plan.js'
 import { cmdAttention } from './commands/attention.js'
-import { cmdCost, cmdEvents, cmdRun, cmdSteer, cmdStop, cmdWait } from './commands/runs.js'
+import { cmdContinue, cmdCost, cmdEvents, cmdRun, cmdSteer, cmdStop, cmdWait } from './commands/runs.js'
 import { cmdTrace } from './commands/trace.js'
-import { cmdVerify } from './commands/verify.js'
+import { cmdStart, cmdVerify } from './commands/verify.js'
 import { cmdPresets, cmdRepo } from './commands/presets.js'
 import { warnIfOffScreen } from './commands/repos.js'
 import { repoRoot } from './context.js'
@@ -57,11 +58,14 @@ const COMMANDS: Record<string, Command> = {
   accept: cmdAccept,
   reject: cmdReject,
   supersede: cmdSupersede,
+  drop: cmdDrop,
   verify: cmdVerify,
+  start: cmdStart,
   run: cmdRun,
   events: cmdEvents,
   trace: cmdTrace,
   steer: cmdSteer,
+  continue: cmdContinue,
   stop: cmdStop,
   attention: cmdAttention,
   cost: cmdCost,
@@ -90,6 +94,7 @@ function describeError(err: unknown, lang: 'en' | 'ru'): { message: string; code
   if (err instanceof LegacyRunReadOnlyError) return { message: cliT(lang, 'cli.legacyReadOnly'), code: 1 }
   if (err instanceof ProfileError) return { message: err.message, code: 1 }
   if (err instanceof PlanIncompatibleError) return { message: cliT(lang, `cli.planIncompatible.${err.mode}`, { file: err.file, details: err.details.slice(0, 3).join(', ') }), code: 1 }
+  if (err instanceof PlanArchivedError) return { message: cliT(lang, 'cli.planArchived', { id: err.planId }), code: 1 }
   if (err instanceof PlanCorruptError || err instanceof PlanInvalidError) return { message: err.message, code: 1 }
   if (err instanceof PlanConflictError) return { message: cliT(lang, 'cli.conflict'), code: 1 }
   if (err instanceof CheckError || err instanceof PrepareError || err instanceof ExamplePlanError || err instanceof ExampleRunError || err instanceof SpecUploadError || err instanceof FilePreviewError || err instanceof AcpError) return { message: err.message, code: 1 }
@@ -140,12 +145,27 @@ export async function run(argv: string[], io: Io, exec: Exec = nodeExec): Promis
     code = await command(rest, io, exec)
   } catch (err) {
     const described = err instanceof PlanNotFoundError ? await describeMissingPlan(err, io, exec, lang) : describeError(err, lang)
-    io.err(`${described.message}\n`)
+    io.err(`${name === 'run' ? runRefusal(err, described.message, rest[0], lang) : described.message}\n`)
     code = described.code
   }
   // Once per command, after its own output: the plan it worked on is in a place the screen does not show.
   if (!OFF_PLAN_COMMANDS.has(name)) await warnIfOffScreen(io, exec)
   return code
+}
+
+/**
+ * A refused `run` ends with one line that says the task was not started and why. The reason used to come
+ * first and a red baseline's test output after it, so `crewboard run t | tail -1` showed a blank line and
+ * the orchestrator took the refusal for a silent exit (sy1 and bg1, 2026-09-24).
+ */
+function runRefusal(err: unknown, message: string, id: string | undefined, lang: 'en' | 'ru'): string {
+  const text = message.trimEnd()
+  const lines = text.split('\n')
+  if (!id || lines.length < 2) return text
+  // A launch refusal's own sentence (after any preflight detail); otherwise the message's first line.
+  const reason = err instanceof LaunchError && err.detail && text.startsWith(err.detail) ? (text.slice(err.detail.length).trim().split('\n')[0] ?? '') : (lines[0] ?? '')
+  if (lines.at(-1) === reason) return text
+  return `${text}\n${cliT(lang, 'runs.notStarted', { id, reason })}`
 }
 
 /** Commands that do not work on a plan: they never carry the «not on screen» warning. */

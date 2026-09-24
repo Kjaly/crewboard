@@ -1,14 +1,15 @@
 import { App } from './app.js'
 import { useLang } from './i18n.js'
-import { reviewBadgeLabel, reviewCenter, useReviewBadge } from './notify.js'
+import { reviewBadgeTitle, reviewCenter, useReviewBadge } from './notify.js'
+import { ORCHESTRA_TAB_LABEL } from './right-pane.js'
 
 export function OrchestraIcon({ size }: { size: number; active: boolean }) {
   useLang()
   const { waiting } = useReviewBadge()
   return (
-    <span className="orc-icon" aria-hidden="true" title={reviewBadgeLabel()} onClick={() => { if (waiting > 0) reviewCenter().open() }}>
-      <svg aria-label="Orchestra" role="img" width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-        <title>Orchestra</title>
+    <span className="orc-icon" aria-hidden="true" title={reviewBadgeTitle()} onClick={() => { if (waiting > 0) reviewCenter().open() }}>
+      <svg aria-label={ORCHESTRA_TAB_LABEL} role="img" width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+        <title>{ORCHESTRA_TAB_LABEL}</title>
         <circle cx="3.5" cy="8" r="1.8" />
         <circle cx="12.5" cy="4" r="1.8" />
         <circle cx="12.5" cy="12" r="1.8" />

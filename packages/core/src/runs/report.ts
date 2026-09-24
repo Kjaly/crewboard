@@ -1,5 +1,8 @@
-/** A human-readable report taken from the worker's own final answer (plan 2j). */
-export type RunReport = { runId: string; text: string; source: 'section' | 'final'; truncated: boolean }
+/**
+ * A human-readable report taken from the worker's own final answer (plan 2j). `orchestrator` (rt1): the
+ * report of a root task or a decision the orchestrator stored with `verify --done` — `runId` is empty.
+ */
+export type RunReport = { runId: string; text: string; source: 'section' | 'final' | 'orchestrator'; truncated: boolean }
 
 /** The report is capped at 1500 characters; a longer one is cut at a line boundary and marked with «…». */
 export const REPORT_LIMIT = 1500
@@ -7,9 +10,10 @@ export const REPORT_LIMIT = 1500
 const HEADING = /^(#{1,6})\s*(.+?)\s*#*\s*$/
 const REPORT_TITLES = /^(отчёт|отчет|итог|report)\s*:?$/i
 
-// Events that end the current answer block: normalize() turns them into a non-message feed entry.
+// Events that end the current answer block: normalize() turns them into a non-message feed entry, and a new turn
+// (bg1: the «waiting» answer of one turn and the report of the turn a background notification woke are two answers).
 // Everything else (lifecycle noise, unknown types) is transparent, exactly as normalize() skips it.
-const BREAK_TYPES = new Set(['tool_started', 'tool_completed', 'error', 'failed', 'run_failed', 'steer', 'permission_denied', 'final'])
+const BREAK_TYPES = new Set(['tool_started', 'tool_completed', 'error', 'failed', 'run_failed', 'steer', 'permission_denied', 'final', 'turn_started'])
 
 const asText = (data: unknown) => (typeof data === 'string' ? data : JSON.stringify(data ?? ''))
 const isEvent = (v: unknown): v is { type?: unknown; data?: unknown } => !!v && typeof v === 'object'

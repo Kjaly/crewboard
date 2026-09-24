@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { type Backends, createBackends, deriveViews, loadPlan, loadRepoPreferences, loadSidebarOrder, nodeExec, normalize, readDshWorkspaces, readRepoRegistry } from '@crewboard/core'
+import { type Backends, createBackends, deriveViews, loadPlan, loadRepoPreferences, loadSidebarOrder, nodeExec, normalize, readDshWorkspaces, readRepoRegistry, workerSettingsProblem } from '@crewboard/core'
 import { actionRoutes, resolvedWorkers } from './actions.js'
 import { assetRoutes } from './assets.js'
 import { type ChatDeps, createChatWaker, readChats } from './chat.js'
@@ -49,7 +49,7 @@ export function apply(ctx: HostContext, rawConfig?: unknown, dependencies?: { na
 
   // The chat bindings live next to the plan and are read when the snapshot is built, so the client
   // can show which plans already have one.
-  const service = new OrchestraService({ config, backendsFor, now: () => new Date(), chatsFor: readChats, workspaces, registered, workersFor: () => resolvedWorkers(process.env, home), prefsFor: () => loadRepoPreferences(process.env, home), orderFor: () => loadSidebarOrder(process.env, home), env: { ...process.env, HOME: home } })
+  const service = new OrchestraService({ config, backendsFor, now: () => new Date(), chatsFor: readChats, workspaces, registered, workersFor: () => resolvedWorkers(process.env, home), workerSettingsFor: () => workerSettingsProblem(process.env, home), prefsFor: () => loadRepoPreferences(process.env, home), orderFor: () => loadSidebarOrder(process.env, home), env: { ...process.env, HOME: home } })
   const stop = service.start()
   dependencies?.onService?.(service)
   ctx.effect(() => stop, 'crewboard: service')

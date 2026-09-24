@@ -1,3 +1,4 @@
+import { createInterface } from 'node:readline'
 import { cliT } from './i18n.js'
 
 export type Io = {
@@ -9,7 +10,8 @@ export type Io = {
   out(s: string): void
   err(s: string): void
   isTTY: boolean
-  prompt(question: string): Promise<string>
+  /** The typed line; `undefined` when input ended (Ctrl+D) or was interrupted (Ctrl+C) before an answer. */
+  prompt(question: string): Promise<string | undefined>
   now(): Date
 }
 
@@ -26,8 +28,32 @@ export class UserError extends Error {
 
 const YES = new Set(['y', 'yes', 'д', 'да'])
 
-/** Acceptance-type actions belong to a human: agents run without a TTY and are refused. */
+/**
+ * One question on a terminal. Ctrl+D (end of input) and Ctrl+C resolve `undefined` instead of rejecting:
+ * the promise API of readline turns them into an `AbortError` that reached the person as a stack (rp1).
+ */
+export function askLine(question: string, streams: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream; terminal?: boolean }): Promise<string | undefined> {
+  const rl = createInterface(streams)
+  return new Promise((resolve) => {
+    rl.on('SIGINT', () => rl.close())
+    rl.on('close', () => resolve(undefined))
+    rl.question(question, (answer) => {
+      resolve(answer)
+      rl.close()
+    })
+  })
+}
+
+/**
+ * Acceptance-type actions belong to a human: agents run without a TTY and are refused. Anything but a yes —
+ * «n», an empty line, Ctrl+D, Ctrl+C — is a no and prints the same cancelled line; the caller exits 1.
+ */
 export async function confirmHuman(io: Io, question: string): Promise<boolean> {
-  if (!io.isTTY) throw new UserError(cliT(io.lang ?? 'en', 'io.humanOnly'))
-  return YES.has((await io.prompt(`${question} [y/N] `)).trim().toLowerCase())
+  const lang = io.lang ?? 'en'
+  if (!io.isTTY) throw new UserError(cliT(lang, 'io.humanOnly'))
+  const answer = await io.prompt(`${question} [y/N] `)
+  if (answer !== undefined && YES.has(answer.trim().toLowerCase())) return true
+  // Ctrl+D leaves the cursor after the question: the cancelled line starts on its own line.
+  io.out(`${answer === undefined ? '\n' : ''}${cliT(lang, 'plan.cancelled')}\n`)
+  return false
 }

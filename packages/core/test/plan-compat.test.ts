@@ -81,6 +81,16 @@ describe('reading a plan this build cannot read (pq1)', () => {
     expect(await copies()).toEqual([])
   })
 
+  // w1f: `dropped` joined the strict status set. This build reads and rewrites it with its note; a build before
+  // it meets an unknown status — the case above — and refuses the plan instead of scheduling a closed task.
+  it('reads and keeps a dropped task and its note', async () => {
+    const raw = await storedPlan()
+    const note = { at: '2026-09-24T00:00:00Z', type: 'comment', text: 'closed as not needed: done by hand', event: { kind: 'dropped', reason: 'done by hand' } }
+    await write({ ...raw, tasks: [{ ...raw.tasks[0], status: 'dropped', notes: [note] }] })
+    await updatePlan(root, (plan) => plan)
+    expect((await loadPlan(root)).tasks[0]).toMatchObject({ status: 'dropped', notes: [{ event: { kind: 'dropped', reason: 'done by hand' } }] })
+  })
+
   it('reads unknown newer values of tolerated fields, keeps unknown keys, and refuses to write instead of dropping them', async () => {
     const raw = await storedPlan()
     const run = { runId: 'run_1', agent: 'codex', startedAt: '2026-09-24T00:00:00Z', workerChoice: 'orchestrator', futureField: { a: 1 } }

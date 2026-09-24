@@ -81,8 +81,45 @@ describe('POST /accept-batch', () => {
     expect(dialogs[0]?.[0]).toContain('a — Negative result: a negative result was reported')
     expect(dialogs[0]?.[0]).toContain('b — Disputed: the report makes no explicit result claim')
     expect(dialogs[0]?.[1]).toBe('Accept 3')
+    expect(dialogs[0]?.[0]).toContain('Accept 3 tasks? 0 clean, 3 at risk.')
     expect((await loadPlan(root)).tasks.filter((t) => t.status === 'accepted').map((t) => t.id)).toEqual(['a', 'b', 'd'])
     expect((await loadPlan(root)).tasks.find((t) => t.id === 'a')?.notes.at(-1)?.verdict).toMatchObject({ kind: 'negative', why: 'negative' })
+  })
+
+  // rt1: a decision or root task without the orchestrator's «done» is named before anything is accepted.
+  it('names decisions and root tasks the orchestrator has not checked, and only those', async () => {
+    const { root, post, dialogs } = await setup(true)
+    await updatePlan(root, (p) => {
+      p.tasks.push(
+        { ...newTask({ id: 'e', title: 'Решение E', kind: 'decision' }), check: { state: 'checked', at: NOW.toISOString(), note: 'options' } },
+        { ...newTask({ id: 'i1', title: 'Стенд I1', kind: 'root' }), status: 'in_review', check: { state: 'checked', at: NOW.toISOString(), note: 'Result: received' } },
+      )
+      return p
+    })
+    expect(await post({ repo: root, tasks: ['a', 'd', 'e', 'i1'] })).toMatchObject({ status: 200 })
+    const [message] = dialogs[0] ?? []
+    const unchecked = message?.split('Not checked by the orchestrator')[1] ?? ''
+    expect(unchecked).toContain('d — Решение D')
+    expect(unchecked).not.toContain('e — ')
+    expect(unchecked).not.toContain('i1 — ')
+    expect(unchecked).not.toContain('a — ')
+  })
+
+  it('counts clean and risky work in the confirmation (w1b, B03)', async () => {
+    const { root, post, dialogs } = await setup(true)
+    await updatePlan(root, (p) => {
+      p.tasks.push({ ...newTask({ id: 'e', title: 'Решение E', kind: 'decision' }), check: { state: 'checked', at: NOW.toISOString(), note: 'options' } })
+      return p
+    })
+    expect(await post({ repo: root, tasks: ['a', 'b', 'e'] })).toMatchObject({ status: 200 })
+    // a is negative, b makes no claim, e is a prepared decision: one clean item, two at risk.
+    expect(dialogs[0]?.[0]).toContain('Accept 3 tasks? 1 clean, 2 at risk.')
+  })
+
+  it('asks nothing extra when every decision in the batch was prepared', async () => {
+    const { root, post, dialogs } = await setup(true)
+    expect(await post({ repo: root, tasks: ['a', 'b'] })).toMatchObject({ status: 200 })
+    expect(dialogs[0]?.[0]).not.toContain('Not checked by the orchestrator')
   })
 
   it('refuses the whole batch when a task is not waiting for review, without asking', async () => {
@@ -117,4 +154,23 @@ it('POST /pos applies a batch to its named plan and refuses a stale revision wit
   expect(stale.status).toBe(409)
   const afterRefusal = await loadPlan(root)
   expect(afterRefusal.tasks.find((task) => task.id === 'a')?.pos).toEqual({ x: 1, y: 2 })
+})
+
+// w1f: dropping is human-only like reject: nothing changes without the native confirmation.
+describe('POST /drop', () => {
+  it('closes the task for good only after the person confirms', async () => {
+    const declined = await setup(false, '/crewboard/api/drop')
+    expect((await declined.post({ repo: declined.root, task: 'r', reason: 'not needed' })).status).not.toBe(200)
+    expect((await loadPlan(declined.root)).tasks.find((t) => t.id === 'r')?.status).toBe('ready')
+    const { root, post, dialogs } = await setup(true, '/crewboard/api/drop')
+    expect(await post({ repo: root, task: 'r', reason: 'not needed' })).toMatchObject({ status: 200, json: { ok: true, value: { task: 'r', status: 'dropped' } } })
+    expect(dialogs[0]).toEqual(['Close task r as not needed: “not needed”? It will not come back to the queue.', 'Close task'])
+    expect((await loadPlan(root)).tasks.find((t) => t.id === 'r')).toMatchObject({ status: 'dropped', notes: [{ event: { kind: 'dropped', reason: 'not needed' } }] })
+  })
+
+  it('refuses a task whose worker is still running', async () => {
+    const { root, post } = await setup(true, '/crewboard/api/drop')
+    expect((await post({ repo: root, task: 'x', reason: 'not needed' })).status).not.toBe(200)
+    expect((await loadPlan(root)).tasks.find((t) => t.id === 'x')?.status).toBe('ready')
+  })
 })

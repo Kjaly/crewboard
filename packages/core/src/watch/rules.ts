@@ -1,5 +1,5 @@
 import type { RunState } from '../plan/graph.js'
-import type { NormEvent } from '../runs/normalize.js'
+import type { FailureReason, NormEvent } from '../runs/normalize.js'
 
 export type Thresholds = {
   notStartedSec: number
@@ -19,7 +19,7 @@ export const DEFAULT_THRESHOLDS: Thresholds = {
 /** Read-only exploration: never counted as a loop. */
 const EXPLORATION = /^(read\b|searched\b|ran (ls|find|wc|grep|rg|cat|head|tail)\b)/i
 
-export type AttentionKind = 'not_started' | 'stalled' | 'loop' | 'steer_no_effect' | 'failed'
+export type AttentionKind = 'not_started' | 'stalled' | 'loop' | 'steer_no_effect' | 'failed' | 'incomplete'
 export type Attention = {
   kind: AttentionKind
   severity: 'warn' | 'alert'
@@ -27,6 +27,8 @@ export type Attention = {
   runId: string
   message: string
   hint?: string
+  /** What the failure was, beyond its text (B01, B19): a rate limit with its reset time, a supervisor that vanished. */
+  reason?: FailureReason
 }
 export type RunWatchInput = {
   taskId: string
@@ -36,6 +38,8 @@ export type RunWatchInput = {
   state: RunState
   events: NormEvent[]
   steersAt: string[]
+  /** A run that ended `incomplete` (bg1): what it left behind. */
+  incomplete?: { reason: 'no_report' | 'no_claim'; uncommitted: number }
 }
 
 const secondsSince = (now: Date, iso: string) => (now.getTime() - Date.parse(iso)) / 1000
@@ -55,16 +59,23 @@ export function evaluateRun(input: RunWatchInput, now: Date, th: Thresholds = DE
 
   if (state.terminal) {
     if (state.status === 'cancelled') return []
+    // Finished without handing anything in (bg1): not review, not a crash — the work waits to be continued.
+    if (state.status === 'incomplete') {
+      const n = input.incomplete?.uncommitted
+      const report = input.incomplete?.reason === 'no_claim' ? 'без строки «Результат:»' : 'без отчёта'
+      return [{ ...base, kind: 'incomplete', severity: 'alert', message: `Запуск закончился ${report}${n ? `; не закоммичено файлов: ${n}` : ''}`, hint: `crewboard continue ${input.taskId}` }]
+    }
     if (state.status !== 'completed' || (state.exitCode ?? 0) !== 0) {
       const problem = [...events].reverse().find((e) => e.kind === 'problem')
-      const hint = authHint(input.agent, problem?.text ?? '')
-      const attention: Attention = {
-        ...base,
-        kind: 'failed',
-        severity: 'alert',
-        message: `Запуск упал (${state.status}, код ${state.exitCode ?? '—'})${problem ? `: ${problem.text}` : ''}`,
-      }
+      const reason = [...events].reverse().find((e) => e.reason)
+      const hint = reason?.reason?.code === 'rate_limited' ? `crewboard run ${input.taskId}` : authHint(input.agent, problem?.text ?? '')
+      // A rate limit leads with the limit and its reset time; Claude's own words follow.
+      const limited = reason?.reason?.code === 'rate_limited' ? reason : undefined
+      const lead = limited ? limited.text : `Запуск упал (${state.status}, код ${state.exitCode ?? '—'})`
+      const detail = problem && problem !== limited ? problem : undefined
+      const attention: Attention = { ...base, kind: 'failed', severity: 'alert', message: `${lead}${detail ? `: ${detail.text}` : ''}` }
       if (hint) attention.hint = hint
+      if (reason?.reason) attention.reason = reason.reason
       return [attention]
     }
     // A finished run waiting for the human is not an alarm: «ждёт приёмки» is a normal state and

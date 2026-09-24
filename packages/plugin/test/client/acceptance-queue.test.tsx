@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { setLang } from '../../src/client/i18n.js'
-import { act, cleanup, render, screen, within } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import { userEvent } from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import type { OrchestraSnapshot } from '../../src/shared/types.js'
@@ -26,7 +26,7 @@ const snapshot = makeSnapshot(
   makeRepo([
     makeTask({ id: 'a', title: 'Готова к приёмке', status: 'in_review', worker: 'dsh', runs: 1, lastRunId: 'run-1' }),
     makeTask({ id: 'b', title: 'Вторая готовая', status: 'in_review', worker: 'devin', runs: 1, lastRunId: 'run-2' }),
-    makeTask({ id: 'd', title: 'Решение за человеком', kind: 'decision', status: 'ready', needsHuman: true }),
+    makeTask({ id: 'd', title: 'Решение за человеком', kind: 'decision', status: 'ready', needsHuman: true, check: 'checked' }),
     makeTask({ id: 'go', title: 'Ещё ждёт запуска', status: 'ready' }),
     makeTask({ id: 'run', title: 'В работе', status: 'running', worker: 'codex', runs: 1 }),
   ]),
@@ -49,6 +49,9 @@ async function mount(options: { snapshot?: OrchestraSnapshot; answer?: (url: str
     }
     if (url.includes('/api/task')) {
       const id = new URL(url, 'http://x').searchParams.get('id') ?? 'a'
+      // b claims a result with no files; the decision d has no verdict at all (w1b, B05).
+      if (id === 'd') return jsonOk({ ...makeDetail({ id, kind: 'decision', status: 'ready' }), verdict: undefined })
+      if (id === 'b') return jsonOk(makeDetail({ id, status: 'in_review', verdict: { kind: 'disputed', mismatch: 'no_files', facts: [] } }))
       return jsonOk(makeDetail({ id, status: 'in_review', changedFiles: ['src/a.ts', 'src/b.ts'] }))
     }
     return options.answer?.(url) ?? jsonOk(snap)
@@ -86,17 +89,35 @@ it('counts in_review tasks and ready human decisions in the header pill', async 
   expect(within(queue).queryByText('Ещё ждёт запуска')).toBeNull()
 })
 
-it('«Принять все» posts every queued id to /accept-batch', async () => {
+it('the queue opens the one batch sheet: clean work is pre-selected, disputed work is not (w1b, B03)', async () => {
   setLang('ru')
   const user = userEvent.setup()
   const calls = await mount()
   const queue = await openQueue(user)
-  await user.click(within(queue).getByRole('button', { name: 'Принять все · 3' }))
+  await user.click(within(queue).getByRole('button', { name: 'Принять пакетом · 3' }))
+  const sheet = within(screen.getByRole('dialog', { name: /Принять задачи/ }))
+  await waitFor(() => expect(sheet.getByRole('checkbox', { name: /Готова к приёмке/ })).toHaveProperty('checked', true))
+  expect(sheet.getByRole('checkbox', { name: /Решение за человеком/ })).toHaveProperty('checked', true)
+  expect(sheet.getByRole('checkbox', { name: /Вторая готовая/ })).toHaveProperty('checked', false)
+  await user.click(sheet.getByRole('button', { name: 'Принять выбранные · 2' }))
   const post = calls.find((c) => c.url.endsWith('/accept-batch'))
   expect(post?.method).toBe('POST')
   expect(post?.headers['x-orchestra-client']).toBe('1')
   expect(post?.headers['content-type']).toBe('application/json')
-  expect(post?.body).toMatchObject({ repo: ROOT, tasks: ['a', 'b', 'd'] })
+  expect(post?.body).toMatchObject({ repo: ROOT, tasks: ['a', 'd'] })
+})
+
+it('a queue row shows its verdict; a decision row has none (w1b, B03, B05)', async () => {
+  setLang('ru')
+  const user = userEvent.setup()
+  await mount()
+  const queue = await openQueue(user)
+  const disputed = within(queue).getByText('Вторая готовая').closest('li')!
+  expect(await within(disputed).findByText(/Спорно · Заявлен результат, но изменённых файлов нет/)).toBeTruthy()
+  const clean = within(queue).getByText('Готова к приёмке').closest('li')!
+  expect(await within(clean).findByText('Результат получен')).toBeTruthy()
+  const decision = within(queue).getByText('Решение за человеком').closest('li')!
+  expect(decision.querySelector('.orc-qrow__verdict')).toBeNull()
 })
 
 it('a declined confirmation is named at the row', async () => {
@@ -181,5 +202,5 @@ it('an empty queue reads «Ждут вас»', async () => {
   await mount({ snapshot: makeSnapshot(makeRepo([makeTask({ id: 'x', title: 'Одна', status: 'running' })])) })
   await user.click(screen.getByRole('button', { name: 'Ждут вас' }))
   const queue = screen.getByRole('complementary', { name: 'Очередь приёмки' })
-  expect(within(queue).getByRole('button', { name: 'Принять все' })).toHaveProperty('disabled', true)
+  expect(within(queue).queryByRole('button', { name: /Принять пакетом/ })).toBeNull()
 })

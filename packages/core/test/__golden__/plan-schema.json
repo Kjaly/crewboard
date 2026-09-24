@@ -311,14 +311,15 @@
             "implement",
             "review",
             "research",
-            "decision"
+            "decision",
+            "root"
           ],
           "path": [
             "tasks",
             0,
             "kind"
           ],
-          "message": "Invalid option: expected one of \"implement\"|\"review\"|\"research\"|\"decision\""
+          "message": "Invalid option: expected one of \"implement\"|\"review\"|\"research\"|\"decision\"|\"root\""
         }
       ]
     },
@@ -353,14 +354,15 @@
             "in_review",
             "accepted",
             "rejected",
-            "superseded"
+            "superseded",
+            "dropped"
           ],
           "path": [
             "tasks",
             0,
             "status"
           ],
-          "message": "Invalid option: expected one of \"backlog\"|\"ready\"|\"in_review\"|\"accepted\"|\"rejected\"|\"superseded\""
+          "message": "Invalid option: expected one of \"backlog\"|\"ready\"|\"in_review\"|\"accepted\"|\"rejected\"|\"superseded\"|\"dropped\""
         }
       ]
     },
@@ -522,7 +524,8 @@
           "values": [
             "completed",
             "failed",
-            "cancelled"
+            "cancelled",
+            "incomplete"
           ],
           "path": [
             "tasks",
@@ -531,7 +534,7 @@
             0,
             "outcome"
           ],
-          "message": "Invalid option: expected one of \"completed\"|\"failed\"|\"cancelled\""
+          "message": "Invalid option: expected one of \"completed\"|\"failed\"|\"cancelled\"|\"incomplete\""
         }
       ]
     },

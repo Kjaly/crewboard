@@ -9,7 +9,17 @@ export type Parsed = {
   /** Claude `--replay-user-messages`: the text of a stdin user message the session has just taken. */
   replay?: string
   turnEnd?: { stopReason: string; failed?: boolean; error?: string; usdTotal?: number; usage: TurnUsage }
+  /** Claude `background_tasks_changed`: every background task (shell, monitor, subagent) the session still runs. */
+  background?: BackgroundTask[]
+  /** Claude `task_notification`: a background task ended; the CLI wakes an open session with it as a new turn. */
+  backgroundDone?: { id: string; status: string; summary: string }
+  /** Claude `rate_limit_event` with `status: rejected`: the account hit its limit; `resetsAt` is ISO when known. */
+  rateLimited?: RateLimited
 }
+
+export type RateLimited = { resetsAt?: string; type?: string }
+
+export type BackgroundTask = { id: string; type: string; description: string }
 
 type Json = Record<string, unknown>
 const ZERO: TurnUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 }
@@ -35,6 +45,13 @@ export function parseClaudeLine(line: string, tools: Map<string, string>): Parse
   if (!o) return out
   if (o.type === 'system' && o.subtype === 'init' && typeof o.session_id === 'string') {
     out.sessionId = o.session_id
+  } else if (o.type === 'system' && o.subtype === 'background_tasks_changed' && Array.isArray(o.tasks)) {
+    out.background = o.tasks.map(obj).map((t) => ({ id: String(t.task_id ?? ''), type: String(t.task_type ?? 'task'), description: String(t.description ?? '') }))
+  } else if (o.type === 'system' && o.subtype === 'task_started' && o.is_backgrounded === true) {
+    out.events.push(['background_started', { id: String(o.task_id ?? ''), type: String(o.task_type ?? 'task'), description: String(o.description ?? '') }])
+  } else if (o.type === 'system' && o.subtype === 'task_notification') {
+    out.backgroundDone = { id: String(o.task_id ?? ''), status: String(o.status ?? 'unknown'), summary: String(o.summary ?? '') }
+    out.events.push(['background_finished', out.backgroundDone])
   } else if (o.type === 'assistant') {
     for (const c of content(o)) {
       if (c.type === 'text' && typeof c.text === 'string' && c.text) out.events.push(['answer_delta', c.text])
@@ -55,12 +72,24 @@ export function parseClaudeLine(line: string, tools: Map<string, string>): Parse
       out.events.push(['tool_completed', { tool: tools.get(callId) ?? 'tool', status: c.is_error === true ? 'error' : 'completed', callId, output: c.content }])
     }
   } else if (o.type === 'rate_limit_event') {
-    out.events.push(['rate_limit', obj(o.rate_limit_info)])
+    const info = obj(o.rate_limit_info)
+    out.events.push(['rate_limit', info])
+    if (info.status === 'rejected') {
+      // `resetsAt` is Unix seconds (Claude Code 2.1, 2026-09).
+      const resetsAt = typeof info.resetsAt === 'number' && Number.isFinite(info.resetsAt) ? new Date(info.resetsAt * 1000).toISOString() : undefined
+      out.rateLimited = { ...(resetsAt ? { resetsAt } : {}), ...(typeof info.rateLimitType === 'string' ? { type: info.rateLimitType } : {}) }
+      out.events.push(['rate_limited', out.rateLimited])
+    }
   } else if (o.type === 'result') {
     const u = obj(o.usage)
+    // A failed turn is read from `is_error`, not from `subtype` or the exit code: a run that hit the usage limit ends
+    // with `subtype: success`, `is_error: true`, the reason in `result` and exit code 0.
+    const failed = o.is_error === true
+    const error = !failed ? undefined : typeof o.result === 'string' && o.result.trim() ? o.result.trim() : Array.isArray(o.errors) && o.errors.length ? o.errors.map(String).join('; ') : String(o.subtype ?? 'error')
     out.turnEnd = {
       stopReason: String(o.subtype ?? 'success'),
-      failed: o.is_error === true,
+      failed,
+      ...(error ? { error } : {}),
       ...(typeof o.total_cost_usd === 'number' ? { usdTotal: o.total_cost_usd } : {}),
       usage: { input: num(u.input_tokens), output: num(u.output_tokens), cacheRead: num(u.cache_read_input_tokens), cacheWrite: num(u.cache_creation_input_tokens), reasoning: 0 },
     }

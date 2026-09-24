@@ -1,6 +1,8 @@
 import { createInterface } from 'node:readline'
 import { appendFileSync } from 'node:fs'
 const scenario = process.argv[2]
+// `report` (any position): the answer is a hand-in with a result line, so a run with changes goes to review (bg1).
+const answer = process.argv.includes('report') ? 'Result: received\n- wrote the tests' : 'hello'
 if (process.argv.includes('--version')) { console.log('fake devin'); process.exit(0) }
 if (process.argv.includes('auth')) { console.log(scenario === 'auth' ? 'Not logged in' : 'Logged in'); process.exit(0) }
 const send = (v) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...v }) + '\n')
@@ -34,7 +36,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
    send({id:'permission',method:'session/request_permission',params:{options:[{kind:'reject_once',optionId:'no'},{kind:'allow_always',optionId:'always'},{kind:'allow_once',optionId:'once'}]}})
    send({id:'elicit',method:'elicitation/create',params:{}})
   }
-  for (const [sessionUpdate, content] of [['agent_message_chunk', [{content:{type:'text',text:'hello'}}]], ['agent_thought_chunk', 'thinking'], ['tool_call', null]]) send({ method:'session/update', params:{update:{sessionUpdate, content, title:'read file', kind:'read'}} })
+  for (const [sessionUpdate, content] of [['agent_message_chunk', [{content:{type:'text',text:answer}}]], ['agent_thought_chunk', 'thinking'], ['tool_call', null]]) send({ method:'session/update', params:{update:{sessionUpdate, content, title:'read file', kind:'read'}} })
   if (scenario === 'crash') setTimeout(() => process.exit(7), 30)
   else if (['normal','bypass-error','unknown','empty'].includes(scenario)) setTimeout(() => finish(scenario === 'unknown' ? 'mystery' : scenario === 'empty' ? '' : 'end_turn'), 50)
   else if (pending.length > 1 || m.params.prompt[0].text === 'correction') setTimeout(() => finish('end_turn'), 100)

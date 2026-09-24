@@ -1,6 +1,6 @@
 import { type TaskView, type ViewStatus, criticalPath, deriveViews, readySet, waitsForHuman } from '../plan/graph.js'
 import { type PlanInfo, listPlans, planIds } from '../plan/plans.js'
-import type { CheckState, Plan } from '../plan/schema.js'
+import type { CheckState, Plan, Task } from '../plan/schema.js'
 import { currentPlanId } from '../plan/store.js'
 import type { Attention } from '../watch/rules.js'
 import { gatherAttention } from './attention.js'
@@ -11,7 +11,7 @@ import { type CheckSetting, resolveOrchestratorCheck } from './check-setting.js'
 export type TaskSnapshot = {
   id: string
   title: string
-  kind: 'implement' | 'review' | 'research' | 'decision'
+  kind: Task['kind']
   class?: 'code' | 'design' | 'review' | 'research'
   status: ViewStatus
   lane?: string
@@ -23,19 +23,34 @@ export type TaskSnapshot = {
   /** Filled by the host, which holds the effective routing: the assigned worker is not in the current preset. */
   outsidePreset?: boolean
   blockedBy: string[]
+  /** The part of `blockedBy` accepted but not merged yet (w1d): the task waits for their merge. */
+  waitingMerge?: string[]
+  /** Accepted work not merged into the base branch yet (w1d): «Accepted, not merged». */
+  unmerged?: true
+  /** With `unmerged`: the task's branch, the one to merge. */
+  branch?: string
   needsHuman: boolean
   activeRunId?: string
   lastRunId?: string
   runs: number
   pos?: { x: number; y: number }
   activeSince?: string
-  lastOutcome?: 'completed' | 'failed' | 'cancelled'
+  lastOutcome?: 'completed' | 'failed' | 'cancelled' | 'incomplete'
+  /** The last run ended without handing its work in (bg1): the panel says why and offers «Continue». */
+  incomplete?: { reason: 'no_report' | 'no_claim'; uncommitted: number }
   /** When a human last accepted the task (decisions have no runs, this is their whole history). */
   acceptedAt?: string
   closed?: 'negative'
   returned?: boolean
-  /** The orchestrator's check of the finished run while in review (vr1): pending and checking keep it off the person's queue. */
+  /**
+   * The orchestrator's check of the finished run while in review (vr1): pending and checking keep it off the
+   * person's queue. On a decision, `checked` — the orchestrator prepared it (rt1).
+   */
   check?: CheckState
+  /** A root task in work by the orchestrator (rt1); `status` is `running`, with no run behind it. */
+  byOrchestrator?: true
+  /** A decision whose dependencies are closed, still being prepared by the orchestrator (rt1). */
+  preparing?: true
   checkAt?: string
   checkBy?: string
   /** What the orchestrator checked — shown above Accept / Send back. */
@@ -75,8 +90,10 @@ export type PlanSummary = PlanInfo & {
   waitingHuman: number
   ready: number
   accepted: number
-  /** Accepted-with-negative-verdict and superseded tasks — done, but not counted in `accepted`. */
+  /** Accepted-with-negative-verdict, superseded and dropped tasks — done, but not counted in `accepted`. */
   closed?: number
+  /** Accepted tasks whose work is not merged into the base branch yet (w1d); counted in `accepted` too. */
+  unmerged?: number
   attention: Attention[]
 }
 
@@ -101,14 +118,14 @@ async function summarizePlans(root: string, backends: Backends, now: Date, curre
     } else if (!info.archived) {
       try {
         const { plan, states } = await syncPlan(root, backends, now, undefined, info.id)
-        views = deriveViews(plan, states)
+        views = deriveViews(plan, states, { prepareDecisions: (await resolveOrchestratorCheck(root, info.id, plan)).enabled })
         attention = await gatherAttention(plan, states, backends, now).catch(() => [] as Attention[])
       } catch {
         views = undefined
       }
     }
     const count = (s: ViewStatus) => views?.filter((v) => v.status === s).length ?? 0
-    out.push({ ...info, running: count('running'), inReview: count('in_review'), waitingHuman: views?.filter((v) => waitsForHuman({ status: v.status, kind: v.task.kind, check: v.check })).length ?? 0, ready: views ? readySet(views).length : 0, accepted: count('accepted'), closed: count('closed') + count('superseded'), attention })
+    out.push({ ...info, running: count('running'), inReview: count('in_review'), waitingHuman: views?.filter((v) => waitsForHuman({ status: v.status, kind: v.task.kind, check: v.check, preparing: v.preparing })).length ?? 0, ready: views ? readySet(views).length : 0, accepted: count('accepted'), closed: count('closed') + count('superseded') + count('dropped'), unmerged: views?.filter((v) => v.unmerged).length ?? 0, attention })
   }
   return out
 }
@@ -140,7 +157,8 @@ export async function buildRepoSnapshot(root: string, backends: Backends, now: D
   try {
     const planId = openPlan ?? currentPlanId(root)
     const { plan, states, degraded } = await syncPlan(root, backends, now, undefined, planId)
-    const views = deriveViews(plan, states)
+    const orchestratorCheck = await resolveOrchestratorCheck(root, planId, plan)
+    const views = deriveViews(plan, states, { prepareDecisions: orchestratorCheck.enabled })
     const attention = await gatherAttention(plan, states, backends, now).catch(() => [] as Attention[])
     const plans = await summarizePlans(root, backends, now, { id: planId, views, attention }).catch(() => [] as PlanSummary[])
     return {
@@ -164,6 +182,8 @@ export async function buildRepoSnapshot(root: string, backends: Backends, now: D
         ...((v.task.worker ?? v.task.runs.at(-1)?.agent) ? { worker: v.task.worker ?? v.task.runs.at(-1)?.agent } : {}),
         ...(v.task.worker && v.task.workerSource ? { workerSource: v.task.workerSource } : {}),
         blockedBy: v.blockedBy,
+        ...(v.waitingMerge ? { waitingMerge: v.waitingMerge } : {}),
+        ...(v.unmerged ? { unmerged: true as const, ...(v.task.worktree ? { branch: v.task.worktree.branch } : {}) } : {}),
         needsHuman: v.needsHuman,
         ...(v.activeRunId ? { activeRunId: v.activeRunId } : {}),
         ...(v.task.runs.at(-1) ? { lastRunId: v.task.runs.at(-1)?.runId } : {}),
@@ -171,16 +191,19 @@ export async function buildRepoSnapshot(root: string, backends: Backends, now: D
         ...(v.task.pos ? { pos: v.task.pos } : {}),
         ...(v.activeRunId ? { activeSince: v.task.runs.at(-1)?.startedAt } : {}),
         ...(v.lastOutcome ? { lastOutcome: v.lastOutcome } : {}),
+        ...(v.lastOutcome === 'incomplete' && v.task.runs.at(-1)?.incomplete ? { incomplete: v.task.runs.at(-1)?.incomplete } : {}),
         ...(acceptedAtOf(v.task) ? { acceptedAt: acceptedAtOf(v.task) } : {}),
         ...(v.status === 'closed' ? { closed: 'negative' as const } : {}),
         ...(v.task.status === 'rejected' ? { returned: true } : {}),
         ...(v.check && v.task.check ? { check: v.check, checkAt: v.task.check.at, ...(v.task.check.by ? { checkBy: v.task.check.by } : {}), ...(v.task.check.note ? { checkNote: v.task.check.note } : {}) } : {}),
+        ...(v.byOrchestrator ? { byOrchestrator: true as const, ...(v.task.started ? { activeSince: v.task.started.at } : {}) } : {}),
+        ...(v.preparing ? { preparing: true as const } : {}),
       })),
       ready: readySet(views),
       criticalPath: criticalPath(plan),
       attention,
       degraded,
-      orchestratorCheck: await resolveOrchestratorCheck(root, planId, plan),
+      orchestratorCheck,
     }
   } catch (err) {
     // No plan at all is the normal state of a fresh dsh workspace: the snapshot stays usable (the panel

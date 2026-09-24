@@ -22,7 +22,7 @@ export function plansOf(repo: RepoSnapshot): PlanItem[] {
       waitingHuman: repo.tasks.filter((task) => waitsForHuman(task)).length,
       ready: repo.ready.length,
       accepted: count('accepted'),
-      closed: count('closed') + count('superseded'),
+      closed: count('closed') + count('superseded') + count('dropped'),
       attention: repo.attention,
     },
   ]

@@ -4,11 +4,11 @@ import { useAction } from '../actions.js'
 import { api } from '../api.js'
 import { CopyForAgent } from '../copy-agent.js'
 import { taskHandoff } from '../handoff.js'
-import { identityLabel, workerIdentity } from '../provider.js'
+import { identityLabel, taskIdentity, workerIdentity } from '../provider.js'
 import { CLASS_LABEL, classOfTask } from '../routing.js'
 import { orchestraStore, type Density } from '../store.js'
 import { taskTone } from '../styles.js'
-import { isChecking } from '../../../../core/src/plan/graph.js'
+import { isChecking, isOwnWork } from '../../../../core/src/plan/graph.js'
 import { nowPhrase, sinceLabel } from '../summary.js'
 import { workerName } from '../preset-picker.js'
 import { isHandPicked, workerChoiceOf, workerOptions } from '../workers.js'
@@ -36,15 +36,23 @@ export const dependencyChips = (deps: string[]) => ({ shown: deps.slice(0, 2), r
 
 type Launch = { agent: string; at: string; worktree?: { path: string; branch: string } }
 
-type Primary = 'run' | 'steer' | 'accept' | 'decision' | 'blocked' | 'none'
+type Primary = 'run' | 'continue' | 'steer' | 'accept' | 'decision' | 'blocked' | 'orchestrator' | 'merge' | 'none'
 
-/** One main button per context. */
+/**
+ * One main button per context. `orchestrator` (rt1): the orchestrator's move and no button for the person —
+ * a root task it has to start or is working on, a decision it still prepares. `merge` (w1d): accepted work not in the
+ * base branch yet — the person merges it; the panel gives the exact commands, Crewboard does not merge by itself.
+ */
 export function primaryAction(task: TaskSnapshot): Primary {
-  if (task.status === 'accepted' || task.status === 'closed' || task.status === 'superseded') return 'none'
+  if (task.unmerged) return 'merge'
+  if (task.status === 'accepted' || task.status === 'closed' || task.status === 'superseded' || task.status === 'dropped') return 'none'
   if (task.status === 'blocked') return 'blocked'
+  if (task.byOrchestrator || task.preparing || (task.kind === 'root' && task.status === 'ready')) return 'orchestrator'
   if (task.status === 'running') return 'steer'
   if (task.status === 'in_review') return 'accept'
   if (task.needsHuman) return 'decision'
+  // The last run ended without handing its work in (bg1): finishing it is the move, not a fresh start.
+  if (task.lastOutcome === 'incomplete') return 'continue'
   return 'run'
 }
 
@@ -52,10 +60,16 @@ export function primaryAction(task: TaskSnapshot): Primary {
  * The orchestrator's check above Accept / Send back (vr1): a calm mark while it checks, its note once checked.
  */
 export function CheckMark({ task }: { task: TaskSnapshot }) {
-  if (task.status !== 'in_review' || !task.check) return null
+  // A prepared decision (rt1) carries the orchestrator's note — the options and its recommendation — too.
+  const prepared = task.kind === 'decision' && task.check === 'checked'
+  if ((task.status !== 'in_review' && !prepared) || !task.check) return null
   if (isChecking(task.check)) return <p className="orc-vcheck" role="status"><span aria-hidden="true">◌ </span>{t(task.check === 'checking' ? 'check.checking' : 'check.pending')}</p>
-  return <div className="orc-vcheck" role="note"><p className="orc-vcheck__head"><span aria-hidden="true">✓ </span>{t('check.checked')}</p>{task.checkNote ? <p className="orc-vcheck__note">{task.checkNote}</p> : null}</div>
+  return <div className="orc-vcheck" role="note"><p className="orc-vcheck__head"><span aria-hidden="true">✓ </span>{t(prepared ? 'check.prepared' : 'check.checked')}</p>{task.checkNote ? <p className="orc-vcheck__note">{task.checkNote}</p> : null}</div>
 }
+
+/** What the orchestrator is doing while the move is its own (rt1): said instead of a button. */
+const orchestratorMove = (task: TaskSnapshot): string =>
+  t(task.preparing ? 'panel.task.preparingHelp' : task.byOrchestrator ? 'panel.task.byOrchestratorHelp' : 'panel.task.rootReadyHelp', { id: task.id })
 
 /**
  * One fact of the verdict. A fact that points at a line of the report is a link and nothing else:
@@ -65,7 +79,7 @@ function VerdictFactChip({ fact, onJump }: { fact: VerdictFact; onJump(line: num
   const label =
     fact.code === 'tests' ? (fact.text ?? t('verdict.checksInReport'))
     : fact.code === 'files_changed' ? t('verdict.fact.files_changed', { count: fact.count ?? 0 })
-    : fact.code === 'checks_run' || fact.code === 'checks_unreported' || fact.code === 'checks_unreadable' ? t(`verdict.fact.${fact.code}`, { count: fact.count ?? 0 })
+    : fact.code === 'checks_run' || fact.code === 'checks_unreported' || fact.code === 'checks_unreadable' || fact.code === 'uncommitted' ? t(`verdict.fact.${fact.code}`, { count: fact.count ?? 0 })
     : fact.code === 'duration' ? t('verdict.fact.duration', { time: t('panel.duration.minutes', { count: fact.minutes ?? 0 }) })
     : t(`verdict.fact.${fact.code}`)
   const className = `orc-verdict__fact orc-verdict__fact--${fact.tone}`
@@ -116,6 +130,7 @@ export function TaskPanel({
   const [launched, setLaunched] = useState<Launch | null>(null)
   const [copied, setCopied] = useState(false)
   const [branchCopied, setBranchCopied] = useState(false)
+  const [mergeCopied, setMergeCopied] = useState(false)
   const [candidate, setCandidate] = useState<GcCandidate | null>(null)
   const [copiesLoaded, setCopiesLoaded] = useState(false)
   const [copyRemoved, setCopyRemoved] = useState(false)
@@ -126,10 +141,11 @@ export function TaskPanel({
   const action = useAction()
   const tone = taskTone(task)
   const checking = task.status === 'in_review' && isChecking(task.check)
-  const identity = workerIdentity(launched?.agent ?? task.worker, workers)
+  const identity = taskIdentity(task, workers, launched?.agent)
   const phrase = nowPhrase(task, attention)
   const primary = repo.example ? 'none' : primaryAction(task)
   const taskClass = classOfTask(task)
+  const isDecision = task.kind === 'decision'
   // Detail is refetched on selection and whenever the snapshot moved this task forward.
   const freshness = `${task.status}:${task.runs}:${task.lastRunId ?? ''}`
 
@@ -143,6 +159,7 @@ export function TaskPanel({
     setLaunched(null)
     setCopied(false)
     setBranchCopied(false)
+    setMergeCopied(false)
     setSelectedRunId(null)
     setTab('overview')
     setCandidate(null)
@@ -258,6 +275,12 @@ export function TaskPanel({
       setTimeout(() => setBranchCopied(false), 1600)
     }).catch(() => {})
   }
+  const copyMerge = () => {
+    void navigator.clipboard?.writeText(detail?.merge?.commands.join('\n') ?? '').then(() => {
+      setMergeCopied(true)
+      setTimeout(() => setMergeCopied(false), 1600)
+    }).catch(() => {})
+  }
   const deps = dependencyChips(task.deps)
   const selectedRun = detail?.runs.find((run) => run.runId === selectedRunId) ?? detail?.runs.at(-1)
 
@@ -268,11 +291,12 @@ export function TaskPanel({
           <h2 className="orc-h">{task.title}</h2>
           <CopyForAgent text={taskHandoff(repo, task)} />
           <button type="button" className="orc-run__link" onClick={() => { void navigator.clipboard?.writeText(orchestraStore.taskLink(task.id)).catch(() => {}) }}>{t('panel.task.copyLink')}</button>
-          <div className="orc-panel__identity"><VendorMark identity={identity} /><span className="orc-panel__identity-name">{identityLabel(identity)}</span><span>{`· ${tone.label}`}</span>{showRun && runSince ? <span>{`· ${runSince}`}</span> : null}</div>
-          <p className="orc-meta orc-panel__choice">{t('panel.task.workerChoice', { worker: task.worker ? identityLabel(identity) : repo.effectiveRouting?.routing[taskClass][0] ? workerName(repo.effectiveRouting.routing[taskClass][0], workers ?? []) : '—', who: t(`panel.task.chosenBy.${workerChoiceOf(task)}`) })}{isHandPicked(task) ? <span className="orc-panel__hand" title={t('graph.handPickedTitle')}>⚑ {t('graph.handPicked')}</span> : null}</p>
+          {/* A decision is the person's own choice (w1b, B05): no worker, no model, no task class to show. */}
+          <div className="orc-panel__identity">{isDecision ? <span>{tone.label}</span> : <><VendorMark identity={identity} /><span className="orc-panel__identity-name">{identityLabel(identity)}</span><span>{`· ${tone.label}`}</span></>}{showRun && runSince ? <span>{`· ${runSince}`}</span> : null}</div>
+          {isDecision ? null : task.kind === 'root' ? <p className="orc-meta orc-panel__choice">{t('panel.task.rootOwner')}</p> : <p className="orc-meta orc-panel__choice">{t('panel.task.workerChoice', { worker: task.worker ? identityLabel(identity) : repo.effectiveRouting?.routing[taskClass][0] ? workerName(repo.effectiveRouting.routing[taskClass][0], workers ?? []) : '—', who: t(`panel.task.chosenBy.${workerChoiceOf(task)}`) })}{isHandPicked(task) ? <span className="orc-panel__hand" title={t('graph.handPickedTitle')}>⚑ {t('graph.handPicked')}</span> : null}</p>}
           <div className="orc-panel__chips">
             {task.lane ? <span className="orc-panel__chip" title={task.lane}>{task.lane}</span> : null}
-            <span className="orc-panel__chip">{CLASS_LABEL[taskClass]}</span>
+            {isDecision ? null : <span className="orc-panel__chip">{CLASS_LABEL[taskClass]}</span>}
             {deps.shown.map((id) => <span key={id} className="orc-panel__chip" title={id}>{id}</span>)}
             {deps.remaining ? <span className="orc-panel__chip" title={task.deps.join(', ')}>+{deps.remaining}</span> : null}
           </div>
@@ -284,7 +308,7 @@ export function TaskPanel({
         </div>
 
         <div className="orc-sec orc-sec--actions">
-          {primary === 'accept' ? <CheckMark task={task} /> : null}
+          {primary === 'accept' || primary === 'decision' ? <CheckMark task={task} /> : null}
           <div className="orc-actions">
             {primary === 'run' ? (
               <>
@@ -301,10 +325,13 @@ export function TaskPanel({
                 </select>
               </>
             ) : null}
+            {primary === 'continue' ? <button type="button" className="orc-btn" disabled={action.pending} onClick={() => void action.call(() => api.continueRun(repo.root, task.id))}>{t('panel.task.continue')}</button> : null}
             {primary === 'steer' ? <><button type="button" className="orc-btn" onClick={() => setForm(form === 'steer' ? 'none' : 'steer')} aria-expanded={form === 'steer'}>{t('panel.task.steer')}</button><button type="button" className="orc-btn orc-btn--ghost" disabled={action.pending} onClick={() => action.call(() => api.stop(repo.root, task.id))}>{t('panel.task.stop')}</button></> : null}
             {primary === 'accept' || primary === 'decision' ? <><button type="button" className="orc-btn" disabled={action.pending} aria-expanded={checking ? form === 'unchecked' : undefined} onClick={() => checking ? setForm(form === 'unchecked' ? 'none' : 'unchecked') : accept()}>{primary === 'accept' ? t('panel.task.accept') : t('panel.task.acceptDecision')}</button><button type="button" className="orc-btn orc-btn--ghost" onClick={() => setForm(form === 'reject' ? 'none' : 'reject')} aria-expanded={form === 'reject'}>{t('panel.task.sendBackMore')}</button></> : null}
+            {primary === 'orchestrator' ? <span className="orc-meta">{orchestratorMove(task)}</span> : null}
             {primary === 'blocked' ? <button type="button" className="orc-btn" onClick={() => onSelect(task.blockedBy[0] ?? null)} disabled={task.blockedBy.length === 0}>{t('panel.task.blocker')}</button> : null}
-            {primary === 'none' ? <span className="orc-meta">{repo.example ? t('welcome.exampleReadOnly') : t('panel.task.noAction')}</span> : null}
+            {primary === 'merge' ? <span className="orc-meta">{t('panel.task.mergeLead', { into: detail?.merge?.into ?? t('panel.task.mergeBase') })}</span> : null}
+            {primary === 'none' ? <span className="orc-meta">{repo.example ? t('welcome.exampleReadOnly') : task.status === 'accepted' && task.kind !== 'decision' && task.kind !== 'root' ? t('panel.task.merged') : t('panel.task.noAction')}</span> : null}
           </div>
           {primary === 'run' ? <div className="orc-hint orc-run-route">
             <p>{worker === KEEP && assigned ? (task.workerSource === 'agent' && task.outsidePreset ? t('panel.task.staleAssigned', { worker: workerName(assigned, workers ?? []) }) : t('panel.task.assignedHint', { worker: workerName(assigned, workers ?? []), who: t(`panel.task.chosenBy.${workerChoiceOf(task)}`) })) : worker !== AUTO ? t('settings.runManual', { worker: workerName(worker, workers ?? []) }) : repo.effectiveRouting ? t('settings.runSource', {
@@ -314,8 +341,13 @@ export function TaskPanel({
             }) : t('panel.task.autoHint', { class: CLASS_LABEL[taskClass] })}</p>
             {repo.effectiveRouting?.dropped.some((item) => item.reason === 'disabled') ? <p>{t('settings.disabledLine', { workers: repo.effectiveRouting.dropped.filter((item) => item.reason === 'disabled').map((item) => `${workerName(item.id, workers ?? [])}${repo.effectiveRouting?.disabled[item.id] ? ` (${repo.effectiveRouting.disabled[item.id]})` : ''}`).join(', ') })}</p> : null}
           </div> : null}
+          {primary === 'continue' ? <div className="orc-hint" role="status"><p>{t(task.incomplete?.reason === 'no_claim' ? 'panel.task.incompleteNoClaim' : 'panel.task.incompleteNoReport', { count: task.incomplete?.uncommitted ?? 0 })}</p><p>{t('panel.task.continueHint')}</p></div> : null}
           {task.kind === 'decision' ? <div className="orc-decision__action-help"><h3 className="orc-decision__heading">{t('panel.task.decisionHelpTitle')}</h3><p>{t('panel.task.decisionAcceptHelp')}</p><p>{t('panel.task.decisionReturnHelp')}</p></div> : null}
           {primary === 'accept' ? <p className="orc-hint">{t('panel.task.confirmHint')}</p> : null}
+          {primary === 'merge' ? <div className="orc-hint" role="status">
+            <p>{t('panel.task.mergeHint')}</p>
+            {detail?.merge ? <><pre className="orc-merge__commands">{detail.merge.commands.join('\n')}</pre><button type="button" className="orc-run__link" onClick={copyMerge}>{mergeCopied ? t('panel.task.mergeCopied') : t('panel.task.mergeCopy')}</button></> : null}
+          </div> : null}
           {form === 'unchecked' && checking ? <div className="orc-form" role="alertdialog" aria-label={t('check.acceptEarly')}><p>{t('check.acceptEarly')}</p><div className="orc-actions"><button type="button" className="orc-btn" disabled={action.pending} onClick={accept}>{t('check.acceptAnyway')}</button><button type="button" className="orc-btn orc-btn--ghost" onClick={() => setForm('none')}>{t('panel.task.cancel')}</button></div></div> : null}
           {form === 'steer' ? <div className="orc-form">
             {/* biome-ignore lint/a11y/noAutofocus: Focus moves to this field when its dialog opens. */} <textarea autoFocus className="orc-field" aria-label={t('panel.task.steerLabel')} placeholder={t('panel.task.steerPlaceholder')} value={message} onChange={(e) => { setMessage(e.target.value); setSteerOutcome(null) }} />
@@ -355,7 +387,7 @@ export function TaskPanel({
         <div className="orc-tabpanel" role="tabpanel">
           {tab === 'overview' ? <>
             {(attention.length > 0 || task.lastOutcome === 'failed' || phrase.tone === 'alert') ? <div className={`orc-now orc-now--${phrase.tone}`}><span style={{ color: tone.color }} aria-hidden="true">{tone.glyph} </span>{phrase.text}{phrase.hint ? <small>{phrase.hint}</small> : null}</div> : null}
-            {(primary === 'accept' || primary === 'decision' || task.status === 'in_review' || task.status === 'accepted' || task.status === 'closed') && detail?.verdict ? <>
+            {(primary === 'accept' || primary === 'decision' || task.status === 'in_review' || task.status === 'accepted' || task.status === 'closed') && detail?.verdict && !(isOwnWork(detail.kind) && detail.runs.length === 0 && !detail.report) ? <>
               <div className={`orc-verdict orc-verdict--${detail.verdict.kind}`} role="status"><span className="orc-verdict__mark" aria-hidden="true">{detail.verdict.kind === 'result' ? '✓' : detail.verdict.kind === 'negative' ? '−' : '?'}</span><strong>{t(`verdict.${detail.verdict.kind}`)}</strong>{detail.verdict.kind === 'negative' && detail.verdict.why ? <span> · {t(`verdict.why.${detail.verdict.why}`)}</span> : null}{detail.verdict.kind === 'disputed' && detail.verdict.mismatch ? <span> · {t(`verdict.mismatch.${detail.verdict.mismatch}`)}</span> : null}</div>
               {detail.verdict.facts.length ? /* biome-ignore lint/a11y/useAriaPropsSupportedByRole: This label describes a styled presentation region or indicator. */ <div className="orc-verdict__facts" aria-label={t('verdict.facts')}>{detail.verdict.facts.map((fact, i) => <VerdictFactChip key={`${fact.code}-${i}`} fact={fact} onJump={(line) => setReportJump((prev) => ({ line, seq: (prev?.seq ?? 0) + 1 }))} />)}</div> : null}
             </> : null}

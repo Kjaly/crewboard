@@ -5,11 +5,14 @@ import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
-// ~15% above the size reached by moving core to zod/mini and minifying the Node bundles (crewboard 134 KiB,
-// dsh-crewboard 775 KiB of which the lazy layout engine is most, 2026-09-24): a heavier tarball fails here.
-// The CLI ceiling was raised to 162 KiB the same day: note events (i18n2) and plan compatibility (pq1) took it
-// to 154.2 KiB, both accepted on purpose.
-const TARBALL_CEILING_KIB = { cli: 162, plugin: 891 }
+// Measured tarball size plus ~5% (crewboard 116.5 KiB after wave 1 w1a+w1c — preflight auth/key checks, honest run
+// outcomes, worker process groups; dsh-crewboard 775.7 KiB of which the lazy layout engine is most, after opt2;
+// 2026-09-24): a heavier tarball fails here. Growth past them is a decision to make on purpose — measure it and
+// move the number with the new size.
+// Tarballs measured after wave 1 (w1a–w1f), 2026-09-24: crewboard 123.6 KiB → 130, dsh-crewboard 796.2 KiB → 836.
+const TARBALL_CEILING_KIB = { cli: 130, plugin: 836 }
+// The always-loaded client bundle: measured 296.0 KiB plus ~5% (2026-09-24, after opt2), as in the plugin build test.
+const CLIENT_CEILING_KIB = 329
 const temp = await mkdtemp(join(tmpdir(), 'crewboard-release-'))
 const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { cwd: root, stdio: 'inherit', ...opts })
 try {
@@ -38,14 +41,14 @@ try {
     }
     if (dir === 'plugin') {
       const clientBytes = (await (await import('node:fs/promises')).stat(join(root, 'packages/plugin/lib/client.js'))).size
-      if (clientBytes > 320 * 1024) throw new Error(`Plugin main client bundle is ${clientBytes} bytes; limit is 327680`)
+      if (clientBytes > CLIENT_CEILING_KIB * 1024) throw new Error(`Plugin main client bundle is ${clientBytes} bytes; limit is ${CLIENT_CEILING_KIB * 1024}`)
       for (const asset of await readdir(join(root, 'packages/plugin/assets/vendors'))) {
         if (asset.endsWith('.svg') && !listing.includes(`assets/vendors/${asset}`)) throw new Error(`Plugin host-served vendor asset missing: ${asset}`)
       }
     }
     const meta = execFileSync('tar', ['-xOzf', tgz[dir], 'package/package.json'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
     const packed = JSON.parse(meta)
-    if (packed.private || packed.version !== '0.3.0') throw new Error(`${pkg.name} packed manifest is private or has unexpected version`)
+    if (packed.private || packed.version !== '0.4.0') throw new Error(`${pkg.name} packed manifest is private or has unexpected version`)
     if (dir === 'cli' && packed.dependencies?.['@crewboard/core']) throw new Error('CLI tarball retains private core dependency')
     if (dir === 'cli') {
       const firstLine = execFileSync('tar', ['-xOzf', tgz[dir], 'package/dist/main.js'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\n')[0]

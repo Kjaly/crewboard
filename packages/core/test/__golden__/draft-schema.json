@@ -383,14 +383,15 @@
             "implement",
             "review",
             "research",
-            "decision"
+            "decision",
+            "root"
           ],
           "path": [
             "tasks",
             0,
             "kind"
           ],
-          "message": "Invalid option: expected one of \"implement\"|\"review\"|\"research\"|\"decision\""
+          "message": "Invalid option: expected one of \"implement\"|\"review\"|\"research\"|\"decision\"|\"root\""
         },
         {
           "expected": "array",
@@ -458,14 +459,15 @@
             "implement",
             "review",
             "research",
-            "decision"
+            "decision",
+            "root"
           ],
           "path": [
             "tasks",
             0,
             "kind"
           ],
-          "message": "Invalid option: expected one of \"implement\"|\"review\"|\"research\"|\"decision\""
+          "message": "Invalid option: expected one of \"implement\"|\"review\"|\"research\"|\"decision\"|\"root\""
         }
       ]
     },

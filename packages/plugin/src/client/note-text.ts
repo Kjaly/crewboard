@@ -26,9 +26,11 @@ export function noteText(note: Pick<Note, 'text' | 'event' | 'verdict'>): string
     case 'accepted': return [note.verdict ? verdictText(note.verdict) : '', t('feed.note.accepted'), event.evidence ? t('feed.note.evidence', { evidence: event.evidence }) : ''].filter(Boolean).join('; ')
     case 'rejected': return event.reason
     case 'superseded': return t('feed.note.superseded', { by: event.by })
+    case 'dropped': return t('feed.note.dropped', { reason: event.reason })
     case 'launched_outside_preset': return t('feed.note.outsidePreset', { preset: preset(event.preset), worker: event.worker })
     case 'preset_fallback': return t('feed.note.presetFallback', { stale: event.stale, preset: preset(event.preset), worker: event.worker })
     case 'steer': return t('feed.note.steer', { state: t(`feed.note.steer.${event.delivery}`), id: event.steerId, detail: event.detail ? ` (${event.detail})` : '', message: event.message })
     case 'worktree': return t(`feed.note.worktree.${event.outcome}`)
+    case 'started': return t('feed.note.started', { by: by(event.by) })
   }
 }

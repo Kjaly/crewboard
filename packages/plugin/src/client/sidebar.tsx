@@ -31,6 +31,7 @@ import {
   writeSideFolds,
 } from './sidebar-model.js'
 import { orchestraStore } from './store.js'
+import { PlanLanes, firstLaneGroupKey } from './sidebar-lanes.js'
 
 /**
  * The screen's left rail: global search, one «Needs you» inbox across repositories, then the
@@ -377,6 +378,8 @@ export function RepoSidebar(props: {
   selectedDraft?: string | null
   onDraft?(id: string): void
   onPlan?(): void
+  /** The open plan's lane tree: which lane to highlight, what a click does, the lane's link. */
+  lanes?: { highlight: string | null; onPick(lane: string): void; link(lane: string): string }
 }) {
   const { snapshot, repo, open, onToggle } = props
   const drafts = props.drafts ?? []
@@ -404,7 +407,7 @@ export function RepoSidebar(props: {
   }, [snapshot.order, optimistic])
 
   const tree = useMemo(() => sidebarTree(snapshot, Date.now(), order), [snapshot, order])
-  const inbox = useMemo(() => inboxItems(snapshot), [snapshot])
+  const inbox = useMemo(() => inboxItems(snapshot, { root: repo.root, planId: repo.planId }), [snapshot, repo.root, repo.planId])
   const waitingCount = inboxCount(inbox)
   const inboxRows = useMemo(() => splitInbox(inbox), [inbox])
   const hits = useMemo(() => searchSnapshot(snapshot, query), [snapshot, query])
@@ -655,6 +658,23 @@ export function RepoSidebar(props: {
   // An unmounted sidebar drops its in-flight session instead of leaking the window listeners.
   useEffect(() => () => sessionRef.current?.dispose(), [])
 
+  const copyText = (text: string) =>
+    void navigator.clipboard?.writeText(text).then(() => {
+      setToast(true)
+      setTimeout(() => setToast(false), 1600)
+    }).catch(() => {})
+
+  const laneMenu = (event: React.MouseEvent<HTMLElement>, lane: string) => {
+    const lanes = props.lanes
+    if (!lanes) return
+    openMenu(event, [{ label: t('side.lanes.copyLink'), onPick: () => copyText(lanes.link(lane)) }])
+  }
+
+  const pickLane = (lane: string) => {
+    props.lanes?.onPick(lane)
+    if (open && narrowRail()) onToggle()
+  }
+
   const copyPlan = (planRepo: OrchestraRepoSnapshot, plan: SidePlan) =>
     void navigator.clipboard?.writeText(planHandoff(planRepo, plan)).then(() => {
       setToast(true)
@@ -835,6 +855,7 @@ export function RepoSidebar(props: {
   const inboxLabel = (item: InboxItem): string => {
     if (item.kind === 'plan') return t('panel.app.repoWaiting', { count: item.count ?? 0 })
     if (item.kind === 'decision') return t('queue.decisionYours')
+    if (item.kind === 'unmerged') return t('side.inboxUnmerged')
     if (item.kind === 'attention') return item.message ?? t('panel.app.attentionCount', { count: item.count ?? 1 })
     return t('panel.status.inReview')
   }
@@ -873,6 +894,8 @@ export function RepoSidebar(props: {
       )
     }
     const current = plan.current && entry.repo.root === repo.root
+    // Only the open plan unfolds into its lanes; every other plan stays one row.
+    const laneChild = current && props.lanes ? firstLaneGroupKey(repo) : undefined
     const counts = planCounts(plan)
     const state = statusLabel(counts)
     return (
@@ -889,9 +912,11 @@ export function RepoSidebar(props: {
             role="treeitem"
             aria-selected={current}
             aria-current={current ? 'true' : undefined}
+            aria-expanded={laneChild ? true : undefined}
             data-srow
             data-skey={skey(`plan:${key}`)}
             data-parent={parentKey}
+            data-children={laneChild}
             className="orc-srow__main orc-srow__main--plan"
             title={`${plan.goal}\n${repoName(entry.repo.root)} — ${entry.repo.root}${inWorktree(entry.repo) ? `\n${t('side.worktreeHint', { path: entry.repo.root })}` : ''}${state ? `\n${state}` : ''}`}
             onClick={() => {
@@ -915,6 +940,7 @@ export function RepoSidebar(props: {
             <EllipsisGlyph />
           </button>
         </div>
+        {laneChild && props.lanes ? <PlanLanes repo={repo} parentKey={skey(`plan:${key}`)} highlight={props.lanes.highlight} onPick={pickLane} onMenu={laneMenu} /> : null}
       </li>
     )
   }
@@ -1281,7 +1307,8 @@ export function RepoSidebar(props: {
             />
           ) : null}
           {action.error ? <p className="orc-error orc-plans__error">{action.error}</p> : null}
-          <ul className="orc-tree__list">
+          {/* biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: The rail is an ARIA tree; its rows are the treeitems and the arrow keys walk them. */}
+          <ul className="orc-tree__list" role="tree" aria-label={t('side.repos')}>
             {tree.pinned.map((group) => groupRow(group, 'sec:pinned'))}
             {tree.repos.map((group) => groupRow(group, 'sec:repos'))}
             {bucket(t('side.quiet', { count: tree.quiet.length }), 'bucket:quiet', 'sec:quiet', tree.quiet, <QuietGlyph />)}

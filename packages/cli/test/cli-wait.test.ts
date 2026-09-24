@@ -130,6 +130,10 @@ it('names each check step, a return and a finish that starts a check', () => {
   expect(waitEvent('a', r, r)).toBeUndefined()
 })
 
+it('V-bg1/wait-incomplete says a finish that handed nothing in is incomplete, not a check', () => {
+  expect(waitEvent('a', { status: 'running', title: 'A' }, { status: 'ready', title: 'A', outcome: 'incomplete' })).toEqual({ kind: 'finished', taskId: 'a', oldStatus: 'running', newStatus: 'ready', title: 'A', outcome: 'incomplete' })
+})
+
 /** Replaces the file in one step, as the plan store does: a reader never sees it half written. */
 async function replace(file: string, text: string) {
   await writeFile(`${file}.tmp`, text)
@@ -169,4 +173,44 @@ it('names the update in the chosen language before the watch starts', async () =
   expect(await run(['--lang', 'ru', 'wait', '--timeout', '1'], h.io)).toBe(1)
   expect(h.err()).toMatch(/более новой версией Crewboard .*Обновите Crewboard/)
   expect(h.err()).not.toContain('Наблюдаю план')
+})
+
+// B09 (ux2 F5): a fast worker finishes before `wait` starts; the wait used to catch only transitions after
+// its baseline and sat until the timeout (then an infinite one).
+it('returns 0 at once when every listed task is already there', async () => {
+  const { root, h } = await setup()
+  await change(root, 'a', 'in_review')
+  const started = Date.now()
+  expect(await run(['wait', '--tasks', 'a', '--for', 'finished', '--interval', '10s', '--timeout', '20s', '--json'], h.io)).toBe(0)
+  expect(Date.now() - started).toBeLessThan(5000)
+  expect(JSON.parse(h.out())).toEqual([{ kind: 'finished', taskId: 'a', oldStatus: 'in_review', newStatus: 'in_review', title: 'Alpha', already: true }])
+  h.reset()
+  await change(root, 'b', 'accepted')
+  expect(await run(['wait', '--tasks', 'b', '--interval', '10s', '--timeout', '20s'], h.io)).toBe(0)
+  expect(h.out()).toBe('decision b accepted (already) Beta\n')
+})
+
+it('keeps waiting while one of the listed tasks is not there yet', async () => {
+  const { root, h } = await setup()
+  await change(root, 'a', 'in_review')
+  expect(await run(['wait', '--tasks', 'a,b', '--for', 'finished', '--interval', '20ms', '--timeout', '0.12'], h.io)).toBe(2)
+})
+
+it('without --tasks still waits for the next change only', async () => {
+  const { root, h } = await setup()
+  await change(root, 'a', 'in_review')
+  expect(await run(['wait', '--interval', '20ms', '--timeout', '0.12'], h.io)).toBe(2)
+})
+
+it('says in --help that the timeout is 30m by default and what --tasks does', async () => {
+  const { h } = await setup()
+  await run(['--help'], h.io)
+  expect(h.out()).toContain('default --timeout 30m')
+  expect(h.out()).toContain('already')
+})
+
+it('V-w1f/cost-empty says the plan has no runs instead of printing nothing', async () => {
+  const { h } = await setup()
+  expect(await run(['cost'], h.io)).toBe(0)
+  expect(h.out()).toBe('No runs in plan main.\n')
 })

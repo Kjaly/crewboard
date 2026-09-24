@@ -2,7 +2,7 @@
 
 [Documentation](../README.md) · **English** | [Русский](../ru/workers.md)
 
-A worker is a coding agent CLI that Crewboard launches for a task: Claude Code, Codex, Devin, or a dsh agent (for example DeepSeek). Workers from different providers can take tasks in the same plan.
+A worker is a coding agent CLI that Crewboard launches for a task: Claude Code, Codex, Devin, or a dsh agent (for example DeepSeek). Workers from different providers can take tasks in the same plan. Work that is unsafe to hand to a worker — integration on a stand, starting processes, the owner's database — is a `root` task: the orchestrator does it itself, and Crewboard never launches a worker for it (see [the CLI reference](cli.md#the-orchestrators-own-work)).
 
 ![Settings: the worker registry, availability, and the order per task class](../assets/settings.png)
 
@@ -13,11 +13,11 @@ A worker is a coding agent CLI that Crewboard launches for a task: Claude Code, 
 | Kind | CLI | Checked before a run |
 | --- | --- | --- |
 | `claude` | Claude Code, `claude` | `claude --version`; `claude auth status` must report a login. For a model with a known minimum, the Claude Code version is compared with it (see [below](#cli-version-preflight)). |
-| `codex` | Codex CLI, `codex` | `codex --version`; the subscription quota must be under 90 % used when it can be read through `codex app-server`. |
+| `codex` | Codex CLI, `codex` | `codex --version`; `codex login status` must report a login; the subscription quota must be under 90 % used when it can be read through `codex app-server`. |
 | `devin` | Devin CLI, `devin` | `devin --version` must report a `3000.x` release; `devin auth status` must report a login. |
-| `dsh` | dsh, `dsh` | `dsh --version`; `dsh --profile acp --dump-config` must succeed. |
+| `dsh` | dsh, `dsh` | `dsh --version`; `dsh --profile acp --dump-config` must succeed; a DeepSeek API key (`DEEPSEEK_API_KEY`) must be set in the environment, in dsh's credential store (**Settings → Models**), or in `$DSH_HOME/.env`. Only its presence is checked, never its value. |
 
-Each worker needs its own CLI installed and signed in; Crewboard does not handle accounts or keys. Check a worker with:
+Each worker needs its own CLI installed and signed in; Crewboard does not handle accounts or keys. Preflight runs the same binary the launch runs, including one set through `CREWBOARD_<KIND>_COMMAND`. The welcome screen marks a worker **ready** only after this check passed. Check a worker with:
 
 ```sh
 crewboard preflight -a claude/opus

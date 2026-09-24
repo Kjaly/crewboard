@@ -4,6 +4,7 @@ import {
   type BaselineRecord,
   EMPTY_RECIPE,
   type Exec,
+  type GcCandidate,
   KEEP_REASON,
   type PreflightResult,
   gcCandidates,
@@ -15,11 +16,12 @@ import {
   loadRecipe,
   preflightAgent,
   codexQuotaUsedPercent,
+  workerCommands,
   prepareWorktree,
   removeWorktree,
   updatePlan,
 } from '@crewboard/core'
-import { findProfile, loadProfiles, repoRoot } from '../context.js'
+import { findProfile, homeOf, loadProfiles, repoRoot } from '../context.js'
 import { type Io, UserError, confirmHuman } from '../io.js'
 
 const formatSize = (bytes: number, lang: 'en' | 'ru'): string => {
@@ -39,11 +41,22 @@ const keepReason = (reason: string, io: Io): string => {
   return entry ? cliT(io.lang ?? 'en', `env.keep.${entry[0]}`) : reason
 }
 
+/** `gc --yes` that removed nothing says so and why the rest stays (ux8 P14): «Nothing removed: 3 kept as …». */
+function nothingRemoved(kept: GcCandidate[], io: Io): string {
+  const lang = io.lang ?? 'en'
+  if (kept.length === 0) return `${cliT(lang, 'env.noWorktrees')}\n`
+  const counts = new Map<string, number>()
+  for (const c of kept) if (c.keep) counts.set(c.keep, (counts.get(c.keep) ?? 0) + 1)
+  const parts = [...counts].map(([reason, count]) => cliT(lang, 'env.keptCount', { count, reason: cliT(lang, `env.keep.${reason}`) }))
+  return cliT(lang, 'env.nothingRemoved', { parts: parts.join(', ') })
+}
+
 export async function cmdPreflight(argv: string[], io: Io, exec: Exec): Promise<number> {
   const { values } = parseArgs({ args: argv, options: { agent: { type: 'string', short: 'a' }, probe: { type: 'boolean' }, json: { type: 'boolean' } } })
   const profiles = values.agent ? [await findProfile(io, values.agent)] : (await loadProfiles(io)).filter((p) => p.enabled)
   const results: PreflightResult[] = []
-  for (const p of profiles) results.push(await preflightAgent(p, { exec, codexUsedPercent: codexQuotaUsedPercent, lang: io.lang ?? 'en' }, { probe: values.probe }))
+  const env = { ...io.env, HOME: homeOf(io) }
+  for (const p of profiles) results.push(await preflightAgent(p, { exec, codexUsedPercent: codexQuotaUsedPercent, lang: io.lang ?? 'en', env, commands: workerCommands(env) }, { probe: values.probe }))
   if (values.json) io.out(`${JSON.stringify(results, null, 2)}\n`)
   else {
     for (const r of results) {
@@ -103,9 +116,9 @@ export async function cmdWorktree(argv: string[], io: Io, exec: Exec): Promise<n
       io.out(cliT(io.lang ?? 'en', 'env.deleted', { path: info.path, branchNote: r.branchDeleted ? '' : cliT(io.lang ?? 'en', 'env.branchKept', { branch: info.branch }) }))
       return 0
     }
-    await gcRecheckAccepted(root, { exec, now: io.now, policyPath: worktreeConfigPath(io.env, io.env.HOME ?? '') })
-    const candidates = await gcCandidates(root, { exec, now: io.now })
+    // B06: without --yes nothing is removed — the accepted re-check (which removes) runs only with --yes.
     if (!values.yes) {
+      const candidates = await gcCandidates(root, { exec, now: io.now })
       if (candidates.length === 0) io.out(`${cliT(io.lang ?? 'en', 'env.noWorktrees')}\n`)
       for (const c of candidates) {
         const size = c.sizeBytes !== undefined ? ` · ${formatSize(c.sizeBytes, io.lang ?? 'en')}` : ''
@@ -115,11 +128,16 @@ export async function cmdWorktree(argv: string[], io: Io, exec: Exec): Promise<n
       }
       return 0
     }
+    // The re-check also notes the removal in the task feed; whatever it left (another policy) goes by the same rules.
+    const rechecked = await gcRecheckAccepted(root, { exec, now: io.now, policyPath: worktreeConfigPath(io.env, homeOf(io)), force: true })
+    const candidates = await gcCandidates(root, { exec, now: io.now })
     const ids = candidates.filter((c) => !c.keep).map((c) => c.planId ? `${c.planId}:${c.taskId}` : c.taskId)
     const { removed, failed } = await gcRemove(root, ids, { exec })
-    for (const id of removed) io.out(cliT(io.lang ?? 'en', 'env.copyRemovedLine', { id }))
-    for (const f of failed) io.out(cliT(io.lang ?? 'en', 'env.failed', { id: f.taskId, reason: keepReason(f.reason, io) }))
-    return failed.length > 0 ? 1 : 0
+    const all = [...rechecked.removed, ...removed]
+    for (const id of all) io.out(cliT(io.lang ?? 'en', 'env.copyRemovedLine', { id }))
+    for (const f of [...rechecked.failed, ...failed]) io.out(cliT(io.lang ?? 'en', 'env.failed', { id: f.taskId, reason: keepReason(f.reason, io) }))
+    if (all.length === 0 && failed.length === 0 && rechecked.failed.length === 0) io.out(nothingRemoved(candidates, io))
+    return failed.length + rechecked.failed.length > 0 ? 1 : 0
   }
   throw new UserError(cliT(io.lang ?? 'en', 'env.usage'), 2)
 }

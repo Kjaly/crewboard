@@ -37,8 +37,9 @@ const minifyCssLiteral = {
  * trace, and with identifiers kept `at loadPlan (index.js:1:48213)` still says where it broke. Source
  * maps are not built: shipped they would double the tarball, and kept out of it they would describe a
  * build no user has. Full minification stays for the browser bundles, where nobody reads a stack.
+ * Output is UTF-8 like the browser bundles: escaped, each Cyrillic letter costs six bytes instead of two.
  */
-const NODE_MINIFY = { minifyWhitespace: true, minifySyntax: true }
+const NODE_MINIFY = { minifyWhitespace: true, minifySyntax: true, charset: 'utf8' }
 
 // dsh loads lib/ while this builds: everything goes into a fresh directory swapped in whole, so lib/ is
 // never empty or half-written and nothing from an older build survives.
@@ -136,11 +137,14 @@ await buildAtomically('lib', async (lib) => {
   })
 
   // Screens are separate CJS bundles, executed by a script tag with the same shell require
-  // that dsh gives the main client. Shared live modules retain one store and locale subscription.
+  // that dsh gives the main client. Shared live modules retain one store and locale subscription;
+  // the API client and the plan graph are shared for weight, every screen that shows a graph would
+  // otherwise carry its own copy of both. The ids must match `__orchScreenRequire` in index.tsx.
   // Matching resolves the specifier to an absolute path: basename matching alone would mistake
   // `views/graph/layout.js` for the shell layout module.
   const sharedClientModules = new Map(
-    ['i18n', 'store', 'layout', 'styles', 'attention'].map((name) => [`${resolve('src/client')}/${name}`, name]),
+    [['i18n'], ['store'], ['layout'], ['styles'], ['attention'], ['api'], ['views/graph/graph-view', 'graph-view']]
+      .map(([path, name = path]) => [`${resolve('src/client')}/${path}`, name]),
   )
   const sharedClientPlugin = {
     name: 'shared-client-modules',

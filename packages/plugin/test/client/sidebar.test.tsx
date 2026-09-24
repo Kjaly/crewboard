@@ -79,17 +79,25 @@ describe('inboxItems', () => {
     const real = repo('/real', [makeTask({ id: 'rev', title: 'Real review', status: 'in_review', activeSince: at('2026-09-23T08:00:00Z') })])
     const example = repo('/demo', [makeTask({ id: 'pick', title: 'Pick a tagline', kind: 'decision', status: 'ready', needsHuman: true, activeSince: at('2026-09-01T08:00:00Z') })], [], { example: true } as Partial<RepoSnapshot>)
     const snapshot = makeSnapshot(example, real)
-    const items = inboxItems(snapshot)
+    const items = inboxItems(snapshot, { root: '/demo', planId: 'main' })
     expect(items.map((item) => [item.taskId, item.kind, !!item.example])).toEqual([['rev', 'review', false], ['pick', 'decision', true]])
     expect(inboxCount(items)).toBe(1)
     expect(snapshotWaiting(snapshot)).toBe(1)
   })
 
-  it('marks a waiting background example plan as example too', () => {
+  // ex1: the example never finishes, so outside its own plan the row was permanent noise.
+  it('leaves the example out while another plan is open, or none is', () => {
+    const real = repo('/real', [makeTask({ id: 'rev', title: 'Real review', status: 'in_review' })])
+    const example = repo('/demo', [makeTask({ id: 'pick', title: 'Pick a tagline', kind: 'decision', status: 'ready', needsHuman: true })], [], { example: true } as Partial<RepoSnapshot>)
+    const snapshot = makeSnapshot(example, real)
+    expect(inboxItems(snapshot, { root: '/real', planId: 'main' }).map((item) => item.taskId)).toEqual(['rev'])
+    expect(inboxItems(snapshot).map((item) => item.taskId)).toEqual(['rev'])
+  })
+
+  it('leaves a waiting background example plan out: the open plan is another one', () => {
     const r = repo('/r', [], [], { plans: [plan({ id: 'main', current: true }), plan({ id: 'tour', example: true, waitingHuman: 1 })] })
-    const items = inboxItems(makeSnapshot(r))
-    expect(items).toMatchObject([{ planId: 'tour', kind: 'plan', example: true }])
-    expect(inboxCount(items)).toBe(0)
+    expect(inboxItems(makeSnapshot(r), { root: '/r', planId: 'main' })).toEqual([])
+    expect(inboxItems(makeSnapshot(r))).toEqual([])
   })
 
   it('shows the example row in Needs you without a count or an «all clear»', () => {
@@ -117,6 +125,16 @@ describe('inboxItems', () => {
     const rows = [...inbox.querySelectorAll('.orc-inbox__list > li')].map((li) => (li.classList.contains('orc-inbox__divider') ? '--' : li.querySelector('.orc-ibrow__line')?.textContent))
     expect(rows).toEqual(['Real decision', 'Real review', '--', 'Pick a tagline'])
     expect(inbox.querySelector('.orc-inbox__divider')?.textContent).toBe('Example')
+  })
+
+  it('hides the example rows and their divider once another plan is open', () => {
+    const real = repo('/real', [makeTask({ id: 'rev', title: 'Real review', status: 'in_review' })])
+    const example = repo(ROOT, [makeTask({ id: 'pick', title: 'Pick a tagline', kind: 'decision', status: 'ready', needsHuman: true })], [], { example: true } as Partial<RepoSnapshot>)
+    render(<RepoSidebar snapshot={makeSnapshot(example, real)} repo={real} open onToggle={() => {}} />)
+    const inbox = screen.getByRole('region', { name: 'Needs you' })
+    expect(inbox.querySelector('h3')?.textContent).toBe('Needs you · 1')
+    expect(inbox.textContent).not.toContain('Pick a tagline')
+    expect(inbox.querySelector('.orc-inbox__divider')).toBeNull()
   })
 
   it('draws no divider when there is no example row', () => {

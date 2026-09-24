@@ -21,21 +21,15 @@ it('ships the run supervisors next to the bundled CLI', async () => {
   }
 })
 
-// Every `crewboard`/`orch` call parses the whole bundle. Ceilings sit ~15% above the size reached by
-// moving core to zod/mini and minifying (main 414 KiB, runners 22 and 9 KiB, 2026-09-24): growth past
-// them is a decision to make on purpose, not something to discover later. Raised main 476 → 480 KiB for
-// the per-worktree baseline record (bl1, +3.8 KB, 2026-09-24), 480 → 484 KiB for the refresh that lets
-// untracked setup files through and names what blocks it, in two languages (rf1, +2.9 KB, 2026-09-24).
-// Raised 484 → 492 KiB for reading plans a newer build wrote (pq1, +6.1 KB, 2026-09-24): tolerant schema
-// fields, hash-named bounded quarantine, the two-language incompatibility errors. main.js already stood
-// at 484.3 KiB before pq1 (i18n2). Raised 492 → 508 KiB for the repository list (rg1, +13.3 KB,
-// 2026-09-24): `repo add|list|rm`, worktree discovery, the «not on screen» warning, in two languages.
-// main.js already stood at 492.4 KiB (504 226 B) before rg1, over the old ceiling. Raised 508 → 516 KiB
-// for «Needs you» in the terminal (nq1, +7.8 KB, 2026-09-24): `attention` builds the screen's repository
-// snapshot and its shared needs-you set, with `--all` over the screen's list, in two languages. Raised 516 → 520 KiB with st1 (+1.9 KB):
-// directions that end in a state matching reality.
+// Every `crewboard`/`orch` call parses the whole bundle. Ceilings are the measured size plus ~5%
+// (main 351.0 KiB, runners 23.3 and 8.7 KiB, 2026-09-24, after opt2; the Claude/Codex runner 25.8 KiB after bg1,
+// which keeps a run open for the worker's background work; 27.2 KiB after w1a, which fails a Claude run on `is_error`
+// and records the worker's process group; main 375.3 KiB after w1f — `drop`, the `wait`/`gc`/`cost` texts and help in both
+// languages): growth past them is a decision to make on purpose,
+// not something to discover later — measure it and move the number with the new size.
+// Current ceilings, measured after wave 1 (w1a–w1f), 2026-09-24: main 394.6 KiB → 415, runners 27.3 / 8.7 KiB.
 it('keeps the CLI bundles within their weight and free of classic zod', async () => {
-  for (const [name, ceiling] of [['main.js', 520], ['cli-runner-main.js', 26], ['runner-main.js', 10]] as const) {
+  for (const [name, ceiling] of [['main.js', 415], ['cli-runner-main.js', 29], ['runner-main.js', 10]] as const) {
     const code = await readFile(dist(name), 'utf8')
     expect(Buffer.byteLength(code), name).toBeLessThan(ceiling * 1024)
     // Classic zod registers `ZodString`/`ZodObject`; zod/mini registers `ZodMini…`. One classic import
@@ -43,6 +37,13 @@ it('keeps the CLI bundles within their weight and free of classic zod', async ()
     expect(code, name).not.toMatch(/\("Zod(?:String|Object|Type|Error)"/)
   }
   expect((await readFile(dist('main.js'), 'utf8')).startsWith('#!/usr/bin/env node\n')).toBe(true)
+})
+
+// A value `import('@crewboard/core')` makes esbuild keep core as a namespace object with every export,
+// so nothing of core is tree-shaken (it once cost 115 KB). `createExamplePlan` belongs to the screen only:
+// finding it in the CLI means the namespace is back.
+it('tree-shakes core out of the CLI bundle', async () => {
+  expect(await readFile(dist('main.js'), 'utf8')).not.toContain('createExamplePlan')
 })
 
 // `orch` runs from dist/ of the main checkout while that checkout rebuilds: the entries must exist at every

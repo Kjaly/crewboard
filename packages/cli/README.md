@@ -2,6 +2,8 @@
 
 `crewboard` is the command-line interface for managing Crewboard plans, runs, and review workflows. `orch` is an equivalent command name.
 
+> Not on npm yet: install from source for now, as in the [repository README](https://github.com/Kjaly/crewboard#install). The command below works once the package is published.
+
 ```sh
 npm install -g crewboard
 crewboard --help

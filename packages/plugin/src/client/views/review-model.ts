@@ -12,9 +12,11 @@ export type ProgressBucket = 'accepted' | 'running' | 'ready' | 'queued' | 'atte
 export const PROGRESS_BUCKETS: ProgressBucket[] = ['accepted', 'running', 'ready', 'queued', 'attention']
 export type VerdictCaveat = { result: number; disputed: number; negative: number; untyped: number }
 export type PlanProgress = {
-  /** Tasks in scope: every task except superseded ones. */
+  /** Tasks in scope: every task except superseded and dropped ones. */
   total: number
   superseded: number
+  /** Closed as not needed (w1f): out of scope like superseded ones. */
+  dropped: number
   buckets: Record<ProgressBucket, number>
   /** Splits the accepted bucket; its parts always add up to it. */
   verdicts: VerdictCaveat
@@ -25,7 +27,7 @@ const failedLast = (task: RepoSnapshot['tasks'][number]) => task.lastOutcome ===
 
 /** Each in-scope task lands in exactly one bucket; the first matching rule wins. */
 export function taskBucket(task: RepoSnapshot['tasks'][number], waiting: Set<string>): ProgressBucket | undefined {
-  if (task.status === 'superseded') return undefined
+  if (task.status === 'superseded' || task.status === 'dropped') return undefined
   if (task.status === 'accepted' || task.status === 'closed') return 'accepted'
   if (task.status === 'running' || task.activeRunId) return 'running'
   if (waiting.has(task.id) || task.returned || failedLast(task)) return 'attention'
@@ -39,9 +41,10 @@ export function planProgress(repo: RepoSnapshot, cost: PlanCost | undefined): Pl
   const verdicts: VerdictCaveat = { result: 0, disputed: 0, negative: 0, untyped: 0 }
   const summaries = new Map(cost?.tasks?.map((summary) => [summary.taskId, summary]) ?? [])
   let superseded = 0
+  let dropped = 0
   for (const task of repo.tasks) {
     const bucket = taskBucket(task, waiting)
-    if (!bucket) { superseded++; continue }
+    if (!bucket) { if (task.status === 'dropped') dropped++; else superseded++; continue }
     buckets[bucket]++
     if (bucket !== 'accepted') continue
     const verdict = summaries.get(task.id)?.decisions.findLast((decision) => decision.kind === 'accept')?.verdict
@@ -50,17 +53,19 @@ export function planProgress(repo: RepoSnapshot, cost: PlanCost | undefined): Pl
     else if (verdict === 'disputed') verdicts.disputed++
     else verdicts.untyped++
   }
-  return { total: repo.tasks.length - superseded, superseded, buckets, verdicts }
+  return { total: repo.tasks.length - superseded - dropped, superseded, dropped, buckets, verdicts }
 }
 
-/** What the top band asks of the person: decisions waiting, and failed work that needs a follow-up. */
+/** What the top band asks of the person: decisions waiting, failed work that needs a follow-up, accepted work to merge. */
 export function needsYou(repo: RepoSnapshot) {
   // Review is one plan's screen: the example shows its own waiting work (it stays out of the
   // cross-repository inbox, the tab title and notifications, which skip example plans).
   const waiting = acceptableTasks(repo)
   const ids = new Set(waiting.map((task) => task.id))
-  const failed = repo.tasks.filter((task) => !ids.has(task.id) && failedLast(task) && task.status !== 'accepted' && task.status !== 'closed' && task.status !== 'superseded' && task.status !== 'running' && !task.activeRunId)
-  return { waiting, failed }
+  const failed = repo.tasks.filter((task) => !ids.has(task.id) && failedLast(task) && task.status !== 'accepted' && task.status !== 'closed' && task.status !== 'superseded' && task.status !== 'dropped' && task.status !== 'running' && !task.activeRunId)
+  // Accepted, not merged (w1d): the work is still in its branch and the tasks that depend on it wait.
+  const unmerged = repo.tasks.filter((task) => task.unmerged)
+  return { waiting, failed, unmerged }
 }
 
 /** A measure is either observed (zero included), pending, not applicable, or simply unavailable. */
@@ -85,7 +90,7 @@ export function timeSummary(repo: RepoSnapshot, cost: PlanCost): TimeSummary {
   const coverage = cost.coverage ?? reviewCoverage(cost.runs, cost.historyCompleteness)
   const snapshot = cost.generatedAt
   const runs = cost.runs
-  const allTerminal = repo.tasks.every((task) => ['accepted', 'closed', 'superseded'].includes(task.status))
+  const allTerminal = repo.tasks.every((task) => ['accepted', 'closed', 'superseded', 'dropped'].includes(task.status))
   const start = Math.min(...runs.map((run) => Date.parse(run.startedAt)))
   const end = allTerminal ? Math.max(...runs.map((run) => Date.parse(run.finishedAt ?? snapshot)), ...cost.accepted.map((item) => Date.parse(item.at))) : Date.parse(snapshot)
   const intervals = cost.tasks?.flatMap((task) => task.reviewIntervals.map((interval) => [Date.parse(interval.from), Date.parse(interval.to ?? snapshot)] as const)) ?? []

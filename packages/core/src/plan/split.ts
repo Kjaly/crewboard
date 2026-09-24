@@ -11,7 +11,7 @@ export function splitSuggestion(plan: Plan): SplitSuggestion {
   if (plan.tasks.length > 0 && plan.tasks.every((task) => task.status === 'accepted')) {
     return { kind: 'finished', taskCount: plan.tasks.length }
   }
-  const live = new Set(plan.tasks.filter((task) => task.status !== 'accepted' && task.status !== 'superseded').map((task) => task.id))
+  const live = new Set(plan.tasks.filter((task) => task.status !== 'accepted' && task.status !== 'superseded' && task.status !== 'dropped').map((task) => task.id))
   const neighbors = new Map<string, Set<string>>(plan.tasks.map((task) => [task.id, new Set<string>()]))
   for (const task of plan.tasks) {
     for (const dep of task.deps) {

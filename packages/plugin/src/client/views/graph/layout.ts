@@ -31,15 +31,20 @@ export type LaneBand = { lane: string; top: number; height: number; lanes?: stri
 /** Human decisions always form the first lane, whatever stage the plan filed them under. */
 export const laneOf = (task: TaskSnapshot): string => (task.kind === 'decision' ? DECISION_LANE : (task.lane ?? ''))
 
-/** Lane reading order: decisions first, named stages in plan order, the unnamed stage last. */
-export function laneOrder(tasks: TaskSnapshot[]): string[] {
+/**
+ * Lane reading order: decisions first, named stages in plan order, the unnamed stage last. An
+ * explicit `order` (the graph's live-first order) wins for every lane it names; a lane it does not
+ * name keeps the plan order after them.
+ */
+export function laneOrder(tasks: readonly TaskSnapshot[], order?: readonly string[]): string[] {
   const seen: string[] = []
   for (const task of tasks) {
     const lane = laneOf(task)
     if (!seen.includes(lane)) seen.push(lane)
   }
+  const given = (lane: string) => { const at = order?.indexOf(lane) ?? -1; return at < 0 ? Number.MAX_SAFE_INTEGER : at }
   // Decisions first, unnamed stage last, everything else in the order the plan lists it.
-  return seen.sort((a, b) => rank(a) - rank(b) || seen.indexOf(a) - seen.indexOf(b))
+  return seen.sort((a, b) => given(a) - given(b) || rank(a) - rank(b) || seen.indexOf(a) - seen.indexOf(b))
 }
 
 const rank = (lane: string): number => (lane === DECISION_LANE ? -1 : lane === '' ? 1 : 0)
@@ -132,10 +137,10 @@ function assignColumns(tasks: TaskSnapshot[], raw: Raw[]): Map<string, number> {
 }
 
 /** Folds ELK's free placement into lane bands: inside a lane, a column is a vertical stack. */
-function foldIntoLanes(tasks: TaskSnapshot[], raw: Raw[]): Map<string, NodePos> {
+function foldIntoLanes(tasks: TaskSnapshot[], raw: Raw[], order?: readonly string[]): Map<string, NodePos> {
   const rawById = new Map(raw.map((r) => [r.id, r]))
   const columns = assignColumns(tasks, raw)
-  const lanes = laneOrder(tasks)
+  const lanes = laneOrder(tasks, order)
   const out = new Map<string, NodePos>()
   let top = 0
   for (const lane of lanes) {
@@ -172,10 +177,10 @@ function placeNear(task: TaskSnapshot, placed: Map<string, NodePos>, fallback: N
  *   only while the task stays in its lane: a task that moved lanes would otherwise carry its old y
  *   into a foreign band and tangle the lane frames.
  */
-export async function layoutGraph(tasks: TaskSnapshot[], previous?: Map<string, NodePos>): Promise<Map<string, NodePos>> {
+export async function layoutGraph(tasks: TaskSnapshot[], previous?: Map<string, NodePos>, order?: readonly string[]): Promise<Map<string, NodePos>> {
   if (tasks.length === 0) return new Map()
   const raw = (await elkColumns(tasks).catch(() => undefined)) ?? localColumns(tasks)
-  const computed = foldIntoLanes(tasks, raw)
+  const computed = foldIntoLanes(tasks, raw, order)
 
   const out = new Map<string, NodePos>()
   const fresh: TaskSnapshot[] = []
@@ -223,8 +228,8 @@ export function laneBands(nodes: Map<string, NodePos>): LaneBand[] {
 }
 
 /** One placement pass for the derived graph. Labels and folded chips own space before nodes move. */
-export function layoutFoldStack(tasks: TaskSnapshot[], folded: Set<string>): { nodes: Map<string, NodePos>; bands: LaneBand[] } {
-  const order = laneOrder(tasks)
+export function layoutFoldStack(tasks: TaskSnapshot[], folded: Set<string>, lanes?: readonly string[]): { nodes: Map<string, NodePos>; bands: LaneBand[] } {
+  const order = laneOrder(tasks, lanes)
   const nodes = new Map<string, NodePos>()
   const bands: LaneBand[] = []
   const byId = new Map(tasks.map((task) => [task.id, task]))

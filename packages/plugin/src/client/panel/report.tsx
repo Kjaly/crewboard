@@ -9,17 +9,24 @@ const PREVIEW_LINES = 3
 const UL_ITEM = /^\s*[-*]\s+/
 const OL_ITEM = /^\s*\d+[.)]\s+/
 const ITEM = /^\s*(?:[-*]|\d+[.)])\s+/
+/** A markdown heading: `## Checks` is a section title, never literal text. */
+const HEADING = /^#{1,6}\s+/
+/** A task-list mark at the start of an item: `[x]` done, `[ ]` open. */
+const TICK = /^\[([ xX])\]\s+/
 /** A deviation-journal path the contract names, if any. */
 
 /** The card earns its place on review and after acceptance; a failed task keeps the last good report. */
 export function reportVisible(task: TaskSnapshot, detail: TaskDetail): boolean {
-  return !!detail.report?.text.trim() && (task.status === 'in_review' || task.status === 'accepted' || task.status === 'closed' || task.lastOutcome === 'failed')
+  if (!detail.report?.text.trim()) return false
+  // A prepared decision (rt1) is read before it is closed: its report is the case for the options.
+  if (task.kind === 'decision' && detail.report.source === 'orchestrator') return true
+  return task.status === 'in_review' || task.status === 'accepted' || task.status === 'closed' || task.lastOutcome === 'failed'
 }
 
 /** First line of a report for list rows — the markdown stripped back to plain text. */
 export function reportLine(text: string): string {
   const line = text.split('\n').find((l) => l.trim()) ?? ''
-  return line.replace(ITEM, '').replace(/\*\*(.+?)\*\*/g, '$1').replace(/`(.+?)`/g, '$1').trim()
+  return line.replace(HEADING, '').replace(ITEM, '').replace(TICK, '').replace(/\*\*(.+?)\*\*/g, '$1').replace(/`(.+?)`/g, '$1').trim()
 }
 
 /** Inline marks only: `code` and **bold** — everything else is literal text, never HTML. */
@@ -39,9 +46,9 @@ function inline(text: string, ns: string): ReactNode[] {
 }
 
 type ReportLine = { text: string; index: number; depth?: number }
-type Block = { list: 'ul' | 'ol'; items: ReportLine[] } | { lines: ReportLine[] }
+type Block = { list: 'ul' | 'ol'; items: ReportLine[] } | { lines: ReportLine[] } | { heading: ReportLine }
 
-/** Paragraphs and bullet/numbered lists: a blank line or a marker change ends the block in progress. */
+/** Headings, paragraphs and bullet/numbered lists: a blank line, a heading or a marker change ends the block in progress. */
 function parseBlocks(text: string): Block[] {
   const out: Block[] = []
   let list: { list: 'ul' | 'ol'; items: ReportLine[] } | null = null
@@ -56,6 +63,11 @@ function parseBlocks(text: string): Block[] {
     const line = raw.trim()
     if (!line) {
       flush()
+      continue
+    }
+    if (HEADING.test(line)) {
+      flush()
+      out.push({ heading: { text: line.replace(HEADING, ''), index } })
       continue
     }
     const kind = UL_ITEM.test(line) ? 'ul' : OL_ITEM.test(line) ? 'ol' : null
@@ -75,11 +87,17 @@ function parseBlocks(text: string): Block[] {
 
 function Blocks({ text, markedLine }: { text: string; markedLine: number | null }) {
   const risky = (line: string) => RISK_WORDS.some((word) => line.toLocaleLowerCase('ru').includes(word))
-  const marked = (line: ReportLine, key: string) => <span key={key} data-report-line={line.index} className={`${risky(line.text) ? 'orc-report__risk ' : ''}${markedLine === line.index ? 'orc-report__pointer' : ''}`}>{inline(line.text, key)}</span>
+  const marked = (line: ReportLine, key: string) => {
+    const tick = TICK.exec(line.text)
+    const text = tick ? line.text.replace(TICK, '') : line.text
+    return <span key={key} data-report-line={line.index} className={`${risky(text) ? 'orc-report__risk ' : ''}${markedLine === line.index ? 'orc-report__pointer' : ''}`}>{tick ? <span className="orc-report__tick" aria-hidden="true">{tick[1] === ' ' ? '☐ ' : '☑ '}</span> : null}{inline(text, key)}</span>
+  }
   return (
     <>
       {parseBlocks(text).map((block, i) =>
-        'items' in block ? (
+        'heading' in block ? (
+          <h4 key={i} className="orc-report__heading">{marked(block.heading, `${i}`)}</h4>
+        ) : 'items' in block ? (
           block.list === 'ul' ? (
             <ul key={i} className="orc-report__list">
               {block.items.map((item, j) => (
@@ -136,11 +154,12 @@ export function ReportCard({ task, detail, onTab, jump }: { task: TaskSnapshot; 
   if (!reportVisible(task, detail) || !report) return null
 
   const lines = report.text.split('\n')
+  const title = report.source === 'orchestrator' ? t('report.orchestratorTitle') : t('report.title')
   const foldable = lines.length > PREVIEW_LINES
   const folded = foldable && !open
 
   return (
-    <section ref={region} className="orc-sec" aria-label={t('report.title')}>
+    <section ref={region} className="orc-sec" aria-label={title}>
       <div className="orc-report">
         <header className="orc-report__head">
           {foldable ? (
@@ -148,10 +167,10 @@ export function ReportCard({ task, detail, onTab, jump }: { task: TaskSnapshot; 
               <span className="orc-disclose__mark" aria-hidden="true">
                 ▸
               </span>
-              {t('report.title')}
+              {title}
             </button>
           ) : (
-            <span className="orc-report__title">{t('report.title')}</span>
+            <span className="orc-report__title">{title}</span>
           )}
         </header>
         {RISK_WORDS.some((word) => report.text.toLocaleLowerCase('ru').includes(word)) ? <p className="orc-report__risk-note">{t('report.riskNote')}</p> : null}

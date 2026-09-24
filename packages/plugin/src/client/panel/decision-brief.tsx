@@ -5,6 +5,7 @@ import { identityLabel, workerIdentity } from '../provider.js'
 import { t, useLang } from '../i18n.js'
 
 const CHECK = /^\s*- \[[ xX]\]\s+(.+)$/
+const CHECK_LINE = /^\s*- \[[ xX]\]\s+/m
 
 type SavedChecks = { revision: string; items: string[] }
 
@@ -35,8 +36,11 @@ export function DecisionBrief({ repo, workers, task, detail, onSelect }: {
 }) {
   useLang()
   const storageKey = `crewboard:decision-checks:${repo.root}:${repo.planId ?? ''}:${task.id}`
+  // The orchestrator's report (rt1) is where a prepared decision says what to check; else the contract.
+  const report = detail?.report?.source === 'orchestrator' && CHECK_LINE.test(detail.report.text) ? detail.report : undefined
   const contract = detail?.contract
-  const revision = contract?.text ?? ''
+  const source = report ? { path: t('report.orchestratorTitle'), text: report.text, truncated: report.truncated } : contract
+  const revision = source?.text ?? ''
   const [checked, setChecked] = useState<string[]>(() => {
     const saved = savedChecks(storageKey)
     return saved?.items ?? []
@@ -72,7 +76,7 @@ export function DecisionBrief({ repo, workers, task, detail, onSelect }: {
     return () => { alive = false }
   }, [repo.root, depsKey])
 
-  const lines = contract?.text.split(/\r?\n/) ?? []
+  const lines = source?.text.split(/\r?\n/) ?? []
   const textLines: Array<{ text: string; line: number }> = []
   const checks = lines.flatMap((line, index) => {
     const match = CHECK.exec(line)
@@ -98,14 +102,15 @@ export function DecisionBrief({ repo, workers, task, detail, onSelect }: {
   return <div className="orc-decision">
     <section className="orc-sec" aria-label={t('panel.decision.whatToCheck')}>
       <h3 className="orc-decision__heading">{t('panel.decision.whatToCheck')}</h3>
-      {contract ? <>
-        <div className="orc-decision__source" title={contract.path}>{contract.path}</div>
+      {source ? <>
+        <div className="orc-decision__source" title={source.path}>{source.path}</div>
         <div className="orc-decision__content">
-          {textLines.map(({ text, line }) => <p className="orc-decision__text" key={line}>{text}</p>)}
+          {/* The report's own text is in the report card below; here only its checklist. */}
+          {report ? null : textLines.map(({ text, line }) => <p className="orc-decision__text" key={line}>{text}</p>)}
           {checks}
         </div>
-        {contract.truncated ? <p className="orc-meta">{t('panel.decision.contractTruncated')}</p> : null}
-      </> : detail ? <p className="orc-meta">{t('panel.decision.noChecklist')}</p> : null}
+        {source.truncated ? <p className="orc-meta">{t('panel.decision.contractTruncated')}</p> : null}
+      </> : detail ? <p className="orc-meta">{t(task.preparing || (task.status === 'blocked' && task.check !== 'checked') ? 'panel.decision.preparing' : 'panel.decision.noChecklist')}</p> : null}
     </section>
     <section className="orc-sec" aria-label={t('panel.decision.whereToLook')}>
       <h3 className="orc-decision__heading">{t('panel.decision.whereToLook')}</h3>
@@ -114,7 +119,7 @@ export function DecisionBrief({ repo, workers, task, detail, onSelect }: {
         <ul className="orc-decision__deps">{deps.map((id) => {
           const item = predecessors[id]
           const snapshot = repo.tasks.find((candidate) => candidate.id === id)
-          const verdict = item?.verdict.kind
+          const verdict = item?.verdict?.kind
           const agent = item?.runs.at(-1)?.agent ?? item?.worker ?? snapshot?.worker
           return <li key={id}>
             <button type="button" className="orc-decision__link" onClick={() => onSelect(id)}>

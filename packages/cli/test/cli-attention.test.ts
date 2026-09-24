@@ -2,7 +2,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
-import { type NeedsYouItem, updatePlan } from '@crewboard/core'
+import { createExamplePlan, EXAMPLE_ID, type NeedsYouItem, updatePlan } from '@crewboard/core'
 import { makeRepo } from '../../core/test/git-helpers.js'
 import { run } from '../src/cli.js'
 import { makeHarness } from './harness.js'
@@ -93,4 +93,35 @@ it('--all covers every repository the screen lists', async () => {
   expect(await run(['attention', '--all'], first.h.io)).toBe(0)
   expect(first.h.out()).toContain('Waiting for review (10)')
   expect(first.h.out()).toContain('[repo] r1')
+})
+
+// ex1: the example never finishes, so its waiting task stays out of the list unless the example is
+// what was asked about — the repository whose open plan it is, or `--plan` naming it. `--all` never.
+it('lists the example only when its plan is the one asked about', async () => {
+  const env = await homeEnv()
+  const { root, h } = await reviewPlan(env)
+  await createExamplePlan(root, new Date('2026-09-24T10:00:00Z'))
+  const items = async (...args: string[]) => {
+    h.reset()
+    expect(await run(['attention', '--json', ...args], h.io)).toBe(0)
+    return JSON.parse(h.out()) as NeedsYouItem[]
+  }
+
+  // The example is the open plan: its rows are listed, marked, and the real plan waits in the background.
+  const open = await items()
+  expect(open.filter((i) => i.example).map((i) => [i.planId, i.taskId])).toEqual([[EXAMPLE_ID, 'build']])
+  expect(open).toContainEqual(expect.objectContaining({ kind: 'plan', planId: 'main', background: true }))
+  h.reset()
+  expect(await run(['attention'], h.io)).toBe(0)
+  expect(h.out()).toContain('Example — not counted')
+
+  expect((await items('--all')).filter((i) => i.example)).toEqual([])
+  expect((await items('--all')).length).toBeGreaterThan(0)
+
+  expect(await run(['plan', 'use', 'main'], h.io)).toBe(0)
+  expect((await items()).some((i) => i.example)).toBe(false)
+  expect((await items('--plan', EXAMPLE_ID)).filter((i) => i.example).map((i) => i.taskId)).toEqual(['build'])
+  h.reset()
+  expect(await run(['attention'], h.io)).toBe(0)
+  expect(h.out()).not.toContain('Example — not counted')
 })

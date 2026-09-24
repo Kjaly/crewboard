@@ -3,6 +3,9 @@ import type { WorktreePolicy, Recipe } from '@crewboard/core'
 import type { Finding, PlanDraft } from '../../../core/src/plan/draft.js'
 import type { DraftJobSummary } from '../../../core/src/plan/draft-jobs.js'
 
+/** A worker on the Welcome checklist: «ready» only when the launch's own preflight passed. */
+export type WelcomeWorkerStatus = 'ready' | 'sign_in' | 'missing' | 'not_ready' | 'unchecked'
+
 export type { DraftJobSummary }
 export type DraftJobDetail = { job: DraftJobSummary; answer?: string }
 
@@ -34,7 +37,7 @@ const query = (params: Record<string, string>) => new URLSearchParams(params).to
 export const api = {
   recipe: async (repo: string): Promise<ApiResult<{ recipe: Recipe | null; detected: Recipe }>> => readJson(await fetch(`${API_PREFIX}/recipe?${query({ repo })}`)),
   saveRecipe: (repo: string, recipe: Recipe) => post<Recipe>('recipe-save', { repo, recipe }),
-  onboardingWorkers: async (repo: string): Promise<ApiResult<Array<{ id: string; label: string; status: 'ready' | 'sign_in' | 'missing'; checks: Array<{ name: string; ok: boolean; detail: string }> }>>> => readJson(await fetch(`${API_PREFIX}/onboarding-workers?${query({ repo })}`)),
+  onboardingWorkers: async (repo: string): Promise<ApiResult<Array<{ id: string; label: string; status: WelcomeWorkerStatus; checks: Array<{ name: string; ok: boolean; detail: string }> }>>> => readJson(await fetch(`${API_PREFIX}/onboarding-workers?${query({ repo })}`)),
   specFiles: async (repo: string): Promise<ApiResult<string[]>> => readJson(await fetch(`${API_PREFIX}/spec-files?${query({ repo })}`)),
   /** Starts a background draft job and answers at once; the job then shows up in planDraftJobs. */
   draftFrom: (repo: string, file: string) => post<{ job: DraftJobSummary }>('plan-draft-from', { repo, file }),
@@ -75,6 +78,8 @@ export const api = {
   saveWorkers: (repo: string, routing: Routing) => post<null>('workers-save', { repo, routing }),
   /** A new run in the same worktree, carrying the previous run's context (host route `POST /relaunch`). */
   relaunch: (repo: string, task: string, opts: { agent?: string; note?: string; fromStep?: string }) => post<{ runId: string }>('relaunch', { repo, task, ...opts }),
+  /** «Continue» a run that ended unfinished: a relaunch with the direction to finish and report (host route `POST /continue`). */
+  continueRun: (repo: string, task: string) => post<{ runId: string }>('continue', { repo, task }),
   steer: (repo: string, task: string, message: string) => post('steer', { repo, task, message }),
   stop: (repo: string, task: string) => post('stop', { repo, task }),
   accept: (repo: string, task: string) => post<AcceptResult>('accept', { repo, task }),
@@ -86,6 +91,7 @@ export const api = {
   worktreePolicy: (repo: string, policy: WorktreePolicy) => post<WorktreePolicyResult>('worktree-policy', { repo, policy }),
   acceptBatch: (repo: string, tasks: string[]) => post<{ accepted: string[] }>('accept-batch', { repo, tasks }),
   reject: (repo: string, task: string, reason: string) => post('reject', { repo, task, reason }),
+  drop: (repo: string, task: string, reason: string) => post('drop', { repo, task, reason }),
   positions: (repo: string, planId: string, expectedRev: number, positions: Array<{ task: string; pos: { x: number; y: number } | null }>) =>
     post<null>('pos', { repo, planId, expectedRev, positions }),
   /** “Start a plan” in a workspace without one — the same init `orch init` does; the answer is the fresh repo snapshot. */

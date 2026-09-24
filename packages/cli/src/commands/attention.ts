@@ -17,7 +17,7 @@ import {
 import { homeOf, makeBackends, repoRoot } from '../context.js'
 import { cliT } from '../i18n.js'
 import { type Io, UserError } from '../io.js'
-import { syncPlan } from './runs.js'
+import { failureText, syncPlan } from './runs.js'
 
 type Named = NeedsYouRepo & { name: string }
 
@@ -50,7 +50,7 @@ async function knownRepos(io: Io, exec: Exec): Promise<Named[]> {
   )
 }
 
-const ORDER: NeedsYouKind[] = ['review', 'decision', 'attention', 'plan']
+const ORDER: NeedsYouKind[] = ['review', 'decision', 'unmerged', 'attention', 'plan']
 
 function line(io: Io, item: NeedsYouItem, repo: string | undefined): string {
   const lang = io.lang ?? 'en'
@@ -61,14 +61,17 @@ function line(io: Io, item: NeedsYouItem, repo: string | undefined): string {
     return `  ${where}${item.planId}: ${item.title} — ${[waiting, alarm].filter(Boolean).join(' · ')} (--plan ${item.planId})\n`
   }
   if (item.kind === 'attention') return `  ${where}${item.taskId}: ${alarm}\n`
+  if (item.kind === 'unmerged') return `  ${where}${item.taskId}: ${item.title}${item.hint ? ` → ${item.hint}` : ''}\n`
   const checked = item.kind === 'review' ? ` · ${cliT(lang, item.checked ? 'attention.checked' : 'attention.unchecked')}` : ''
   return `  ${where}${item.taskId}: ${item.title}${checked}\n`
 }
 
 /**
  * What waits on a person — the screen's «Needs you», from the same core function: reviews (and
- * whether the orchestrator checked them), decisions, failed or stalled runs, other plans that wait.
- * `--alarms` keeps the old run-alarm list; `--all` covers every repository the screen knows.
+ * whether the orchestrator checked them), decisions, accepted work not merged yet (with the merge command), failed or
+ * stalled runs, other plans that wait.
+ * `--alarms` keeps the old run-alarm list; `--all` covers every repository the screen knows, without
+ * the example (ex1).
  */
 export async function cmdAttention(argv: string[], io: Io, exec: Exec): Promise<number> {
   const { values } = parseArgs({ args: argv, options: { json: { type: 'boolean' }, plan: { type: 'string' }, all: { type: 'boolean' }, alarms: { type: 'boolean' } } })
@@ -84,12 +87,14 @@ export async function cmdAttention(argv: string[], io: Io, exec: Exec): Promise<
       return 0
     }
     if (alarms.length === 0) io.out(`${cliT(lang, 'runs.quiet')}\n`)
-    for (const a of alarms) io.out(`${a.severity === 'alert' ? '⚠' : '•'} ${a.taskId}: ${a.message}${a.hint ? ` → ${a.hint}` : ''}\n`)
+    for (const a of alarms) io.out(`${a.severity === 'alert' ? '⚠' : '•'} ${a.taskId}: ${a.reason ? failureText(lang, a.reason) : a.message}${a.hint ? ` → ${a.hint}` : ''}\n`)
     return 0
   }
   if (values.all && values.plan) throw new UserError(cliT(lang, 'attention.planAll'))
   const repos = values.all ? await knownRepos(io, exec) : await currentRepo(io, exec, values.plan)
-  const items = needsYou(repos)
+  // Example rows only for the repository asked about, when its open plan is the example; `--all` has none.
+  const open = values.all ? undefined : repos[0]
+  const items = needsYou(repos, open && { root: open.root, planId: open.planId })
   if (values.json) {
     io.out(`${JSON.stringify(items, null, 2)}\n`)
     return 0

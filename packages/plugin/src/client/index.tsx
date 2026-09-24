@@ -11,11 +11,23 @@ import * as sharedStore from './store.js'
 import * as sharedLayout from './layout.js'
 import * as sharedStyles from './styles.js'
 import * as sharedAttention from './attention.js'
+import * as sharedApi from './api.js'
+import * as sharedGraphView from './views/graph/graph-view.js'
 import { bindLocale } from './i18n.js'
 
 declare const require: (id: string) => unknown
 const shellRequire = require
-;(globalThis as any).__orchScreenRequire = (id: string) => id === '__orchShared/i18n' ? sharedI18n : id === '__orchShared/store' ? sharedStore : id === '__orchShared/layout' ? sharedLayout : id === '__orchShared/styles' ? sharedStyles : id === '__orchShared/attention' ? sharedAttention : shellRequire(id)
+// The screen bundles take these from the main client instead of carrying a copy (scripts/build.mjs).
+const shared: Record<string, unknown> = {
+  '__orchShared/i18n': sharedI18n,
+  '__orchShared/store': sharedStore,
+  '__orchShared/layout': sharedLayout,
+  '__orchShared/styles': sharedStyles,
+  '__orchShared/attention': sharedAttention,
+  '__orchShared/api': sharedApi,
+  '__orchShared/graph-view': sharedGraphView,
+}
+;(globalThis as any).__orchScreenRequire = (id: string) => shared[id] ?? shellRequire(id)
 import { orchestraStore } from './store.js'
 
 export const name = `${PANEL_ID}/client`

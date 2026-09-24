@@ -1,4 +1,4 @@
-import { cliT } from '../i18n.js'
+import { type Lang, cliT } from '../i18n.js'
 import { resolve } from 'node:path'
 import { watch } from 'node:fs'
 import { dirname, basename } from 'node:path'
@@ -11,6 +11,7 @@ import {
   type RunStateMap,
   callerOf,
   claudeProjectsDir,
+  continueTask,
   launchTask,
   loadPlan,
   PlanIncompatibleError,
@@ -23,6 +24,7 @@ import {
   syncPlan as syncPlanCore,
   usageForRun,
   listSteers,
+  type NormEvent,
 } from '@crewboard/core'
 import { type Backends, homeOf, makeBackends, repoRoot } from '../context.js'
 import { type Io, UserError } from '../io.js'
@@ -35,8 +37,12 @@ export function syncPlan(root: string, io: Io, backends: Backends, planId?: stri
  * `check` events are the orchestrator's check (vr1): their statuses are check states — pending, checking,
  * checked — or `returned` when the check sent the work back to the worker.
  */
-type WaitEvent = { kind: 'decision' | 'finished' | 'check'; taskId: string; oldStatus: string; newStatus: string; title: string; check?: string; note?: string }
-type WaitView = { status: string; title: string; check?: string; note?: string }
+type WaitEvent = { kind: 'decision' | 'finished' | 'check'; taskId: string; oldStatus: string; newStatus: string; title: string; check?: string; note?: string; outcome?: 'incomplete'; already?: true }
+/**
+ * `outcome: incomplete` (bg1): the run ended without handing its work in — `crewboard continue <id>`, not a check.
+ * `ran`: the task's last run has ended (whatever its outcome).
+ */
+type WaitView = { status: string; title: string; check?: string; note?: string; outcome?: 'incomplete'; ran?: boolean }
 
 /** One task's transition between two polls, or none. */
 export function waitEvent(taskId: string, old: WaitView, now: WaitView): WaitEvent | undefined {
@@ -46,11 +52,28 @@ export function waitEvent(taskId: string, old: WaitView, now: WaitView): WaitEve
     return { kind: 'check', ...base, oldStatus: old.check ?? 'in_review', newStatus: now.check, ...(now.note && now.check === 'checked' ? { note: now.note } : {}) }
   }
   if (DECISIONS.has(now.status)) return { kind: 'decision', ...base, oldStatus: old.status, newStatus: now.status }
-  if (old.status === 'running') return { kind: 'finished', ...base, oldStatus: old.status, newStatus: now.status, ...(now.check ? { check: now.check } : {}) }
+  if (old.status === 'running') return { kind: 'finished', ...base, oldStatus: old.status, newStatus: now.status, ...(now.check ? { check: now.check } : {}), ...(now.outcome ? { outcome: now.outcome } : {}) }
   if (old.status === 'in_review' && old.check && now.status === 'running') return { kind: 'check', ...base, oldStatus: old.check, newStatus: 'returned' }
   return undefined
 }
-const DECISIONS = new Set(['accepted', 'rejected', 'superseded'])
+const DECISIONS = new Set(['accepted', 'rejected', 'superseded', 'dropped'])
+/** A task a person has closed: nothing it is waited for can happen to it any more. */
+const CLOSED = new Set(['accepted', 'closed', 'superseded', 'dropped'])
+
+/**
+ * The state a wait of `type` looks for, if the task is in it already (B09): a finished run, a check step done,
+ * a decision taken. A closed task counts for every type — waiting on it would only run into the timeout.
+ */
+export function alreadyThere(taskId: string, view: WaitView, type: string): WaitEvent | undefined {
+  const base = { taskId, title: view.title, oldStatus: view.status, newStatus: view.status, already: true as const }
+  if (CLOSED.has(view.status)) return { kind: 'decision', ...base }
+  if ((type === 'any' || type === 'check') && view.status === 'in_review' && view.check === 'checked') return { kind: 'check', ...base, newStatus: 'checked', ...(view.note ? { note: view.note } : {}) }
+  if ((type === 'any' || type === 'finished') && view.status !== 'running' && (view.status === 'in_review' || view.ran)) return { kind: 'finished', ...base, ...(view.check ? { check: view.check } : {}), ...(view.outcome ? { outcome: view.outcome } : {}) }
+  return undefined
+}
+
+/** Without `--timeout` a wait ends after 30 minutes (exit 2): an agent in the background never hangs for good. */
+export const DEFAULT_WAIT_TIMEOUT_MS = 30 * 60_000
 
 /**
  * A duration as agents and people actually type it: a bare number is seconds, and `ms`, `s`, `m`,
@@ -71,7 +94,7 @@ export async function cmdWait(argv: string[], io: Io, exec: Exec): Promise<numbe
   // that: an agent reading 2 would carry on as if the watch had run. Bad options are an error, 1.
   if (!['any', 'decision', 'finished', 'check'].includes(type)) throw new UserError(cliT(lang, 'wait.badFor'), 1)
   const interval = values.interval === undefined ? 15_000 : parseDuration(values.interval)
-  const timeout = values.timeout === undefined ? Infinity : parseDuration(values.timeout)
+  const timeout = values.timeout === undefined ? DEFAULT_WAIT_TIMEOUT_MS : parseDuration(values.timeout)
   if (interval === undefined || interval <= 0 || timeout === undefined || timeout < 0) throw new UserError(cliT(lang, 'wait.badTime'), 1)
   const root = await repoRoot(io, exec)
   const id = values.plan ?? currentPlanId(root)
@@ -80,9 +103,19 @@ export async function cmdWait(argv: string[], io: Io, exec: Exec): Promise<numbe
   const selected = values.tasks ? new Set(values.tasks.split(',').map((s) => s.trim()).filter(Boolean)) : undefined
   const snapshot = async () => {
     const { plan, states } = await syncPlan(root, io, backends, id)
-    return new Map<string, WaitView>(deriveViews(plan, states).filter((v) => !selected || selected.has(v.task.id)).map((v) => [v.task.id, { status: v.status, title: v.task.title, ...(v.check ? { check: v.check, ...(v.task.check?.note ? { note: v.task.check.note } : {}) } : {}) }]))
+    return new Map<string, WaitView>(deriveViews(plan, states).filter((v) => !selected || selected.has(v.task.id)).map((v) => [v.task.id, { status: v.status, title: v.task.title, ...(v.check ? { check: v.check, ...(v.task.check?.note ? { note: v.task.check.note } : {}) } : {}), ...(v.status !== 'running' && v.lastOutcome === 'incomplete' ? { outcome: 'incomplete' as const } : {}), ...(v.lastOutcome ? { ran: true } : {}) }]))
+  }
+  const print = (events: WaitEvent[]) => {
+    if (values.json) io.out(`${JSON.stringify(events)}\n`)
+    else for (const e of events) io.out(`${e.kind} ${e.taskId} ${e.already ? e.newStatus : `${e.oldStatus} → ${e.newStatus}`}${e.check ? ` (${e.check})` : ''}${e.outcome ? ` (${e.outcome})` : ''}${e.already ? ` (${cliT(lang, 'wait.already')})` : ''} ${e.title}${e.note ? ` — ${e.note}` : ''}\n`)
   }
   let previous = await snapshot()
+  // B09: named tasks that are all where the wait looks already answer at once — a fast worker may finish
+  // before the wait starts. Otherwise the wait catches the next change, as without --tasks.
+  if (selected) {
+    const there = [...previous].map(([taskId, view]) => alreadyThere(taskId, view, type)).filter((e): e is WaitEvent => !!e)
+    if (there.length > 0 && there.length === previous.size && previous.size === selected.size) { print(there); return 0 }
+  }
   let wake: (() => void) | undefined
   const notify = () => { wake?.() }
   const watcher = watch(dirname(planPath(root, id)), (_event, file) => { if (!file || String(file) === basename(planPath(root, id))) notify() })
@@ -121,16 +154,18 @@ export async function cmdWait(argv: string[], io: Io, exec: Exec): Promise<numbe
         if (event && (type === 'any' || type === event.kind)) events.push(event)
       }
       previous = current
-      if (events.length) {
-        if (values.json) io.out(`${JSON.stringify(events)}\n`)
-        else for (const e of events) io.out(`${e.kind} ${e.taskId} ${e.oldStatus} → ${e.newStatus}${e.check ? ` (${e.check})` : ''} ${e.title}${e.note ? ` — ${e.note}` : ''}\n`)
-        return 0
-      }
+      if (events.length) { print(events); return 0 }
     }
   } finally { watcher.close() }
 }
 
 const hhmm = (iso: string) => new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+/** A failure the runner named (B01, B19), in the reader's language; the core text is its fallback. */
+export function failureText(lang: Lang, reason: NonNullable<NormEvent['reason']>): string {
+  if (reason.code === 'rate_limited') return reason.resetsAt ? cliT(lang, 'failure.rateLimited', { time: hhmm(reason.resetsAt) }) : cliT(lang, 'failure.rateLimitedNoTime')
+  if (reason.workerPid === undefined) return cliT(lang, 'failure.interrupted')
+  return reason.workerStopped ? cliT(lang, 'failure.interruptedStopped', { pid: reason.workerPid }) : cliT(lang, 'failure.interruptedGone', { pid: reason.workerPid })
+}
 const KIND_ICON = { action: '▶', file: '✎', message: '“', steer: '↻', problem: '⚠', final: '■' } as const
 
 function lastRunOf(plan: Plan, id: string, io: Io) {
@@ -145,7 +180,7 @@ export async function cmdRun(argv: string[], io: Io, exec: Exec): Promise<number
   const [id, ...rest] = argv
   const { values } = parseArgs({
     args: rest,
-    options: { agent: { type: 'string', short: 'a' }, scope: { type: 'string' }, contract: { type: 'string' }, 'skip-preflight': { type: 'boolean' }, plan: { type: 'string' } },
+    options: { agent: { type: 'string', short: 'a' }, scope: { type: 'string' }, contract: { type: 'string' }, 'skip-preflight': { type: 'boolean' }, 'allow-unmerged': { type: 'boolean' }, plan: { type: 'string' } },
   })
   if (!id) throw new UserError(cliT(io.lang ?? 'en', 'runs.usageRun'), 2)
   const root = await repoRoot(io, exec)
@@ -158,6 +193,8 @@ export async function cmdRun(argv: string[], io: Io, exec: Exec): Promise<number
     contract: values.contract,
     scope: values.scope,
     skipPreflight: values['skip-preflight'],
+    // Honoured for a person only (an interactive terminal); an agent's flag is refused like no flag (w1d).
+    allowUnmerged: values['allow-unmerged'],
     backends: makeBackends(io, exec, root),
     exec,
     env: io.env,
@@ -177,13 +214,16 @@ export async function cmdEvents(argv: string[], io: Io, exec: Exec): Promise<num
   const backends = makeBackends(io, exec, root)
   const { run } = lastRunOf(await loadPlan(root, values.plan), id, io)
   const backend = await backends.forAgent(run.agent, run.runId)
-  const feed = normalize(await backend.events(run.runId))
+  const raw = await backend.events(run.runId)
+  const feed = normalize(raw)
+  // The worker's own warnings are part of what happened (B12): «no meaningful events» must not hide them.
+  for (const e of raw) if (e.type === 'warning' && typeof e.data === 'string' && e.data) feed.push({ ts: e.ts, kind: 'problem', text: e.data })
   for (const steer of await listSteers(resolve(root, '.orchestration', 'runs', run.runId))) {
     for (const [state, at] of Object.entries(steer.timestamps)) if (at) feed.push({ ts: at, kind: 'steer', text: `${steer.id} ${cliT(io.lang ?? 'en', `runs.steerState.${state}`)}${steer.reason ? ` (${cliT(io.lang ?? 'en', `runs.steerReason.${steer.reason}`)})` : ''}: ${steer.preview}` })
   }
   feed.sort((a, b) => a.ts.localeCompare(b.ts))
   if (feed.length === 0) io.out(`${cliT(io.lang ?? 'en', 'runs.noEvents')}\n`)
-  for (const e of feed) io.out(`${hhmm(e.ts)}  ${KIND_ICON[e.kind]} ${e.text}\n`)
+  for (const e of feed) io.out(`${hhmm(e.ts)}  ${KIND_ICON[e.kind]} ${e.reason ? failureText(io.lang ?? 'en', e.reason) : e.text}\n`)
   return 0
 }
 
@@ -224,6 +264,17 @@ export async function cmdSteer(argv: string[], io: Io, exec: Exec): Promise<numb
   return 0
 }
 
+/** `continue <id>`: a run that ended unfinished (bg1) goes on in the same worktree with the direction to finish and report. */
+export async function cmdContinue(argv: string[], io: Io, exec: Exec): Promise<number> {
+  const [id, ...rest] = argv
+  const { values } = parseArgs({ args: rest, options: { 'skip-preflight': { type: 'boolean' }, plan: { type: 'string' } } })
+  if (!id) throw new UserError(cliT(io.lang ?? 'en', 'runs.usageContinue'), 2)
+  const root = await repoRoot(io, exec)
+  const launched = await continueTask({ root, taskId: id, planId: values.plan, caller: callerOf({ kind: 'cli', isTTY: io.isTTY }), skipPreflight: values['skip-preflight'], backends: makeBackends(io, exec, root), exec, env: io.env, home: homeOf(io), now: () => io.now(), lang: io.lang })
+  io.out(cliT(io.lang ?? 'en', 'runs.continued', { id, runId: launched.runId }))
+  return 0
+}
+
 export async function cmdStop(argv: string[], io: Io, exec: Exec): Promise<number> {
   const [id, ...rest] = argv
   const { values } = parseArgs({ args: rest, options: { plan: { type: 'string' } } })
@@ -250,13 +301,16 @@ export async function cmdCost(argv: string[], io: Io, exec: Exec): Promise<numbe
     }
   }
   const totals = summarizeCosts(runs)
+  if (!values.json && runs.length === 0) { io.out(cliT(io.lang ?? 'en', 'runs.noRunsInPlan', { plan: values.plan ?? currentPlanId(root) })); return 0 }
   if (values.json) {
     io.out(`${JSON.stringify({ runs, totals }, null, 2)}\n`)
     return 0
   }
   const k = (n: number) => `${(n / 1000).toFixed(1)}k`
   for (const [agent, t] of Object.entries(totals)) {
-    const parts = [cliT(io.lang ?? 'en', 'runs.runs', { count: t.runs }), `${Math.round(t.durationSec / 60)} ${cliT(io.lang ?? 'en', 'runs.minutes')}`, t.usd !== undefined ? `$${t.usd}` : cliT(io.lang ?? 'en', 'runs.noMoney')]
+    // B08: money charged and an API-rate estimate are separate units, never one sum.
+    const money = [t.cashUsd !== undefined ? cliT(io.lang ?? 'en', 'runs.cash', { usd: `$${t.cashUsd}` }) : undefined, t.apiEquivalentUsd !== undefined ? cliT(io.lang ?? 'en', 'runs.estimate', { usd: `$${t.apiEquivalentUsd}` }) : undefined].filter((part): part is string => !!part)
+    const parts = [cliT(io.lang ?? 'en', 'runs.runs', { count: t.runs }), `${Math.round(t.durationSec / 60)} ${cliT(io.lang ?? 'en', 'runs.minutes')}`, ...(money.length ? money : [cliT(io.lang ?? 'en', 'runs.noMoney')])]
     if (t.tokens) parts.push(cliT(io.lang ?? 'en', 'runs.tokens', { input: k(t.tokens.input), output: k(t.tokens.output), cache: k(t.tokens.cacheRead) }))
     if (t.quotaDeltaPct !== undefined) parts.push(cliT(io.lang ?? 'en', 'runs.quota', { percent: t.quotaDeltaPct }))
     if (t.pendingRuns) parts.push(cliT(io.lang ?? 'en', 'runs.pending', { count: t.pendingRuns }))

@@ -13,7 +13,7 @@ export async function gatherAttention(plan: Plan, states: RunStateMap, backends:
   if (plan.example) return []
   const out: Attention[] = []
   for (const task of plan.tasks) {
-    if (task.status === 'accepted' || task.status === 'rejected' || task.status === 'superseded') continue
+    if (task.status === 'accepted' || task.status === 'rejected' || task.status === 'superseded' || task.status === 'dropped') continue
     const run = task.runs.at(-1)
     if (!run) continue
     const state = run.finishedAt ? stateOfFinished(run) : states[run.runId]
@@ -21,7 +21,7 @@ export async function gatherAttention(plan: Plan, states: RunStateMap, backends:
     const backend = await backends.forAgent(run.agent, run.runId)
     const events = normalize(await backend.events(run.runId))
     const steersAt = task.notes.filter((n) => n.type === 'steer' && Date.parse(n.at) >= Date.parse(run.startedAt)).map((n) => n.at)
-    out.push(...evaluateRun({ taskId: task.id, runId: run.runId, agent: run.agent, startedAt: run.startedAt, state, events, steersAt }, now))
+    out.push(...evaluateRun({ taskId: task.id, runId: run.runId, agent: run.agent, startedAt: run.startedAt, state, events, steersAt, ...(run.incomplete ? { incomplete: run.incomplete } : {}) }, now))
   }
   return out
 }

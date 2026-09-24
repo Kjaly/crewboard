@@ -24,6 +24,7 @@ import type { ReviewDetail } from './views/review-detail.js'
 import type { ViewProps } from './views/types.js'
 import type { MenuRequest } from './task-menu.js'
 import { formatRoute, parseRoute } from './route.js'
+import { WorkerSettingsBanner } from './worker-settings-banner.js'
 
 const VIEWS: Array<{ key: ViewKind; label: string }> = [
   { key: 'graph', label: 'panel.app.graph' },
@@ -56,7 +57,7 @@ function readPlansOpen(): boolean {
 export function App() {
   useLang()
   ensureStyles()
-  const { snapshot, connection, repo, selectedId, select, view, setView, density, toggleDensity, lens, setLens, queueOpen, setQueueOpen, routeRequest } = useOrchestra()
+  const { snapshot, connection, repo, selectedId, select, view, setView, density, toggleDensity, lens, setLens, queueOpen, setQueueOpen, routeRequest, stalled, resetScreenState, lane, focusLane, laneInView, setLaneInView } = useOrchestra()
   const [walk, setWalk] = useState<{ id: string; seq: number } | null>(null)
   const [menu, setMenu] = useState<MenuRequest | null>(null)
   const [multiIds, setMultiIds] = useState<string[]>([])
@@ -273,10 +274,22 @@ export function App() {
   }, [tourStep])
   const selected = repo?.tasks.find((t) => t.id === selectedId)
 
+  if (!snapshot && stalled) {
+    return (
+      <div className="orc-root">
+        <div className="orc-broken" role="alert">
+          <p>{t('panel.app.stalled')}</p>
+          <p>{t('panel.app.stalledHint')}</p>
+          <button type="button" className="orc-chip" onClick={resetScreenState}>{t('panel.app.resetState')}</button>
+        </div>
+      </div>
+    )
+  }
   if (!snapshot) return <div className="orc-root"><p className="orc-empty">{t('panel.app.loading')}</p></div>
   if (!repo) {
     return (
       <div className="orc-root">
+        <WorkerSettingsBanner issue={snapshot.workerSettings} onOpenSettings={() => setSettingsOpen(true)} />
         <Welcome onPreset={() => {}} onExample={() => {}} onDraft={() => {}} onWorkers={() => setSettingsOpen(true)} />
       </div>
     )
@@ -304,7 +317,7 @@ export function App() {
     setQueueOpen(false)
     if (changes) { setPanelTab((old) => ({ tab: 'changes', seq: (old?.seq ?? 0) + 1 })); orchestraStore.navigate({ task: id, tab: 'changes' }, 'replace') }
   }
-  const viewProps: ViewProps = { repo, workers: snapshot.workers, selectedId, onSelect: pick, density, lens, setLens, walk, lensStep: stepLens, toggleDensity }
+  const viewProps: ViewProps = { repo, workers: snapshot.workers, selectedId, onSelect: pick, density, lens, setLens, walk, lensStep: stepLens, toggleDensity, lane, setLane: focusLane, onLaneInView: setLaneInView }
   const showTaskMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
     const origin = (event.target as HTMLElement).closest<HTMLElement>('[data-task-id]')
     const taskId = origin?.dataset.taskId
@@ -362,8 +375,9 @@ export function App() {
   return (
     /* biome-ignore lint/a11y/noStaticElementInteractions: The root delegates context menu and keyboard events to its child controls. */
     <div className={`orc-root${plansOpen ? ' orc-root--rail-open' : ' orc-root--rail-shut'}`} onContextMenu={showTaskMenu} onClickCapture={multiSelect} onKeyDown={showKeyboardMenu}>
-      <RepoSidebar snapshot={snapshot} repo={repo} open={plansOpen} onToggle={togglePlans} drafts={drafts} draftJobs={draftJobs} selectedDraft={draftId} onDraft={(id) => { setDraftId(id); select(null); setQueueOpen(false); setTrace(null); orchestraStore.navigate({ draft: id, task: undefined, tab: undefined, run: undefined }) }} onPlan={() => { setDraftId(null); orchestraStore.navigate({ draft: undefined }) }} />
+      <RepoSidebar snapshot={snapshot} repo={repo} open={plansOpen} onToggle={togglePlans} lanes={{ highlight: view === 'graph' ? laneInView : lane?.lane ?? null, onPick: focusLane, link: orchestraStore.laneLink }} drafts={drafts} draftJobs={draftJobs} selectedDraft={draftId} onDraft={(id) => { setDraftId(id); select(null); setQueueOpen(false); setTrace(null); orchestraStore.navigate({ draft: id, task: undefined, tab: undefined, run: undefined }) }} onPlan={() => { setDraftId(null); orchestraStore.navigate({ draft: undefined }) }} />
       <div className="orc-main">
+        <WorkerSettingsBanner issue={snapshot.workerSettings} onOpenSettings={() => { setSettingsOpen(true); orchestraStore.navigate({ view: 'settings' }) }} />
         <header className="orc-top">
           {/* The breadcrumb replaces the repository <select>: where you are, repo / plan. */}
           <span className="orc-crumb">

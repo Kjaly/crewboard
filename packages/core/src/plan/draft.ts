@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import * as z from '../util/zod.js'
 import { findCycle } from './graph.js'
 import { PLAN_ID, CREWBOARD_DIR, planPath, savePlan } from './store.js'
+import { setCurrentPlan } from './plans.js'
 import { TASK_CLASSES, TASK_KINDS, emptyPlan, newTask, type Plan } from './schema.js'
 
 const slug = z.string().check(z.regex(PLAN_ID))
@@ -78,11 +79,7 @@ const atomic = async (path: string, value: string) => {
   const tmp = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`
   try { await writeFile(tmp, value); await rename(tmp, path) } finally { await rm(tmp, { force: true }) }
 }
-/** The exact shape a worker or the chat agent must produce, generated from the zod schema so the two never drift. */
-export const PLAN_DRAFT_JSON_SCHEMA: Record<string, unknown> = (() => {
-  const { $schema: _drop, ...schema } = z.toJSONSchema(PlanDraftSchema, { io: 'input', unrepresentable: 'any' }) as Record<string, unknown>
-  return schema
-})()
+export { PLAN_DRAFT_JSON_SCHEMA } from './draft-json-schema.js'
 export const PLAN_DRAFT_EXAMPLE: PlanDraft = {
   id: 'greeting-cli', goal: 'Add a greeting command to the CLI', source: 'chat', lanes: ['core', 'docs'],
   tasks: [
@@ -145,5 +142,7 @@ export async function approveDraft(root: string, id: string, now: Date): Promise
   for (const [i, path] of paths.entries()) await atomic(path, draft.tasks[i]!.contract)
   const saved = await savePlan(root, plan, -1, now, id)
   await rm(draftPath(root, id))
+  // The approved plan is the one the next command works on, as after `plan new` (B22, ux7 F-21).
+  await setCurrentPlan(root, id)
   return saved
 }

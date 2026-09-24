@@ -4,7 +4,7 @@ import { lensIds, lensTasks } from '../lens.js'
 import { t, useLang } from '../i18n.js'
 import { decideFolds, foldGraph, readManualFolds, taskCount, writeManualFold } from '../fold.js'
 import { taskTone } from '../styles.js'
-import { identityLabel, runFact, workerIdentity } from '../provider.js'
+import { identityLabel, runFact, taskIdentity } from '../provider.js'
 import { taskEssence } from '../summary.js'
 import { AcceptBatch, acceptableTasks } from './accept-batch.js'
 import { laneOf, laneTitle } from './graph/layout.js'
@@ -48,9 +48,9 @@ export function TaskCard({
   workers?: readonly WorkerInfo[]
 }) {
   const tone = taskTone(task)
-  const identity = workerIdentity(task.worker, workers)
+  const identity = taskIdentity(task, workers)
   const alert = attention.find((a) => a.severity === 'alert') ?? attention[0]
-  const meta = alert ? alert.message : task.kind === 'decision' || task.status === 'blocked'
+  const meta = alert ? alert.message : task.kind === 'decision' || task.kind === 'root' || task.status === 'blocked'
     ? taskEssence(task, now) : [task.returned ? t('welcome.returned') : tone.label, runFact(task, now)].join(' · ')
   const dim = task.status === 'blocked' || task.status === 'backlog'
   return (
@@ -155,8 +155,7 @@ export function BoardView({ repo, workers, selectedId, onSelect, density, lens =
   const now = new Date()
   const [manual, setManual] = useState<Record<string, boolean>>(() => readManualFolds(repo))
   useEffect(() => setManual(readManualFolds(repo)), [repo])
-  // biome-ignore lint/correctness/useExhaustiveDependencies: The selected identity and request keys intentionally control this hook’s refresh cadence.
-  const decision = useMemo(() => decideFolds(repo, manual, now), [repo, manual])
+  const decision = useMemo(() => decideFolds(repo, manual), [repo, manual])
   // biome-ignore lint/correctness/useExhaustiveDependencies: Locale changes intentionally refresh the translated result.
   const graph = useMemo(() => foldGraph(repo, decision), [repo, decision, lang])
   const toggleFold = (lane: string) => {
@@ -168,11 +167,11 @@ export function BoardView({ repo, workers, selectedId, onSelect, density, lens =
   const visible = new Set(graph.nodes.filter((n) => n.task).map((n) => n.id))
   const needAttention = repo.tasks.filter((t) => visible.has(t.id) && attention.has(t.id))
   const rest = repo.tasks.filter((t) => visible.has(t.id) && !attention.has(t.id))
-  const accepted = rest.filter((t) => t.status === 'accepted' || t.status === 'superseded')
+  const accepted = rest.filter((t) => t.status === 'accepted' || t.status === 'superseded' || t.status === 'dropped')
   const summariesFor = (key: ViewStatus | 'accepted') => graph.nodes.filter((n) => {
     if (n.task) return false
     const first = repo.tasks.find((t) => laneOf(t) === n.lane)
-    return first && (first.status === 'superseded' ? 'accepted' : first.status) === key
+    return first && (first.status === 'superseded' || first.status === 'dropped' ? 'accepted' : first.status) === key
   }).map((n) => <li key={n.id}><button type="button" className="orc-card orc-card--lane" aria-label={t('board.expandLane', { lane: laneTitle(n.lane) })} onClick={() => toggleFold(n.lane)}><strong>{laneTitle(n.lane) || t('board.unnamedLane')} · {taskCount(n.count ?? 0)}</strong><span className="orc-meta">{n.summary}</span></button></li>)
 
   // A lens on the board: nothing leaves its column, the non-matching cards just step back to 45 %.
@@ -211,7 +210,7 @@ export function BoardView({ repo, workers, selectedId, onSelect, density, lens =
         if (tasks.length === 0 && summaries.length === 0 && !always && !action) return null
         return <Column key={key} title={title} tasks={tasks} total={repo.tasks.filter((t) => t.status === key && !attention.has(t.id)).length} summaries={summaries} action={action} muted={key === 'backlog'} {...shared} />
       })}
-      <Column title={t('board.accepted')} tasks={accepted} total={repo.tasks.filter((t) => (t.status === 'accepted' || t.status === 'superseded') && !attention.has(t.id)).length} cap={ACCEPTED_SHOWN} muted summaries={summariesFor('accepted')} {...shared} />
+      <Column title={t('board.accepted')} tasks={accepted} total={repo.tasks.filter((t) => (t.status === 'accepted' || t.status === 'superseded' || t.status === 'dropped') && !attention.has(t.id)).length} cap={ACCEPTED_SHOWN} muted summaries={summariesFor('accepted')} {...shared} />
     </div>
   )
 }

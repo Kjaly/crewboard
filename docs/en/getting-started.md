@@ -6,7 +6,7 @@ This guide takes one repository from an empty plan to a decision on the first re
 
 ## Before you start
 
-- Node.js 24 or newer, Git, and `npm install -g crewboard`.
+- Node.js 24 or newer, Git, and the `crewboard` CLI. It is not on npm yet: install it from source for now, as in [README: install](../../README.md#install).
 - At least one worker CLI, installed and signed in: Claude Code (`claude`), Codex (`codex`), Devin (`devin`), or dsh (`dsh`). See [workers](workers.md).
 - A Git repository with at least one commit. Crewboard creates task worktrees from it.
 
@@ -78,7 +78,7 @@ Without `-a`, Crewboard uses the task's own worker, or the first worker of the t
 ```sh
 crewboard events api       # the task's event feed
 crewboard trace api        # turns, model time, tool calls
-crewboard attention        # what waits on you: reviews, decisions, failed runs
+crewboard attention        # what waits on you: reviews, decisions, unmerged work, failed runs
 crewboard steer api --message "Keep the old route names"
 ```
 
@@ -100,11 +100,19 @@ crewboard reject api --reason "Route compatibility is not verified"
 crewboard supersede api --by api-v2
 ```
 
-Each command asks for confirmation and refuses to run without an interactive terminal, so an agent cannot accept its own work. After acceptance, the worktree is removed if your cleanup policy says so. [Review](review.md) describes the verdict and evidence.
+Each command asks for confirmation and refuses to run without an interactive terminal, so an agent cannot accept its own work. [Review](review.md) describes the verdict and evidence.
+
+Accepting does not change your base branch: the work is on the task's branch until you merge it, and tasks that depend on `api` wait for that. `crewboard accept` prints the commands; for example:
+
+```sh
+git merge --no-ff orch/api-extract-the-api   # in the main checkout, on the base branch
+```
+
+After the merge, the worktree is removed if your cleanup policy says so. [After acceptance: merge](review.md#after-acceptance-merge) covers uncommitted work and starting a dependent early.
 
 ## The screen
 
-With the [plugin](plugin-setup.md) installed, open **Orchestration** in the dsh sidebar; the entry also shows how many items wait for you. The screen shows the same plans as the CLI. Its settings are under **Crewboard** in dsh settings.
+With the [plugin](plugin-setup.md) installed, open **Orchestration** (the graph icon in dsh's left column); the entry also shows how many items wait for you. The screen shows the same plans as the CLI. Its settings are under **Crewboard** in dsh settings.
 
 ![Sidebar with two repositories; one shows a Needs you badge](../assets/sidebar-needs-you.png)
 

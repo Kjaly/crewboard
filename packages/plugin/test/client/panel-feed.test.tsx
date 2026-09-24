@@ -51,3 +51,19 @@ it('does not merge commands across a risk message or a human intervention', () =
     ['action', 1], ['message', 1], ['action', 1], ['steer', 1], ['action', 1],
   ])
 })
+
+it('V-B12/finished-no-events never says a finished run did nothing: it points to the run ledger', () => {
+  const run = { runId: 'r1', agent: 'claude/opus', startedAt: '2026-09-22T12:00:00Z' }
+  const { rerender } = render(<FeedTab detail={makeDetail({ id: 'a', runs: [{ ...run, finishedAt: '2026-09-22T12:30:00Z', outcome: 'completed' }], events: [] })} />)
+  expect(screen.getByText(/журнал запуска/)).toBeTruthy()
+  expect(screen.queryByText(/ничего не сделал/)).toBeNull()
+  rerender(<FeedTab detail={makeDetail({ id: 'a', runs: [run], events: [] })} />)
+  expect(screen.getByText(/ещё не сделал ни одного шага/)).toBeTruthy()
+})
+
+it('V-B01/feed-reason says a named failure in the reader\'s language', () => {
+  const events = [{ ts: '2026-09-22T12:00:00Z', kind: 'problem' as const, text: 'Лимит Claude исчерпан', reason: { code: 'rate_limited' as const, resetsAt: '2026-09-22T19:00:00' } }]
+  setLang('en')
+  render(<FeedTab detail={makeDetail({ id: 'a', events })} />)
+  expect(screen.getByText('Claude usage limit reached — resets at 19:00')).toBeTruthy()
+})

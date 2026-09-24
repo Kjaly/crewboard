@@ -21,7 +21,14 @@ async function setup(prompt: string, extra: Partial<RunnerArgs> = {}) {
 }
 const logOf = async (file: string) =>
   (await readFile(file, 'utf8')).trim().split('\n').map((l) => JSON.parse(l) as { type: string; text?: string; method?: string; params?: Record<string, unknown>; outcome?: unknown })
-const later = (ms: number, fn: () => Promise<unknown>) => new Promise((r) => setTimeout(() => void fn().then(r), ms))
+/** Acts once the first turn has started instead of at a fixed delay from the run start, which assumed a fast agent startup. */
+const whenTurnStarted = async (runDir: string, fn: () => Promise<unknown>) => {
+  for (let i = 0; i < 400; i++) {
+    if ((await readFile(join(runDir, 'events.jsonl'), 'utf8').catch(() => '')).includes('"turn_started"')) break
+    await new Promise((r) => setTimeout(r, 25))
+  }
+  return fn()
+}
 
 describe('runDshRun', () => {
   it('completes a run and writes state and events', async () => {
@@ -38,7 +45,7 @@ describe('runDshRun', () => {
   it('records turns, paired tool calls and context usage', async () => {
     const { runDir, args } = await setup('SLOW task')
     await mkdir(join(runDir, 'mailbox'), { recursive: true })
-    await Promise.all([runDshRun(args), later(400, async () => { await writeSteer(runDir, { id: '11111111-1111-4111-8111-111111111111', createdAt: new Date().toISOString(), mode: 'auto', preview: 'Change of plan', file: args.promptFile, state: 'queued', timestamps: { queued: new Date().toISOString() } }); await writeFile(join(runDir, 'mailbox', steerMailName('11111111-1111-4111-8111-111111111111')), 'Change of plan') })])
+    await Promise.all([runDshRun(args), whenTurnStarted(runDir, async () => { await writeSteer(runDir, { id: '11111111-1111-4111-8111-111111111111', createdAt: new Date().toISOString(), mode: 'auto', preview: 'Change of plan', file: args.promptFile, state: 'queued', timestamps: { queued: new Date().toISOString() } }); await writeFile(join(runDir, 'mailbox', steerMailName('11111111-1111-4111-8111-111111111111')), 'Change of plan') })])
     const raw = await readRunEvents(runDir)
     const types = raw.map((e) => e.type)
     expect(types.filter((t) => t === 'turn_started')).toHaveLength(2)
@@ -61,7 +68,7 @@ describe('runDshRun', () => {
   it('steers by interrupting the turn and continuing in the same session', async () => {
     const { runDir, log, args } = await setup('SLOW task')
     await mkdir(join(runDir, 'mailbox'), { recursive: true })
-    const [final] = await Promise.all([runDshRun(args), later(400, async () => { await writeSteer(runDir, { id: '11111111-1111-4111-8111-111111111111', createdAt: new Date().toISOString(), mode: 'auto', preview: 'Change of plan', file: args.promptFile, state: 'queued', timestamps: { queued: new Date().toISOString() } }); await writeFile(join(runDir, 'mailbox', steerMailName('11111111-1111-4111-8111-111111111111')), 'Change of plan') })])
+    const [final] = await Promise.all([runDshRun(args), whenTurnStarted(runDir, async () => { await writeSteer(runDir, { id: '11111111-1111-4111-8111-111111111111', createdAt: new Date().toISOString(), mode: 'auto', preview: 'Change of plan', file: args.promptFile, state: 'queued', timestamps: { queued: new Date().toISOString() } }); await writeFile(join(runDir, 'mailbox', steerMailName('11111111-1111-4111-8111-111111111111')), 'Change of plan') })])
     expect(final).toMatchObject({ status: 'completed', exitCode: 0 })
     const prompts = (await logOf(log)).filter((e) => e.type === 'prompt').map((e) => e.text)
     expect(prompts).toEqual(['SLOW task', 'Change of plan'])
@@ -74,7 +81,7 @@ describe('runDshRun', () => {
   it('cancels a running turn', async () => {
     const { runDir, log, args } = await setup('SLOW task')
     await mkdir(join(runDir, 'mailbox'), { recursive: true })
-    const [final] = await Promise.all([runDshRun(args), later(400, () => writeFile(join(runDir, 'mailbox', 'cancel'), ''))])
+    const [final] = await Promise.all([runDshRun(args), whenTurnStarted(runDir, () => writeFile(join(runDir, 'mailbox', 'cancel'), ''))])
     expect(final).toMatchObject({ status: 'cancelled', exitCode: 130 })
     expect((await logOf(log)).filter((e) => e.type === 'prompt')).toHaveLength(1)
   })

@@ -1,6 +1,7 @@
 import { cp, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Backend } from '../preflight/preflight.js'
+import { TASK_CLASSES, type TaskClass } from '../plan/schema.js'
 import { DEFAULT_ROUTING, type Routing } from './routing.js'
 import { PROFILE_ALIASES } from './identity.js'
 import { crewboardEnv } from '../env.js'
@@ -116,13 +117,14 @@ export async function loadProfileStore(env: NodeJS.ProcessEnv, home: string): Pr
   try {
     const raw = JSON.parse(await readFile(path, 'utf8')) as ProfileStore
     if (raw.version !== 1 || !isRecord(raw.profiles) || !isRecord(raw.aliases) || !isRecord(raw.routing)) throw new TypeError('Invalid Orchestra profile store')
-    return { ...raw, repos: repoPreferencesFrom(raw.repos), order: sidebarOrderFrom(raw.order) }
+    // A hand-edited routing missing a class falls back to that class's defaults (workerSettingsProblem names it).
+    return { ...raw, routing: routingFrom(raw.routing), repos: repoPreferencesFrom(raw.repos), order: sidebarOrderFrom(raw.order) }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
   try {
     const old = JSON.parse(await readFile(join(home, '.config', 'dsh-orchestra', 'profiles.json'), 'utf8')) as ProfileStore
-    if (old.version === 1 && isRecord(old.profiles) && isRecord(old.aliases) && isRecord(old.routing)) return { ...old, repos: repoPreferencesFrom(old.repos), order: sidebarOrderFrom(old.order) }
+    if (old.version === 1 && isRecord(old.profiles) && isRecord(old.aliases) && isRecord(old.routing)) return { ...old, routing: routingFrom(old.routing), repos: repoPreferencesFrom(old.repos), order: sidebarOrderFrom(old.order) }
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
   const existing = pending.get(path)
   if (existing) return existing
@@ -139,6 +141,28 @@ export async function loadProfileStore(env: NodeJS.ProcessEnv, home: string): Pr
   })()
   pending.set(path, operation)
   try { return await operation } finally { pending.delete(path) }
+}
+
+/**
+ * What is wrong with the saved worker settings, if anything: a file that cannot be read as a profile store,
+ * or routing classes that are missing or not a list of worker ids (those run on the defaults). The screen
+ * shows it as a banner instead of losing the repositories behind it (B07).
+ */
+export type WorkerSettingsProblem = { code: 'unreadable'; path: string; detail: string } | { code: 'incomplete'; path: string; classes: TaskClass[] }
+
+export async function workerSettingsProblem(env: NodeJS.ProcessEnv, home: string): Promise<WorkerSettingsProblem | undefined> {
+  const path = profileStorePath(env, home)
+  let raw: unknown
+  try {
+    raw = JSON.parse(await readFile(path, 'utf8'))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    return { code: 'unreadable', path, detail: error instanceof Error ? error.message : String(error) }
+  }
+  if (!isRecord(raw) || raw.version !== 1 || !isRecord(raw.profiles) || !isRecord(raw.aliases) || !isRecord(raw.routing)) return { code: 'unreadable', path, detail: 'Invalid Orchestra profile store' }
+  const classes = isRecord(raw.routing.classes) ? raw.routing.classes : {}
+  const broken = TASK_CLASSES.filter((cls) => !isStringList(classes[cls]))
+  return broken.length ? { code: 'incomplete', path, classes: broken } : undefined
 }
 
 export async function updateProfileStore(env: NodeJS.ProcessEnv, home: string, update: (store: ProfileStore) => ProfileStore): Promise<ProfileStore> {

@@ -1,3 +1,6 @@
+import { readFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
 import type { Exec } from '../exec.js'
 import { compareSemver } from '../util/semver.js'
 import { type MessageVars, orchText } from '../orchestration/messages.js'
@@ -7,7 +10,13 @@ export type Backend = 'claude-code' | 'codex-cli' | 'devin-cli' | 'opencode' | '
 export type AgentProfile = { id: string; backend: Backend; model: string; enabled: boolean; minCliVersion?: string }
 export type Check = { name: string; ok: boolean; detail: string; fix?: string }
 export type PreflightResult = { agent: string; ok: boolean; checks: Check[] }
-export type PreflightDeps = { exec: Exec; codexUsedPercent?: () => Promise<number | undefined>; lang?: 'en' | 'ru' }
+/** The binaries a launch runs (`CREWBOARD_<KIND>_COMMAND`); preflight checks the same ones. */
+export type WorkerCommands = Partial<Record<'claude' | 'codex' | 'devin' | 'dsh', string>>
+/**
+ * `env` is the environment the worker starts with: the dsh key check reads it (and `$DSH_HOME`, or
+ * `~/.dsh` under its `HOME`). Absent, the current process's environment is used.
+ */
+export type PreflightDeps = { exec: Exec; codexUsedPercent?: () => Promise<number | undefined>; lang?: 'en' | 'ru'; env?: NodeJS.ProcessEnv; commands?: WorkerCommands }
 
 const OPENCODE_MIN = '1.18.30'
 const CODEX_QUOTA_LIMIT = 90
@@ -16,14 +25,41 @@ const PROVIDER_NAMES: Record<string, string> = { deepseek: 'DeepSeek', 'opencode
 // biome-ignore lint/suspicious/noControlCharactersInRegex: strips ANSI colour codes from CLI output
 const stripAnsi = (s: string) => s.replace(/\[[0-9;]*m/g, '')
 
+/** dsh's DeepSeek route reads its key through this credential reference unless settings rename it. */
+const DSH_KEY_REF = 'DEEPSEEK_API_KEY'
+
+const unquote = (value: string) => value.trim().replace(/^(['"])(.*)\1$/, '$2').trim()
+
+/**
+ * Where dsh resolves the key, in its own order: the launching environment, `$DSH_HOME/.credentials.yaml`
+ * (`refs`, written by the web Models page), `$DSH_HOME/.env`. Only presence is checked — the value is
+ * never shown; a wrong or unpaid key still surfaces on the run.
+ */
+async function dshKeySource(env: NodeJS.ProcessEnv, ref: string): Promise<'env' | 'file' | 'dotenv' | undefined> {
+  if (env[ref]?.trim()) return 'env'
+  const home = env.DSH_HOME?.trim() ? resolve(env.DSH_HOME.replace(/^~(?=$|\/)/, env.HOME ?? homedir())) : join(env.HOME ?? homedir(), '.dsh')
+  const credentials = await readFile(join(home, '.credentials.yaml'), 'utf8').catch(() => '')
+  const refLine = new RegExp(`^\\s+${ref}:(.*)$`)
+  let inRefs = false
+  for (const line of credentials.split('\n')) {
+    if (/^\S/.test(line)) inRefs = /^refs:\s*$/.test(line)
+    else if (inRefs && unquote(refLine.exec(line)?.[1] ?? '')) return 'file'
+  }
+  const dotenv = await readFile(join(home, '.env'), 'utf8').catch(() => '')
+  const envLine = new RegExp(`^\\s*(?:export\\s+)?${ref}\\s*=(.*)$`)
+  for (const line of dotenv.split('\n')) if (unquote(envLine.exec(line)?.[1] ?? '')) return 'dotenv'
+  return undefined
+}
+
 export async function preflightAgent(profile: AgentProfile, deps: PreflightDeps, opts: { probe?: boolean } = {}): Promise<PreflightResult> {
   const checks: Check[] = []
   const tx = (key: string, vars?: MessageVars) => orchText(deps.lang, `preflight.${key}`, vars)
   const sh = (cmd: string, args: string[], timeoutMs = 20_000) => deps.exec(cmd, args, { timeoutMs })
+  const bin = (kind: keyof WorkerCommands) => deps.commands?.[kind] ?? kind
 
   switch (profile.backend) {
     case 'claude-code': {
-      const v = await sh('claude', ['--version'])
+      const v = await sh(bin('claude'), ['--version'])
       const versionText = (v.stdout || v.stderr).trim()
       checks.push({ name: 'binary', ok: v.code === 0, detail: versionText || tx('notFound'), fix: tx('installClaude') })
       const minimum = profile.minCliVersion
@@ -38,7 +74,7 @@ export async function preflightAgent(profile: AgentProfile, deps: PreflightDeps,
           fix: tx('updateClaude'),
         })
       }
-      const a = await sh('claude', ['auth', 'status'])
+      const a = await sh(bin('claude'), ['auth', 'status'])
       let loggedIn = false
       try {
         loggedIn = (JSON.parse(a.stdout) as { loggedIn?: boolean }).loggedIn === true
@@ -49,8 +85,13 @@ export async function preflightAgent(profile: AgentProfile, deps: PreflightDeps,
       break
     }
     case 'codex-cli': {
-      const v = await sh('codex', ['--version'])
+      const v = await sh(bin('codex'), ['--version'])
       checks.push({ name: 'binary', ok: v.code === 0, detail: v.stdout.trim() || tx('notFound'), fix: 'brew install --cask codex' })
+      // `codex login status` exits 0 with «Logged in using …» and 1 with «Not logged in».
+      const a = await sh(bin('codex'), ['login', 'status'])
+      const loginText = stripAnsi(a.stdout + a.stderr)
+      const loggedIn = a.code === 0 && /logged in/i.test(loginText) && !/not logged in/i.test(loginText)
+      checks.push({ name: 'auth', ok: loggedIn, detail: tx(loggedIn ? 'loggedIn' : 'loggedOut'), fix: 'codex login' })
       const used = await deps.codexUsedPercent?.()
       checks.push(
         used === undefined
@@ -60,7 +101,7 @@ export async function preflightAgent(profile: AgentProfile, deps: PreflightDeps,
       break
     }
     case 'devin-cli': {
-      const v = await sh('devin', ['--version'])
+      const v = await sh(bin('devin'), ['--version'])
       const version = /devin (\d+\.\d+\.\d+)/.exec(v.stdout)?.[1]
       checks.push({
         name: 'binary',
@@ -68,7 +109,7 @@ export async function preflightAgent(profile: AgentProfile, deps: PreflightDeps,
         detail: version ? `devin ${version}` : tx('notFound'),
         fix: 'brew install --cask devin-cli',
       })
-      const a = await sh('devin', ['auth', 'status'])
+      const a = await sh(bin('devin'), ['auth', 'status'])
       const text = stripAnsi(a.stdout + a.stderr)
       const loggedIn = /logged in/i.test(text) && !/not logged in/i.test(text)
       checks.push({ name: 'auth', ok: loggedIn, detail: tx(loggedIn ? 'loggedIn' : 'loggedOut'), fix: 'devin auth login' })
@@ -101,15 +142,17 @@ export async function preflightAgent(profile: AgentProfile, deps: PreflightDeps,
       break
     }
     case 'dsh': {
-      const v = await sh('dsh', ['--version'])
+      const v = await sh(bin('dsh'), ['--version'])
       checks.push({ name: 'binary', ok: v.code === 0, detail: v.stdout.trim() || tx('notFound'), fix: 'npm i -g @deepseek-ai/dsh' })
-      const p = await sh('dsh', ['--profile', 'acp', '--dump-config'], 60_000)
+      const p = await sh(bin('dsh'), ['--profile', 'acp', '--dump-config'], 60_000)
       checks.push({
         name: 'profile',
         ok: p.code === 0,
         detail: p.code === 0 ? tx('acpOk') : (p.stderr.trim().split('\n').at(-1) || tx('acpFailed')),
         fix: 'dsh --profile acp --dump-config',
       })
+      const key = await dshKeySource(deps.env ?? process.env, DSH_KEY_REF)
+      checks.push({ name: 'key', ok: key !== undefined, detail: tx(key ? 'keyFound' : 'keyMissing', { ref: DSH_KEY_REF }), fix: tx('keyFix', { ref: DSH_KEY_REF }) })
       break
     }
     default:

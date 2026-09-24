@@ -3,7 +3,7 @@ import { readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { expect, it, vi } from 'vitest'
-import { type Backends, loadPlan } from '@crewboard/core'
+import { type Backends, type Exec, loadPlan } from '@crewboard/core'
 import { makeRepo } from '../../core/test/git-helpers.js'
 import { CLIENT_HEADER, actionRoutes } from '../src/host/actions.js'
 import { OrchestraService } from '../src/host/service.js'
@@ -71,4 +71,30 @@ it('creates, labels, guards, and removes the example through host routes', async
   expect(review.decisions.map((decision) => decision.type)).toEqual(['reject', 'accept'])
   expect((await call('POST', 'example-remove')).status).toBe(200)
   for (const path of ['.orchestration/plans/orchestra-example.json', '.orchestration/example', '.orchestration/runs/run_example-build-1']) expect(await stat(join(root, path)).then(() => true, () => false)).toBe(false)
+})
+
+it('the welcome list calls a signed-out Codex «sign in», never «ready», and checks the launch binary', async () => {
+  const root = await makeRepo()
+  const seen: string[] = []
+  const exec: Exec = async (cmd, args) => {
+    seen.push(`${cmd} ${args.join(' ')}`)
+    if (cmd === '/opt/fake/codex' && args[0] === '--version') return { code: 0, stdout: 'codex-cli 0.154.0', stderr: '', timedOut: false }
+    if (cmd === '/opt/fake/codex' && args.join(' ') === 'login status') return { code: 1, stdout: 'Not logged in', stderr: '', timedOut: false }
+    return { code: 127, stdout: '', stderr: 'not found', timedOut: false }
+  }
+  const env = { CREWBOARD_CODEX_COMMAND: '/opt/fake/codex' }
+  const service = new OrchestraService({ config: { repos: [root], refreshMs: 60_000 }, backendsFor: () => backend, now: () => now })
+  const routes = actionRoutes({ service, repos: [root], backendsFor: () => backend, native: { confirm: async () => true, notify: async () => {} }, env, home: root, now: () => now, exec })
+  const route = routes.find((r) => r.path === `${API}/onboarding-workers`)
+  if (!route) throw new Error('missing route')
+  const req = Readable.from([]) as unknown as IncomingMessage
+  Object.assign(req, { method: 'GET', url: `${API}/onboarding-workers?repo=${encodeURIComponent(root)}`, headers: { [CLIENT_HEADER]: '1' } })
+  const res = { status: 0, body: '', writeHead(status: number) { this.status = status; return this }, end(text?: string) { this.body += text ?? '' } }
+  await route.handler(req, res as unknown as ServerResponse)
+  const workers = (JSON.parse(res.body) as { value: Array<{ id: string; status: string }> }).value
+  const codex = workers.find((w) => w.id.startsWith('codex'))
+  expect(codex?.status).toBe('sign_in')
+  expect(workers.filter((w) => w.status === 'ready')).toEqual([])
+  expect(seen).toContain('/opt/fake/codex login status')
+  expect(seen.some((line) => line.startsWith('codex '))).toBe(false)
 })

@@ -119,13 +119,11 @@ export function LedgerView({ trace, repo, target, workers, onSteerFrom, actions,
     const position = visible.findIndex((item) => item.stepId === stepId)
     if (position < 0) return
     list.current.scrollTop = Math.max(0, position * rowHeight - 100)
-    setScrollTop(list.current.scrollTop)
-    requestAnimationFrame(() => {
-      if (focusStep.current !== stepId) return
-      list.current?.querySelector<HTMLButtonElement>(`[data-step-id="${CSS.escape(stepId)}"]`)?.focus()
-      focusStep.current = null
-    })
-  }, [selectedRecord, visible])
+    // The row exists only once the window has rendered at this scroll position; this effect runs again then.
+    if (list.current.scrollTop !== scrollTop) { setScrollTop(list.current.scrollTop); return }
+    list.current.querySelector<HTMLButtonElement>(`[data-step-id="${CSS.escape(stepId)}"]`)?.focus()
+    focusStep.current = null
+  }, [selectedRecord, visible, scrollTop])
   const xToTime = (x: number) => start + Math.max(0, Math.min(1, x / Math.max(1, chart.current?.clientWidth ?? 1))) * domain
   const pointerX = (clientX: number) => clientX - (chart.current?.getBoundingClientRect().left ?? 0)
   useEffect(() => {

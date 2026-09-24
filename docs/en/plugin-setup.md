@@ -2,31 +2,30 @@
 
 [Documentation](../README.md) · **English** | [Русский](../ru/plugin-setup.md)
 
-The `dsh-crewboard` package adds the Crewboard screen, settings, notifications, and `orchestra_*` tools to [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (`dsh`). The CLI does not need it; install it when you want the visual board.
+The Crewboard plugin (`packages/plugin`; later published as `dsh-crewboard`) adds the Crewboard screen, settings, notifications, and `orchestra_*` tools to [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (`dsh`). The CLI does not need it; install it when you want the visual board.
 
 Steps marked **verify in your dsh** depend on your dsh version and profile; I could not check them against every installation.
 
 ## Requirements
 
-- Node.js 24 or newer.
-- dsh with a `web` profile. The plugin's browser half is built for the web client.
+- Node.js 24 or newer, and a Crewboard checkout built as in [README: install](../../README.md#install).
+- dsh with a `web` profile (`npm install -g @deepseek-ai/dsh`). The plugin's browser half is built for the web client.
+- For the orchestrator chat: a DeepSeek API key in dsh (**Settings → Models**, or `DEEPSEEK_API_KEY`).
 - The repositories you want to see, as absolute paths.
 
 ## Install
 
-`dsh plugin` forwards its arguments to pnpm inside the profile directory, so installing the plugin is a package install into that profile:
+The plugin is not on npm yet: install it from source for now. [README: install](../../README.md#install) is the one set of steps; in short, from the built checkout:
 
 ```sh
-dsh plugin --profile web add dsh-crewboard
+dsh plugin --profile web add "$PWD/packages/plugin"
 ```
 
-Restart the profile (`dsh web`) and open **Orchestration** in the sidebar. **Verify in your dsh** that the entry appears; if it does not, see [troubleshooting](troubleshooting.md#the-screen-does-not-appear-in-dsh).
+`dsh plugin` forwards its arguments to pnpm inside the profile directory, so this is a package install of your checkout into that profile.
 
-To update later:
+Restart the profile (`dsh web`) and open **Orchestration**: the graph icon (three linked dots) in dsh's left column; its tooltip reads Orchestration. **Verify in your dsh** that the entry appears; if it does not, see [troubleshooting](troubleshooting.md#the-screen-does-not-appear-in-dsh).
 
-```sh
-dsh plugin --profile web update dsh-crewboard
-```
+To update later, pull the checkout, run `pnpm build`, and restart `dsh web`.
 
 ## Connect repositories
 
@@ -65,6 +64,8 @@ If you used the plugin under its older id `dsh-orchestra`, its `repos` list is s
 ## What the plugin needs from dsh
 
 - The screen, notifications, chat tools, and background supervision run only while the dsh host is running. The CLI works on the same plans without it.
+- A chat bound to a plan acts on that plan only: the host adds the plan to every `orchestra_*` call and refuses a call that names another plan or repository. `orchestra_attention` returns the same list as `crewboard attention --json`.
+- Opening an archived plan on the screen shows it read-only; the current plan of the CLI and the agents does not change. Opening an active plan makes it current, as before.
 - The plugin reaches dsh services through injection. If an optional service is missing in your dsh version, only the related feature is unavailable; the screen keeps working.
 - Accept, send back, and supersede on the screen ask for a native macOS confirmation dialog. **Verify in your dsh** that the dialog appears before you rely on the screen for decisions; the CLI's interactive confirmation is always available.
 - The screen follows dsh's language switch. Russian is added to dsh's language list if it is missing.

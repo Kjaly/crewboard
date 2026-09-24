@@ -10,11 +10,11 @@ type Kind = LedgerRecord['kind']
 const TONE: Record<RunStatus, string> = { running: 'run', waiting: 'warn', failed: 'error', accepted: 'ok', returned: 'idle', completed: 'idle', unknown: 'idle' }
 
 /** Status colour always comes with its word: the dot alone never carries the meaning. */
-export function StatusWord({ status, cancelled }: { status: RunStatus; cancelled?: boolean }) {
+export function StatusWord({ status, cancelled, incomplete }: { status: RunStatus; cancelled?: boolean; incomplete?: boolean }) {
   return (
     <span className={`orc-rstatus orc-rstatus--${TONE[status]}`}>
       <i aria-hidden="true" />
-      {status === 'failed' && cancelled ? t('review.status.stopped') : t(`review.status.${status}`)}
+      {status === 'failed' && cancelled ? t('review.status.stopped') : status === 'failed' && incomplete ? t('drill.execution.incomplete') : t(`review.status.${status}`)}
     </span>
   )
 }

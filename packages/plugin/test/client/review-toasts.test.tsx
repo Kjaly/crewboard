@@ -2,7 +2,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { userEvent } from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ReviewToasts, createReviewCenter, resetReviewCenter, reviewBadgeLabel, startReviewCenter } from '../../src/client/notify.js'
+import { ReviewToasts, createReviewCenter, resetReviewCenter, reviewBadgeLabel, reviewBadgeTitle, startReviewCenter } from '../../src/client/notify.js'
 import { OrchestraIcon } from '../../src/client/panel.js'
 import { orchestraStore, resetOrchestraStore } from '../../src/client/store.js'
 import { FakeEventSource, ROOT, installEventSource, makeRepo, makeSnapshot, makeTask } from './helpers.js'
@@ -114,7 +114,9 @@ it('the app-level listener feeds the icon badge and the toast root', async () =>
     FakeEventSource.last?.emit('snapshot', reviewing({ id: 'f1' }, { id: 'f2' }))
   })
   expect(container.querySelector('.orc-icon__badge')?.textContent).toBe('2')
-  expect(reviewBadgeLabel()).toBe('Оркестрация, ждут вас: 2 — repo: цель плана (2)')
+  // The item's name stays plain; the count is on the badge and in the icon's hover title.
+  expect(reviewBadgeLabel()).toBe('Оркестрация')
+  expect(reviewBadgeTitle()).toBe('Оркестрация, ждут вас: 2 — repo: цель плана (2)')
   // The toast root lives outside the rendered tree — under document.body.
   expect(document.querySelector('[data-orchestra-toasts] .orc-toast__text')?.textContent).toContain('2 задачи ждут приёмки')
   const source = FakeEventSource.last

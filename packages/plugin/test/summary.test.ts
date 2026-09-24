@@ -37,5 +37,17 @@ it('names a plan from a newer build in the reader\'s language, not by the host\'
 
 it('counts attention across repos and maps every status to a glyph', () => {
   expect(attentionCount({ generatedAt: 't', repos: [repo(), repo()], workers: [] })).toBe(2)
-  expect(Object.keys(STATUS_GLYPH).sort()).toEqual(['accepted', 'backlog', 'blocked', 'closed', 'in_review', 'ready', 'running', 'superseded'])
+  expect(Object.keys(STATUS_GLYPH).sort()).toEqual(['accepted', 'backlog', 'blocked', 'closed', 'dropped', 'in_review', 'ready', 'running', 'superseded'])
+})
+
+it('V-B01/now-rate-limit shows a rate limit with its reset time and a retry-after-reset action, in both languages', async () => {
+  const { nowPhrase } = await import('../src/client/summary.js')
+  const task = repo().tasks[0]!
+  const limited = [{ kind: 'failed' as const, severity: 'alert' as const, taskId: 'a', runId: 'r', message: 'Лимит Claude исчерпан', hint: 'crewboard run a', reason: { code: 'rate_limited' as const, resetsAt: '2026-09-24T19:00:00' } }]
+  setLang('en')
+  expect(nowPhrase(task, limited)).toEqual({ text: 'Claude usage limit reached — resets at 19:00', hint: 'Start the task again after the reset.', tone: 'alert' })
+  setLang('ru')
+  expect(nowPhrase(task, limited).text).toBe('Лимит Claude исчерпан — сброс в 19:00')
+  const orphan = [{ ...limited[0]!, reason: { code: 'interrupted' as const, workerPid: 42, workerStopped: true } }]
+  expect(nowPhrase(task, orphan).text).toBe('Супервизор запуска исчез; его воркер (pid 42) остановлен.')
 })

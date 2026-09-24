@@ -25,7 +25,8 @@ async function setup() {
     p.tasks.push(newTask({ id: 'a', title: 'A', contract: 'c.md' }))
     return p
   })
-  const env = { HOME: root }
+  // The dsh worker's preflight also looks for a DeepSeek key; the fake worker gets one.
+  const env = { HOME: root, DEEPSEEK_API_KEY: 'sk-test' }
   await savePreset({ id: 'claude', label: 'Claude', routing: { code: ['claude/opus'], design: ['claude/opus'], review: ['claude/opus'], research: ['claude/opus'] } }, env)
   await setRepositoryPreset(root, 'claude', env)
   const launched: string[] = []

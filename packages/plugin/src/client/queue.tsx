@@ -9,7 +9,7 @@ import type { PlanItem } from './plans.js'
 import { acceptableTasks, backgroundReview } from './review.js'
 import { taskTone } from './styles.js'
 import { orchestraStore } from './store.js'
-import { waitLabels } from './views/accept-batch.js'
+import { AcceptBatch, waitLabels } from './views/accept-batch.js'
 
 const FILES_SHOWN = 8
 
@@ -54,6 +54,9 @@ function QueueRow({
 
   const files = detail?.changedFiles
   const report = detail?.report?.text.trim() ? reportLine(detail.report.text) : undefined
+  // w1b (B03): the verdict next to the title, so a risky result is visible before Accept; a decision has none (B05).
+  const verdict = detail?.verdict
+  const verdictReason = verdict?.why ? t(`verdict.why.${verdict.why}`) : verdict?.mismatch ? t(`verdict.mismatch.${verdict.mismatch}`).replace(/\.$/, '') : ''
   const meta = [decision ? t('queue.decisionYours') : (task.worker ?? '—'), wait, open && files ? t('queue.files', { count: files.length }) : undefined]
     .filter(Boolean)
     .join(' · ')
@@ -70,6 +73,7 @@ function QueueRow({
           {open ? '▾' : '▸'}
         </span>
       </button>
+      {verdict ? <span className={`orc-qrow__verdict orc-verdict--${verdict.kind}`} title={verdictReason || undefined}><span className="orc-verdict__mark" aria-hidden="true">{verdict.kind === 'result' ? '✓' : verdict.kind === 'negative' ? '−' : '?'}</span>{t(`verdict.${verdict.kind}`)}{verdictReason ? ` · ${verdictReason}` : ''}</span> : null}
       {report ? <span className="orc-qrow__report">{report}</span> : null}
       <span className="orc-meta">{meta}</span>
 
@@ -180,18 +184,12 @@ function OtherPlanRow({ root, plan }: { root: string; plan: PlanItem }) {
  */
 export function ReviewQueue({ repo, onOpenTask, onClose }: { repo: RepoSnapshot; onOpenTask(id: string, changes?: boolean): void; onClose(): void }) {
   const lang = useLang()
-  const batch = useAction()
   const tasks = useMemo(() => acceptableTasks(repo), [repo])
   const others = useMemo(() => backgroundReview(repo), [repo])
   const otherCount = others.reduce((n, p) => n + p.waitingHuman, 0)
   const { cost } = usePlanCost(repo.root, repo.rev)
   // biome-ignore lint/correctness/useExhaustiveDependencies: Locale changes intentionally refresh the translated result.
   const waits = useMemo(() => waitLabels(cost, new Date()), [cost, lang])
-
-  const acceptAll = () => {
-    if (tasks.length === 0) return
-    void batch.call(() => api.acceptBatch(repo.root, tasks.map((t) => t.id)))
-  }
 
   return (
     <aside className="orc-panel orc-queue" aria-label={t('queue.title')}>
@@ -209,13 +207,8 @@ export function ReviewQueue({ repo, onOpenTask, onClose }: { repo: RepoSnapshot;
               : t('queue.emptyPlan')}
             {otherCount > 0 ? ` · ${t('queue.otherCount', { count: otherCount })}` : ''}
           </p>
-          <div className="orc-actions">
-            <button type="button" className="orc-btn" disabled={batch.pending || tasks.length === 0} onClick={acceptAll}>
-              {tasks.length > 0 ? t('queue.acceptAllCount', { count: tasks.length }) : t('queue.acceptAll')}
-            </button>
-          </div>
-          <p className="orc-hint">{t('queue.confirmHint')}</p>
-          {batch.error ? <p className="orc-error">{batch.error}</p> : null}
+          {/* The one batch entry point (w1b, B03): the same sheet as Work and the board, with verdicts. */}
+          <div className="orc-actions"><AcceptBatch repo={repo} onSelect={(id) => onOpenTask(id)} /></div>
         </div>
 
         {tasks.length === 0 && others.length === 0 ? (

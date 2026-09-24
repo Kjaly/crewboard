@@ -74,9 +74,29 @@ describe('preflightAgent', () => {
   })
 
   it('codex: fails when quota is nearly spent', async () => {
-    const { exec } = execFrom({ 'codex --version': { stdout: 'codex-cli 0.154.0' } })
+    const { exec } = execFrom({ 'codex --version': { stdout: 'codex-cli 0.154.0' }, 'codex login status': { stdout: 'Logged in using ChatGPT' } })
     const r = await preflightAgent(profile('codex', 'codex-cli'), { exec, codexUsedPercent: async () => 95 })
     expect(failing(r)).toEqual(['quota'])
+  })
+
+  it('codex: a signed-out CLI is not ready, whatever the quota says', async () => {
+    const { exec } = execFrom({ 'codex --version': { stdout: 'codex-cli 0.154.0' }, 'codex login status': { code: 1, stdout: 'Not logged in' } })
+    const r = await preflightAgent(profile('codex', 'codex-cli'), { exec })
+    expect(r.ok).toBe(false)
+    expect(r.checks.find((c) => c.name === 'auth')).toMatchObject({ ok: false, fix: 'codex login' })
+    const signedIn = execFrom({ 'codex --version': { stdout: 'codex-cli 0.154.0' }, 'codex login status': { stdout: 'Logged in using ChatGPT' } })
+    expect((await preflightAgent(profile('codex', 'codex-cli'), { exec: signedIn.exec })).ok).toBe(true)
+  })
+
+  it('checks the same binary the launch runs', async () => {
+    const seen: string[] = []
+    const exec: Exec = async (cmd, args) => {
+      seen.push(cmd)
+      return { code: 0, stdout: args[0] === 'auth' ? '{"loggedIn": true}' : args[0] === 'login' ? 'Logged in' : '2.1.300 (Claude Code)', stderr: '', timedOut: false }
+    }
+    await preflightAgent(profile('claude/opus', 'claude-code'), { exec, commands: { claude: '/opt/fake/claude' } })
+    await preflightAgent(profile('codex', 'codex-cli'), { exec, commands: { codex: '/opt/fake/codex' } })
+    expect([...new Set(seen)]).toEqual(['/opt/fake/claude', '/opt/fake/codex'])
   })
 
   it('dsh: checks the binary and the acp profile', async () => {
@@ -84,9 +104,30 @@ describe('preflightAgent', () => {
       'dsh --version': { stdout: '0.1.5-rc.2' },
       'dsh --profile acp --dump-config': { stdout: '- id: acp' },
     })
-    expect((await preflightAgent(profile('dsh/deepseek-flash', 'dsh', 'deepseek-flash'), { exec })).ok).toBe(true)
+    const env = { HOME: await mkdtemp(join(tmpdir(), 'pf-dsh-')), DEEPSEEK_API_KEY: 'sk-test' }
+    expect((await preflightAgent(profile('dsh/deepseek-flash', 'dsh', 'deepseek-flash'), { exec, env })).ok).toBe(true)
     const broken = execFrom({ 'dsh --version': { stdout: '0.1.5-rc.2' }, 'dsh --profile acp --dump-config': { code: 1, stderr: 'boom' } })
-    expect(failing(await preflightAgent(profile('dsh', 'dsh'), { exec: broken.exec }))).toEqual(['profile'])
+    expect(failing(await preflightAgent(profile('dsh', 'dsh'), { exec: broken.exec, env }))).toEqual(['profile'])
+  })
+
+  it('dsh: without a DeepSeek key it is not ready; a key in the environment, the dsh store or .env is found', async () => {
+    const { exec } = execFrom({ 'dsh --version': { stdout: '0.1.5-rc.2' }, 'dsh --profile acp --dump-config': { stdout: '- id: acp' } })
+    const home = await mkdtemp(join(tmpdir(), 'pf-dsh-key-'))
+    const dshHome = join(home, '.dsh')
+    await mkdir(dshHome, { recursive: true })
+    const none = await preflightAgent(profile('dsh', 'dsh'), { exec, env: { HOME: home } })
+    expect(none.ok).toBe(false)
+    expect(none.checks.find((c) => c.name === 'key')).toMatchObject({ ok: false, detail: expect.stringContaining('DEEPSEEK_API_KEY') })
+    expect((await preflightAgent(profile('dsh', 'dsh'), { exec, env: { HOME: home, DEEPSEEK_API_KEY: '' } })).ok).toBe(false)
+    await writeFile(join(dshHome, '.credentials.yaml'), 'version: 1\nrecords:\n  a/b:\n    kind: x\nrefs:\n  DEEPSEEK_API_KEY: sk-stored\n')
+    expect((await preflightAgent(profile('dsh', 'dsh'), { exec, env: { HOME: home } })).ok).toBe(true)
+    const other = join(home, 'custom-dsh')
+    await mkdir(other, { recursive: true })
+    await writeFile(join(other, '.env'), 'DEEPSEEK_API_KEY="sk-dotenv"\n')
+    expect((await preflightAgent(profile('dsh', 'dsh'), { exec, env: { HOME: home, DSH_HOME: other } })).ok).toBe(true)
+    // The key's value is never shown: only its reference name.
+    const found = await preflightAgent(profile('dsh', 'dsh'), { exec, env: { HOME: home, DSH_HOME: other } })
+    expect(JSON.stringify(found)).not.toContain('sk-dotenv')
   })
 
   it('rejects unsupported backends', async () => {

@@ -2,7 +2,12 @@ import { basename } from 'node:path'
 import type { RawEvent } from '../runs/raw-event.js'
 
 export type NormKind = 'action' | 'file' | 'message' | 'steer' | 'problem' | 'final'
-export type NormEvent = { ts: string; kind: NormKind; text: string }
+/**
+ * Why a run failed, when the runner knows more than a line of text (B01, B19): the screen and the CLI say it in the
+ * reader's language from these fields; `text` stays the fallback.
+ */
+export type FailureReason = { code: 'rate_limited'; resetsAt?: string } | { code: 'interrupted'; workerPid?: number; workerStopped: boolean }
+export type NormEvent = { ts: string; kind: NormKind; text: string; reason?: FailureReason }
 
 // Backend noise observed on 2026-09-22: OpenCode lifecycle `progress` events,
 // heartbeats and reasoning streams carry no user-facing progress.
@@ -10,6 +15,10 @@ const NOISE_TYPES = new Set(['progress', 'heartbeat', 'thinking_delta', 'thinkin
 const FILE_TOOLS = new Set(['write', 'edit', 'patch', 'multiedit', 'apply_patch'])
 const MAX_TEXT = 200
 
+const hhmm = (iso: string) => {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
 const clip = (s: string) => (s.length > MAX_TEXT ? `${s.slice(0, MAX_TEXT - 1)}…` : s)
 const asText = (data: unknown) => (typeof data === 'string' ? data : JSON.stringify(data ?? ''))
 
@@ -70,6 +79,19 @@ function toNorm(raw: RawEvent): NormEvent | null {
       return { ts, kind: 'steer', text: clip(asText(ev.data)) }
     case 'final':
       return { ts, kind: 'final', text: clip(asText(ev.data)) }
+    case 'rate_limited': {
+      const d = (ev.data && typeof ev.data === 'object' ? ev.data : {}) as { resetsAt?: unknown }
+      const resetsAt = typeof d.resetsAt === 'string' ? d.resetsAt : undefined
+      return { ts, kind: 'problem', text: `Лимит Claude исчерпан${resetsAt ? `, сброс в ${hhmm(resetsAt)}` : ''}`, reason: { code: 'rate_limited', ...(resetsAt ? { resetsAt } : {}) } }
+    }
+    case 'run_interrupted': {
+      const d = (ev.data && typeof ev.data === 'object' ? ev.data : {}) as { workerPid?: unknown; workerStopped?: unknown }
+      const workerPid = typeof d.workerPid === 'number' ? d.workerPid : undefined
+      const workerStopped = d.workerStopped === true
+      // A run started before the worker was recorded names no worker: nothing is known about it.
+      const outcome = workerPid ? `; воркер (pid ${workerPid}) ${workerStopped ? 'остановлен' : 'уже не работал'}` : ''
+      return { ts, kind: 'problem', text: `Супервизор запуска исчез${outcome}`, reason: { code: 'interrupted', ...(workerPid ? { workerPid } : {}), workerStopped } }
+    }
     case 'permission_denied':
       return { ts, kind: 'problem', text: clip(`выход за песочницу отклонён: ${asText(ev.data)}`) }
     default:

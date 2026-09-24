@@ -5,14 +5,14 @@
 [![CI](https://github.com/Kjaly/crewboard/actions/workflows/ci.yml/badge.svg)](https://github.com/Kjaly/crewboard/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-**Status:** 0.3.0, first public release, not on npm yet · Node.js 24+ · used on macOS with dsh 0.1.5 release candidates · Linux and Windows untested
+**Status:** 0.4.0 · install from source (not on npm yet) · Node.js 24+ · used on macOS with dsh 0.1.5 release candidates · Linux and Windows untested
 
 **See your coding agents at work, across projects.**\
 One board for plans, runs, costs, and decisions.
 
 Crewboard is a plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) and a `crewboard` command-line tool (`orch` is the same program). Both work on one plan per repository, kept next to the code and outside Git history.
 
-![Screenshot of the Crewboard graph: one plan's tasks on six lanes with their workers, and a sidebar where a second repository shows "Needs you".](docs/assets/hero-graph.png)
+![Screenshot of the Crewboard graph: one plan's tasks on six lanes with their workers; in the sidebar, "Needs you" from a second repository and the plan's lane tree.](docs/assets/hero-graph.png)
 
 *The example plan that ships with Crewboard: one repository's graph, and a second repository waiting for a decision in the sidebar.*
 
@@ -20,8 +20,9 @@ Crewboard is a plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deep
 
 1. **A goal becomes a plan.** In dsh, the chat that runs the plan (the orchestrator) drafts tasks and contracts from your goal. In a terminal, `crewboard init` and `crewboard task add` do it by hand.
 2. **Workers chosen by the preset take tasks.** Codex, Claude Code, DeepSeek through dsh, and Devin work in one plan. The preset decides which worker takes each class of task; a person may pick another, an agent may not. Each run gets its own working copy (a Git worktree).
-3. **The orchestrator checks first.** When a worker finishes, the orchestrator takes the result for checking (`crewboard verify`). It hands the task to you with a note, or returns it to the worker with findings. This is on while the plan has a chat; otherwise finished work comes straight to you.
+3. **The orchestrator checks first.** When a worker finishes, the orchestrator takes the result for checking (`crewboard verify`). It hands the task to you with a note, or returns it to the worker with findings. This is on while the plan has a chat; otherwise finished work comes straight to you. Work too risky to hand to a worker (integration on a stand, the owner's database) is a `root` task the orchestrator does itself (`crewboard start`, then `crewboard verify --done --report`), and a decision reaches you only once the orchestrator has prepared its options.
 4. **You accept or send back.** Read the report, the verdict, and the changes, then accept or send the task back with a reason (it shows as **Returned** and can run again). Both need a person and a confirmation; agents have no accept tool.
+5. **You merge accepted work.** Accepting does not touch your base branch: the work stays on the task's branch until you merge it. Crewboard does not merge by itself; it shows the task as **Accepted, not merged** in **Needs you**, `crewboard status`, and `crewboard attention`, and gives the exact `git` commands. Tasks that depend on it wait until the branch is merged, so they start from code that contains it.
 
 ## Is it for you
 
@@ -41,10 +42,16 @@ I run several repositories through coding agents and could not see what each age
 
 ## Install
 
-You need Node.js 24 or newer, Git, and pnpm 11.5.2 to build. For the screen you need dsh; for each worker, its CLI installed and signed in (`claude`, `codex`, `devin`, `dsh`).
-
 > [!IMPORTANT]
-> The npm packages `crewboard` and `dsh-crewboard` come with the 0.3.0 release. Until then, install from source.
+> Crewboard is not on npm yet: install it from source for now. This section is the one install path; the other guides link here.
+
+### Prerequisites
+
+- **To build:** Node.js 24 or newer, Git, and pnpm 11.5.2.
+- **For the screen:** dsh (DeepSeek Harness): `npm install -g @deepseek-ai/dsh`. The CLI works without it.
+- **For the orchestrator chat** (Quick start A, **From chat**): a DeepSeek API key. The chat runs on DeepSeek inside dsh; add the key in dsh under **Settings → Models**, or export `DEEPSEEK_API_KEY`. dsh workers use the same key.
+- **For each worker:** its CLI installed and signed in: `claude auth login`, `codex login`, `devin auth login`; a dsh worker needs the DeepSeek key above. `crewboard preflight` checks all of them, and the screen marks a worker **ready** only after that check passed.
+- **To accept on the screen:** dsh running on a macOS host. **Accept** asks for confirmation in a macOS dialog; elsewhere, accept in a terminal with `crewboard accept <id>`.
 
 Build and link the CLI; you get both `crewboard` and `orch`:
 
@@ -71,11 +78,12 @@ Checked on macOS (Node.js 24.16, pnpm 11.5.2) in a separate npm prefix and throw
 
 ## Quick start A: from the dsh chat
 
-1. Run `dsh web` and open the **Orchestration** tab.
+1. Run `dsh web` and open **Orchestration**: the graph icon (three linked dots) in dsh's left column; its tooltip reads Orchestration.
 2. With no plan yet, choose **From chat**. It opens a dsh chat that asks the agent to draft a plan. Describe your goal, read the draft, and approve it with **Approve as plan**; only a person can. For an existing plan, use **Open plan chat** or **Make this chat the orchestrator**.
 3. The chat writes a contract per task and starts workers; the preset picks them. Follow the runs on the **Graph** and **Work** views.
 4. When a run finishes, the task shows "Orchestrator is checking" until the chat is done with it.
 5. The task then appears in **Needs you**; its panel shows the orchestrator's note above **Accept**. Choose **Accept** or **Send back** and confirm.
+6. An accepted task stays in **Needs you** as **Accepted, not merged** until you merge its branch; its panel lists the commands. Dependent tasks start after the merge.
 
 [Review](docs/en/review.md#the-orchestrators-check) explains the check and its setting.
 
@@ -111,6 +119,13 @@ After the run, an agent may check the result; a person decides in an interactive
 crewboard verify api --done --note "tests green"    # optional: the orchestrator's check
 crewboard accept api
 crewboard reject api --reason "Route compatibility is not verified"   # send back
+```
+
+`accept` prints the next step: the work is on the branch `orch/api-…` until you merge it, and tasks that depend on `api` wait for that:
+
+```sh
+git merge --no-ff orch/api-extract-the-api   # in the main checkout, on the base branch
+crewboard status                               # api is no longer "accepted, not merged"
 ```
 
 [Getting started](docs/en/getting-started.md) has more detail; the [CLI reference](docs/en/cli.md) lists every command.

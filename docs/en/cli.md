@@ -2,7 +2,7 @@
 
 [Documentation](../README.md) · **English** | [Русский](../ru/cli.md)
 
-`crewboard` and `orch` are the same program; installing the CLI gives you both names. The help and messages use whichever name you typed. This page was checked against `crewboard --help` and the command sources of version 0.3.0.
+`crewboard` and `orch` are the same program; installing the CLI gives you both names. The help and messages use whichever name you typed. This page was checked against `crewboard --help` and the command sources of version 0.4.0.
 
 Run commands inside a Git repository; the plan is found from the repository root. Outside a repository they stop with "Not a git repository".
 
@@ -12,7 +12,7 @@ Run commands inside a Git repository; the plan is found from the repository root
 | --- | --- |
 | `--help`, `-h`, `help` | Print the command summary. Also printed after an unknown command. |
 | `--lang en\|ru` | Interface language for this call. Without it, Russian is used when `LC_ALL` or `LANG` starts with `ru`, English otherwise. Some messages from the plan engine are still Russian only. |
-| `--plan <id>` | Work on another plan than the current one. Accepted by `status`, `wait`, `task`, `accept`, `reject`, `supersede`, `verify`, `run`, `events`, `trace`, `steer`, `stop`, `attention`, `cost`, and `worktree`. |
+| `--plan <id>` | Work on another plan than the current one. Accepted by `status`, `wait`, `task`, `accept`, `reject`, `supersede`, `drop`, `verify`, `start`, `run`, `events`, `trace`, `steer`, `stop`, `attention`, `cost`, and `worktree`. When the current plan is archived, a command that changes a plan is refused without `--plan`. |
 
 Exit codes: `0` success, `1` an error or a refused action, `2` a usage mistake. `wait` uses `2` for a timeout.
 
@@ -25,15 +25,15 @@ There is no `--version` flag; use `npm ls -g crewboard`.
 | `crewboard init [--goal "…"]` | Create the `main` plan in `.orchestration/plan.json`, add `.orchestration/` to `.git/info/exclude`, and add the repository root (or worktree root) to the [Crewboard repository list](#repositories-on-the-screen) so the screen shows the plan. Refuses if a plan exists. |
 | `crewboard plan list` | List plans: `●` current, `○` active, `·` archived, with task counts. |
 | `crewboard plan new <id> --goal "…"` | Create a plan and make it current. Adds the place to the Crewboard repository list, like `init`. |
-| `crewboard plan use <id>` | Make a plan current. |
+| `crewboard plan use <id>` | Make a plan current. An archived plan can be made current to read it; changing it then needs `--plan <id>`. |
 | `crewboard plan rename <id> --goal "…"` | Change a plan's goal. |
 | `crewboard plan archive <id>` / `unarchive <id>` | Hide a finished plan from the active list, or bring it back. |
 | `crewboard plan split <id> --from <plan> --goal "…" --tasks a,b` | Move the listed tasks from `<plan>` into a new plan `<id>`. |
 | `crewboard plan preset <id>` / `plan preset --clear` | Choose a worker preset for the current plan, or return it to the repository's choice. See [workers](workers.md). |
 | `crewboard chat unbind <plan>` | Remove the link between a plan and a dsh chat. |
-| `crewboard status [--json] [--plan id]` | Tasks with their state, what blocks them, tasks ready to start, the critical path, and the effective preset. |
+| `crewboard status [--json] [--plan id]` | Tasks with their state, what blocks them, tasks ready to start, the critical path, and the effective preset. An accepted task whose branch is not merged yet reads "accepted, not merged", a task waiting for it "waiting for X to be merged"; a line lists every accepted-unmerged task. `--json` adds `unmerged` (ids) and, per task, `unmerged` and `waitingMerge`. |
 
-State icons in `status`: `·` backlog, `○` ready, `●` running, `◐` in review, `✓` accepted, `✗` closed, `⏸` blocked, `⊘` superseded.
+State icons in `status`: `·` backlog, `○` ready, `●` running, `◐` in review, `✓` accepted, `✗` closed, `⏸` blocked, `⊘` superseded or dropped.
 
 ### Plan drafts
 
@@ -49,21 +49,21 @@ A worker can draft a plan from a specification; you review it and approve it int
 | `crewboard plan draft recover` | Pick up jobs whose process was interrupted. |
 | `crewboard plan drafts` | List saved drafts. |
 | `crewboard plan draft show <id>` | Print a draft and its findings. |
-| `crewboard plan approve <id>` | Human only: turn a draft into a plan. A dependency cycle or a missing dependency blocks approval. |
+| `crewboard plan approve <id>` | Human only: turn a draft into a plan; the new plan becomes current. A dependency cycle or a missing dependency blocks approval. |
 | `crewboard plan discard <id>` | Delete a draft. |
 
 ## Tasks and decisions
 
 ```text
-crewboard task add <id> --title "…" [--kind implement|review|research|decision] [--lane "…"]
+crewboard task add <id> --title "…" [--kind implement|review|research|decision|root] [--lane "…"]
                    [--deps a,b] [--worker <profile>] [--contract <file>] [--class code|design|review|research] [--backlog]
 crewboard task set <id> [--title "…"] [--lane "…"] [--deps a,b] [--worker <profile>] [--contract <file>]
-                   [--class …] [--status backlog|ready]
+                   [--class …] [--status backlog|ready] [--kind implement|review|research|decision|root]
 ```
 
 | Flag | Meaning |
 | --- | --- |
-| `--kind` | `implement` (default), `review`, `research`, or `decision`. A `decision` task is closed only by a person and cannot be run. |
+| `--kind` | `implement` (default), `review`, `research`, `decision` or `root`. A `decision` task is closed only by a person and cannot be run. A `root` task is the orchestrator's own work — integration on a stand, starting processes, the owner's database: no worker is ever launched for it (see [below](#the-orchestrators-own-work)). `task set --kind` changes the kind of an open task; an accepted or superseded task keeps its kind. |
 | `--class` | Which worker order applies: `code`, `design`, `review`, `research`. Without it, `review` and `research` kinds use their class, everything else `code`. |
 | `--deps a,b` | Tasks that must be accepted first. `task set --deps ""` clears them. |
 | `--worker` | The task's own worker. It is used instead of the class order; see [workers](workers.md#how-a-worker-is-chosen). |
@@ -75,35 +75,53 @@ Decisions — **human only**: they ask `[y/N]` in an interactive terminal and re
 
 | Command | What it does |
 | --- | --- |
-| `crewboard accept <id>` | Accept the result. The question names a negative or disputed verdict. Afterwards the worktree is removed if the cleanup policy says so. |
+| `crewboard accept <id>` | Accept the result. The question names a negative or disputed verdict and files the copy holds without a commit (the branch does not contain them). Afterwards the worktree is removed if the cleanup policy says so. While the branch is not merged, it prints the exact commands to commit what is left and merge; dependent tasks wait for the merge ([Review](review.md#after-acceptance-merge)). |
 | `crewboard reject <id> --reason "…"` | Send the task back with a reason; it can be run again. |
 | `crewboard supersede <id> --by <id>` | Close a task because another variant won. |
+| `crewboard drop <id> --reason "…"` | Close a task that is no longer needed. Human only, with a confirmation, like `accept` and `reject`. The task becomes **dropped** («closed as not needed»): the reason stays in its history, and it never becomes ready again, leaves the critical path and is not launched. `task set --status` does not reopen it. A running task is refused: stop it first. An accepted, superseded or dropped one is refused too. On the screen: **Close as not needed…** in the task menu. |
 
 The orchestrator's check — **agents allowed**. It sits between a finished run and your decision; see [the orchestrator's check](review.md#the-orchestrators-check).
 
 | Command | What it does |
 | --- | --- |
-| `crewboard verify <id>` | Take a finished task for checking. |
-| `crewboard verify <id> --done --note "…"` | Checked: the task now waits for a person, with the note above **Accept**. The note is required. |
+| `crewboard verify <id>` | Take a finished task for checking. On a task already checked it changes nothing and prints the note: the task stays with the person. |
+| `crewboard verify <id> --reopen` | Take a checked task back from the person to check it again. |
+| `crewboard verify <id> --done --note "…" [--confirm]` | Checked: the task now waits for a person, with the note above **Accept**. The note is required. It first prints the verdict the person will see and the number of changed files; when the verdict is disputed or no file changed, it asks for confirmation — `y` in a terminal, `--confirm` otherwise. |
 | `crewboard verify <id> --return "findings" [--skip-preflight]` | Send the work back to its worker with the findings: a new run in the same worktree. |
 | `crewboard verify --setting on\|off\|default [--scope plan\|repo]` | Turn the check on or off for the plan (default scope) or the repository, or clear the stored value. The default is on while the plan has a chat. `off` asks a person to confirm. |
 
 All `verify` forms accept `--plan <id>`. Only finished work waiting for review can be checked.
 
+There is no batch accept in the CLI: `accept` takes one task, and its question names a task the orchestrator has not checked. Accepting several tasks at once is the screen's (**Accept in batch**), which pre-selects only clean work and lists the decisions and root tasks without the orchestrator's check before it asks. On a decision, `accept` asks you to close it: a decision has no verdict. A negative or disputed verdict is named in words, not as a code.
+
+### The orchestrator's own work
+
+A `root` task is work the orchestrator does itself and a person then accepts. `crewboard run` refuses it and names these commands — **agents allowed**:
+
+| Command | What it does |
+| --- | --- |
+| `crewboard start <id>` | Take a ready root task in work: the screen shows it «in work by the orchestrator» on the graph, in **Work** and in the task panel. It never enters **Needs you** while in work. |
+| `crewboard verify <id> --done --note "…" [--report <file>]` | Done: the task goes to review, marked «checked by the orchestrator». `--report` is a markdown file stored with the task and shown where a worker's report is: a first line `Result: received`, `negative` or `blocked`, then the checks you ran, evidence (commits, logs, commands) and how to reproduce. Without `--report`, the note is the report. |
+
+Sent back, a root task returns to ready with the reason in its notes; start it again.
+
+Decisions are prepared the same way: `crewboard verify <id> --done --note "…" [--report <file>]` on a decision records the options and the recommendation. With the orchestrator's check on (the default while the plan has a chat), a decision enters **Needs you** only when its dependencies are accepted **and** it is prepared; until then the screen says it is being prepared by the orchestrator. With the check off — a plan run by hand from the CLI, without a chat — a decision waits as soon as its dependencies are accepted, as before.
+
 ## Runs
 
 | Command | What it does |
 | --- | --- |
-| `crewboard run <id> [-a <profile>] [--scope s] [--contract f] [--skip-preflight]` | Start a worker in the task's worktree. `-a` picks a worker and becomes the task's worker. `--contract` overrides the task's contract for this run. `--scope` fills `{scope}` in the recipe's baseline command (see [worktree recipe](#worktree-recipe)). `--skip-preflight` skips the availability check. For dsh, use `-a dsh` or `-a dsh/<model>`, for example `dsh/deepseek-flash`. |
+| `crewboard run <id> [-a <profile>] [--scope s] [--contract f] [--skip-preflight]` | Start a worker in the task's worktree. `-a` picks a worker and becomes the task's worker. `--contract` overrides the task's contract for this run. `--scope` fills `{scope}` in the recipe's baseline command (see [worktree recipe](#worktree-recipe)). `--skip-preflight` skips the availability check. For dsh, use `-a dsh` or `-a dsh/<model>`, for example `dsh/deepseek-flash`. A task whose dependency is accepted but not merged is refused with the merge commands; `--allow-unmerged` starts it anyway — a person only, in an interactive terminal; the copy then lacks that work. |
 | `crewboard events <id>` | The event feed of the task's latest run, including your directions. |
 | `crewboard trace <id> [--json]` | Turns, model time, tool calls, and directions of the latest run. |
 | `crewboard steer <id> (--message "…" \| --file f) [--mode auto\|queue\|interrupt] [--relaunch] [--skip-preflight]` | Send a direction to a running worker. `queue` waits for the current turn to end and then becomes the next turn; `auto` and `interrupt` reach the worker during the turn (Claude Code takes them at its next step, Codex restarts the turn with them). Every direction ends acknowledged or not delivered with a reason. If the run has finished, `--relaunch` starts a new run with the direction. |
+| `crewboard continue <id>` | Continue a run that ended unfinished — no report and uncommitted work (see [Unfinished runs](review.md#unfinished-runs)): a new run in the same worktree, told to finish the work, commit it and report. Refused when the last run did not end unfinished. |
 | `crewboard stop <id>` | Stop the latest run. A Claude Code or Codex run whose last turn has already ended successfully (the worker gave its final report) finishes as completed and goes to review; a run stopped mid-turn is cancelled. |
-| `crewboard attention [--all] [--json] [--alarms]` | What waits on a person — the same list as the screen's "Needs you": tasks waiting for review (and whether the orchestrator checked them), decisions, failed or stalled runs, and other plans that wait. Text is grouped by kind; in `--json` every item has a `kind` (`review`, `decision`, `attention`, `plan`) plus `root`, `planId`, `taskId` and, for alarms, `runId`. Example-plan rows come last, marked `example`, and are not counted. `--all` covers every repository the screen lists (it works from any folder). `--alarms` prints only the run alarms (failed, stalled, looping runs), as the command did before. Prints "All clear." only when nothing waits. |
-| `crewboard cost [--json]` | Totals per worker: runs, minutes, money, tokens, quota. See [costs](costs.md). |
-| `crewboard wait [--for decision\|finished\|check\|any] [--tasks a,b] [--interval 15s] [--timeout 30m] [--json]` | Wait until a task is decided, a run finishes, or a step of the orchestrator's check happens (`check`). Exit `0` on an event, `2` on timeout, `1` on error. Durations take `ms`, `s`, `m`, `h`; a bare number is seconds. Meant to run in the background of an orchestrating agent; it also syncs worker state when no dsh screen is open. |
+| `crewboard attention [--all] [--json] [--alarms]` | What waits on a person — the same list as the screen's "Needs you": tasks waiting for review (and whether the orchestrator checked them), decisions, failed or stalled runs, and other plans that wait. Text is grouped by kind; accepted work not merged yet (`unmerged`, with the merge command as `hint`); in `--json` every item has a `kind` (`review`, `decision`, `unmerged`, `attention`, `plan`) plus `root`, `planId`, `taskId` and, for alarms, `runId`. Example-plan rows appear only when the example is the plan asked about (the repository's open plan, or `--plan` naming it); they come last, marked `example`, and are not counted. `--all` leaves them out. `--all` covers every repository the screen lists (it works from any folder). `--alarms` prints only the run alarms (failed, stalled, looping runs), as the command did before. Prints "All clear." only when nothing waits. |
+| `crewboard cost [--json]` | Totals per worker: runs, minutes, money charged (`cash $X`) and the API-rate estimate (`estimate ≈$Y`) side by side, never added up, tokens, quota. A plan without runs prints `No runs in plan <id>.` See [costs](costs.md). |
+| `crewboard wait [--for decision\|finished\|check\|any] [--tasks a,b] [--interval 15s] [--timeout 30m] [--json]` | Wait until a task is decided, a run finishes, or a step of the orchestrator's check happens (`check`). It waits for the next change; with `--tasks`, when every listed task is already there (its run finished, its check done, decided or closed), it exits `0` at once and prints those tasks marked `already` (`"already": true` in JSON). Exit `0` on an event, `2` on timeout (30 minutes unless `--timeout` says otherwise), `1` on error. Durations take `ms`, `s`, `m`, `h`; a bare number is seconds. Meant to run in the background of an orchestrating agent; it also syncs worker state when no dsh screen is open. |
 
-A run is refused when the task is blocked, running, already accepted or superseded, is a decision, has no contract, or when no worker passes preflight. The message says which.
+A run is refused when the task is blocked, running, already accepted or superseded, is a decision or a root task, has no contract, or when no worker passes preflight. The message says which, and a refusal that prints more than one line (a red baseline with its test output, a preflight list) ends with `✗ <id> was not started: <reason>`, so the last line of the output is always the reason.
 
 ## Workers and presets
 
@@ -141,8 +159,8 @@ When a plan command works on a plan the screen does not show, it prints one warn
 | `crewboard preflight [-a <profile>] [--probe] [--json]` | Check that worker CLIs are installed and signed in. Without `-a`, every enabled profile is checked. With `-a`, the Claude Code version floor for the model is checked too. `--probe` sends a test prompt where supported. Exit `1` if a check fails. |
 | `crewboard worktree prepare <id> [--scope s]` | Create or reuse the task's worktree and run the recipe, without starting a worker. |
 | `crewboard worktree list` | Task worktrees with clean/dirty and accepted state, and the last baseline. |
-| `crewboard worktree gc` | Preview: which worktrees could be removed, which are kept and why, with sizes. |
-| `crewboard worktree gc --yes` | Remove the eligible worktrees. Unaccepted, running, dirty, unmerged, and the three most recently accepted copies are kept. Removal uses `git worktree remove` without force. |
+| `crewboard worktree gc` | Preview: which worktrees could be removed, which are kept and why, with sizes. Removes nothing. |
+| `crewboard worktree gc --yes` | Remove the eligible worktrees. Unaccepted, running, dirty, unmerged, and the three most recently accepted copies are kept. Removal uses `git worktree remove` without force. Prints each removed copy, or `Nothing removed: N kept as …` with the reasons. |
 | `crewboard worktree gc --force <id>` | Human only: remove one worktree even with changes in it. |
 
 ### Worktree recipe

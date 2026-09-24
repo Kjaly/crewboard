@@ -1,10 +1,12 @@
 import {
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
   memo,
+  startTransition,
   useMemo,
   useRef,
   useState,
@@ -14,15 +16,17 @@ import { useAction } from '../../actions.js'
 import { api } from '../../api.js'
 import { t, useLang } from '../../i18n.js'
 import { decideFolds, foldGraph, readManualFolds, taskCount, writeManualFold } from '../../fold.js'
+import { laneAt, liveLaneOrder } from '../../lane-tree.js'
 import { lensIds, lensTasks } from '../../lens.js'
-import { identityLabel, runFact, workerIdentity } from '../../provider.js'
+import { identityLabel, runFact, taskIdentity } from '../../provider.js'
 import { taskTone } from '../../styles.js'
 import { isChecking } from '../../../../../core/src/plan/graph.js'
 import { isHandPicked } from '../../workers.js'
 import { acceptableTasks } from '../accept-batch.js'
 import type { ViewProps } from '../types.js'
-import { type Camera, type Pose, LENS_RESPONSE, createCamera } from './camera.js'
+import { type Camera, type Pose, LENS_RESPONSE, createCamera, detailLevel } from './camera.js'
 import { alertIds, chainOf } from './chain.js'
+import { placeLaneLabels } from './lane-labels.js'
 import { elkReady, loadElk } from './elk.js'
 import { NODE_H, NODE_W, type LaneBand, type NodePos, contentBox, laneBands, laneOf, laneTitle, layoutFoldStack, layoutGraph } from './layout.js'
 import { MAP_H, MAP_W, type MapNode, Minimap, mapProjection } from './minimap.js'
@@ -39,6 +43,8 @@ const OFFSCREEN_MS = 1800
 const DRAG_SLOP = 4
 const FAN_W = 210
 const FAN_ROW_H = 34
+/** Screen height the far view's hover card needs above a block before it flips underneath. */
+const TIP_ROOM = 72
 const VendorMark = memo(VendorMarkImpl, (a, b) => JSON.stringify(a.identity) === JSON.stringify(b.identity))
 
 type Ghost = { id: string; title: string; pos: NodePos }
@@ -115,7 +121,7 @@ export function liveTask(tasks: readonly TaskSnapshot[]): string | undefined {
   return live[0]?.id
 }
 
-function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDensity, lens = null, setLens, walk, lensStep, camera: given }: ViewProps & { camera?: Camera }) {
+function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDensity, lens = null, setLens, walk, lensStep, lane = null, onLaneInView, camera: given }: ViewProps & { camera?: Camera }) {
   const lang = useLang()
   const shown = useBurst(repo)
   const reduced = useReducedMotion()
@@ -162,7 +168,10 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
   const foldKey = `${shown.root}:${shown.planId ?? ''}`
   // biome-ignore lint/correctness/useExhaustiveDependencies: The selected identity and request keys intentionally control this hook’s refresh cadence.
   useEffect(() => setManual(readManualFolds(shown)), [foldKey, shown.tasks])
-  const decision = useMemo(() => decideFolds(shown, manual, new Date()), [shown, manual])
+  const decision = useMemo(() => decideFolds(shown, manual), [shown, manual])
+  // Bands stack live-first — the order of the sidebar's lane tree — instead of plan order.
+  const laneKey = useMemo(() => liveLaneOrder(shown).join('\n'), [shown])
+  const laneSequence = useMemo(() => laneKey.split('\n'), [laneKey])
   // biome-ignore lint/correctness/useExhaustiveDependencies: Locale changes intentionally refresh the translated result.
   const graph = useMemo(() => foldGraph(shown, decision), [shown, decision, lang])
   // biome-ignore lint/correctness/useExhaustiveDependencies: Override and plan revisions intentionally control graph rebuilding.
@@ -214,10 +223,17 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
   const [offscreen, setOffscreen] = useState<{ x: number; y: number; tone: string } | null>(null)
   const [note, setNote] = useState<string | null>(null)
   const [searching, setSearching] = useState(false)
+  // The level of detail follows the zoom. The frame loop reads the scale every frame and acts only
+  // when the level flips: the canvas class (the whole visual switch) is written in that same frame,
+  // and the state behind the hover card and the titles follows as a transition, so re-rendering
+  // 150 cards never costs the zoom a frame.
+  const [far, setFar] = useState(false)
+  const farRef = useRef(far)
 
   const canvasRef = useRef<HTMLDivElement | null>(null)
   const worldRef = useRef<HTMLDivElement | null>(null)
   const mapFrameRef = useRef<HTMLSpanElement | null>(null)
+  const laneLabelsRef = useRef<HTMLDivElement | null>(null)
   const els = useRef(new Map<string, HTMLDivElement>())
   const paths = useRef(new Map<string, SVGPathElement>())
   const springs = useRef(new Map<string, { x: Spring; y: Spring }>())
@@ -245,6 +261,12 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
   if (shown.rev > revisionRef.current) revisionRef.current = shown.rev
   const tasksRef = useRef(tasks)
   tasksRef.current = graphTasks
+  const laneSequenceRef = useRef(laneSequence)
+  laneSequenceRef.current = laneSequence
+  // A lane asked for by the tree or the route; the seq it was served at, so the arrival does not override it.
+  const laneRef = useRef(lane)
+  laneRef.current = lane
+  const laneServed = useRef<number | null>(null)
   const [fitNonce, setFitNonce] = useState(0)
 
   // The precise layout engine is three megabytes: it is fetched only now that the graph is on
@@ -279,12 +301,12 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
     // level positions to the ELK ones, and a camera the reader has not touched re-fits after it.
     const reflow = precise && !preciseApplied.current
     preciseApplied.current ||= precise
-    const stacked = decision.folded.size ? layoutFoldStack(tasksRef.current, decision.folded) : null
+    const stacked = decision.folded.size ? layoutFoldStack(tasksRef.current, decision.folded, laneSequenceRef.current) : null
     if (stacked) setFoldBands(stacked.bands)
     else setFoldBands([])
     const override = layoutOverride.current
     layoutOverride.current = null
-    const placement = override ? Promise.resolve(override) : stacked ? Promise.resolve(stacked.nodes) : layoutGraph(tasksRef.current, reflow || placed.current.size !== graphTasks.length || [...placed.current.keys()].some((id) => !graphTasks.some((t) => t.id === id)) ? undefined : placed.current)
+    const placement = override ? Promise.resolve(override) : stacked ? Promise.resolve(stacked.nodes) : layoutGraph(tasksRef.current, reflow || placed.current.size !== graphTasks.length || [...placed.current.keys()].some((id) => !graphTasks.some((t) => t.id === id)) ? undefined : placed.current, laneSequenceRef.current)
     placement
       .then((next) => {
         if (!alive) return
@@ -292,18 +314,20 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
         setNodes(next)
         if (!arrived.current && next.size > 0) {
           arrived.current = true
+          // A plan opened on a lane goes to that lane, not to the live work.
+          if (laneRef.current && laneServed.current !== laneRef.current.seq) return
           const live = liveTask(tasksRef.current)
           const spot = live ? next.get(live) : undefined
           requestAnimationFrame(() => (spot ? camera.centerOn(spot.x + NODE_W / 2, spot.y + NODE_H / 2, reducedRef.current) : camera.fit(reducedRef.current)))
           return
         }
-        if (reflow && !camera.touched) requestAnimationFrame(() => camera.fit(reducedRef.current))
+        if (reflow && !camera.touched) requestAnimationFrame(() => camera.refit(reducedRef.current))
       })
       .catch(() => {})
     return () => {
       alive = false
     }
-  }, [shapeKey, shown.root, shown.planId, fitNonce, precise, camera, decision.folded])
+  }, [shapeKey, shown.root, shown.planId, fitNonce, precise, camera, decision.folded, laneKey])
 
   const bands = useMemo(() => decision.folded.size ? foldBands : laneBands(nodes), [nodes, foldBands, decision.folded])
   const box = useMemo(() => {
@@ -311,7 +335,31 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
     return decision.folded.size ? { ...bounds, minX: 0 } : bounds
   }, [nodes, decision.folded])
   const laneLeft = nodes.size ? Math.min(...[...nodes.values()].map((p) => p.x)) - 22 : -22
+  const labelBands = useMemo(() => bands.filter((band) => band.lane), [bands])
+  // A new object only when the lanes moved, so the frame loop re-places the names only then.
+  const labels = useMemo(() => ({ bands: labelBands, left: laneLeft }), [labelBands, laneLeft])
+  const labelsRef = useRef(labels)
+  labelsRef.current = labels
   camera.setContent(box)
+
+  // A lane picked in the tree (or opened by `?lane=`): the camera frames that lane's band — the
+  // lane's own nodes across, the band's full height down; a tall band starts at its top.
+  useEffect(() => {
+    if (!lane || laneServed.current === lane.seq || nodes.size === 0) return
+    const band = bands.find((item) => item.lane === lane.lane || item.lanes?.includes(lane.lane))
+    const spots = [...nodes.values()].filter((pos) => pos.lane === lane.lane)
+    laneServed.current = lane.seq
+    if (!band || spots.length === 0) return
+    const target = { minX: Math.min(...spots.map((p) => p.x)), maxX: Math.max(...spots.map((p) => p.x)) + NODE_W, minY: band.top, maxY: band.top + band.height }
+    requestAnimationFrame(() => camera.fitBox(target, reducedRef.current))
+  }, [lane, nodes, bands, camera])
+
+  // The lane in view is written from the frame loop, only when it changes.
+  const bandsRef = useRef(bands)
+  bandsRef.current = bands
+  const onLaneInViewRef = useRef(onLaneInView)
+  onLaneInViewRef.current = onLaneInView
+  useEffect(() => () => onLaneInViewRef.current?.(null), [])
 
   // The minimap frame follows the camera at 60 fps, so it is written straight to the element —
   // re-rendering the map on every frame would cost more than the whole graph.
@@ -415,6 +463,11 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
     let first = true
     let cameraCss = ''
     let mapCss = ''
+    let labelCamera = ''
+    let labelLanes: typeof labelsRef.current | null = null
+    let inViewCamera = ''
+    let inViewBands: LaneBand[] | null = null
+    let inView: string | null | undefined
     const frame = (now: number) => {
       const dt = Math.min(0.032, Math.max(0.001, (now - last) / 1000))
       last = now
@@ -448,6 +501,40 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
       if (worldRef.current && worldCss !== cameraCss) {
         cameraCss = worldCss
         worldRef.current.style.transform = worldCss
+      }
+      const level = detailLevel(camera.scale, farRef.current ? 'far' : 'near')
+      if ((level === 'far') !== farRef.current) {
+        const next = level === 'far'
+        farRef.current = next
+        canvasRef.current?.classList.toggle('orc-graph--far', next)
+        startTransition(() => setFar(next))
+      }
+      // Lane names in the far view sit over the canvas in screen pixels. They are placed again only
+      // when the camera or the lanes changed, and each one is written only if its spot did.
+      const labels = laneLabelsRef.current
+      const lanes = labelsRef.current
+      if (labels && farRef.current && (worldCss !== labelCamera || lanes !== labelLanes)) {
+        labelCamera = worldCss
+        labelLanes = lanes
+        const places = placeLaneLabels(lanes.bands, lanes.left, camera.pose())
+        places.forEach((place, index) => {
+          const el = labels.children[index] as HTMLElement | undefined
+          if (!el) return
+          const css = place.shown ? `translate(${place.x}px,${place.y}px)` : 'hidden'
+          if (el.dataset.at === css) return
+          el.dataset.at = css
+          if (place.shown) el.style.transform = css
+          el.style.visibility = place.shown ? '' : 'hidden'
+        })
+      }
+      if (onLaneInViewRef.current && (worldCss !== inViewCamera || bandsRef.current !== inViewBands)) {
+        inViewCamera = worldCss
+        inViewBands = bandsRef.current
+        const lane = laneAt(bandsRef.current, targets.current, camera.viewBox())
+        if (lane !== inView) {
+          inView = lane
+          onLaneInViewRef.current(lane)
+        }
       }
       const mapFrame = mapFrameRef.current
       if (mapFrame) {
@@ -487,7 +574,7 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
       camera.setViewport(rect.width || 960, rect.height || 600)
       // The panel opening or the window narrowing re-fits the plan — unless the reader has already
       // put the camera somewhere on purpose.
-      if (fitted.current && !camera.touched) camera.fit(reducedRef.current)
+      if (fitted.current && !camera.touched) camera.refit(reducedRef.current)
     }
     measure()
     if (typeof ResizeObserver === 'undefined') return
@@ -841,6 +928,11 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
       camera.fit(reducedRef.current)
       return
     }
+    if (key === 'o' || key === 'O' || key === '\u0449' || key === '\u0429') {
+      event.preventDefault()
+      camera.overview(reducedRef.current)
+      return
+    }
     if ((key === 'r' || key === 'R' || key === '\u043a' || key === '\u041a') && task?.status === 'ready') {
       event.preventDefault()
       setNote(t('graph.startingTask', { task: task.title }))
@@ -868,6 +960,16 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
     return ids
   }, [hovered, selectedId, tasks, graph.nodes, byId])
   const criticalSet = useMemo(() => new Set(critical ? shown.criticalPath.map((id) => graph.nodes.some((n) => n.id === id) ? id : byId.get(id) ? `lane:${laneOf(byId.get(id)!)}` : id) : []), [critical, shown.criticalPath, graph.nodes, byId])
+  // The critical path stays drawn in the far view whether or not its chip is on: at that distance
+  // it is the one line that still says where the plan is going.
+  const criticalEdges = useMemo(() => {
+    const shownId = (id: string) => {
+      const task = byId.get(id)
+      return graph.nodes.some((n) => n.id === id) || !task ? id : `lane:${laneOf(task)}`
+    }
+    const path = shown.criticalPath.map(shownId)
+    return new Set(path.slice(1).map((id, index) => `${path[index]}>${id}`))
+  }, [shown.criticalPath, graph.nodes, byId])
   const mapNodes = useMemo<MapNode[]>(
     () =>
       graph.nodes.flatMap((node) => {
@@ -901,6 +1003,13 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
       }
     }, 350)
   }
+  // The far view's hover card: id, title and worker, placed over the block in canvas pixels.
+  const tipTask = far && hovered ? byId.get(hovered) : undefined
+  const tipPos = tipTask ? nodes.get(tipTask.id) : undefined
+  const tipAt = tipPos ? camera.toScreen(tipPos.x + NODE_W / 2, tipPos.y) : null
+  // A block near the top edge gets its card underneath, where there is room for it.
+  const tipBelow = tipAt !== null && tipAt.y < TIP_ROOM
+  const tip = tipTask && tipPos && tipAt ? { task: tipTask, x: tipAt.x, y: tipBelow ? camera.toScreen(0, tipPos.y + NODE_H).y : tipAt.y } : null
   const fanTasks = fanLane ? tasks.filter((task) => laneOf(task) === fanLane) : []
   const fanChip = fanLane ? nodes.get(`lane:${fanLane}`) : undefined
   const fan = fanChip && fanTasks.length ? fanPosition(fanChip, fanTasks.length, nodes, bands) : null
@@ -910,7 +1019,7 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
       {/* The canvas is a pan surface, not a control: everything it does also has a button or a key. */}
       {/* biome-ignore lint/a11y/noStaticElementInteractions: This wrapper handles delegated pointer or keyboard events for its child controls. */} <div
         ref={canvasRef}
-        className="orc-graph"
+        className={`orc-graph${far ? ' orc-graph--far' : ''}`}
         onPointerDown={onCanvasPointerDown}
         onPointerMove={onCanvasPointerMove}
         onPointerUp={endCanvasDrag}
@@ -946,7 +1055,7 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
                 }}
                 className={`orc-gedge orc-gedge--${edge.state}${chain.size > 0 && chain.has(edge.from) && chain.has(edge.to) ? ' orc-gedge--on' : ''}${
                   chain.size > 0 && !(chain.has(edge.from) && chain.has(edge.to)) ? ' orc-gedge--off' : ''
-                }${lensOn && !visibleMatchIds.has(edge.from) && !visibleMatchIds.has(edge.to) ? ' orc-gedge--dim' : ''}`}
+                }${lensOn && !visibleMatchIds.has(edge.from) && !visibleMatchIds.has(edge.to) ? ' orc-gedge--dim' : ''}${criticalEdges.has(`${edge.from}>${edge.to}`) ? ' orc-gedge--crit' : ''}`}
                 markerEnd={`url(#orc-arrow-${edge.state})`}
               ><title>{t('graph.edgeCount', { count: edge.count })}</title></path>
             ))}
@@ -965,7 +1074,8 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
             </div>
           ))}
 
-          {fan && fanLane ? /* biome-ignore lint/a11y/noStaticElementInteractions: This wrapper handles delegated pointer or keyboard events for its child controls. */ <div className={`orc-gfan${fanPointer && !reduced ? ' orc-gfan--motion' : ''}${fanClosing ? ' orc-gfan--closing' : ''}`} data-side={fan.side} data-lane={fanLane} style={{ left: fan.x, top: fan.y }} onPointerEnter={() => showFan(fanLane, true)} onPointerLeave={closeFan} onFocus={() => showFan(fanLane, false)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) closeFan() }}>
+          {/* The folded lane's fan is a list to read — in the far view it would be a smudge, so it waits. */}
+          {fan && fanLane && !far ? /* biome-ignore lint/a11y/noStaticElementInteractions: This wrapper handles delegated pointer or keyboard events for its child controls. */ <div className={`orc-gfan${fanPointer && !reduced ? ' orc-gfan--motion' : ''}${fanClosing ? ' orc-gfan--closing' : ''}`} data-side={fan.side} data-lane={fanLane} style={{ left: fan.x, top: fan.y }} onPointerEnter={() => showFan(fanLane, true)} onPointerLeave={closeFan} onFocus={() => showFan(fanLane, false)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) closeFan() }}>
             {fanTasks.map((task, index) => <button type="button" key={task.id} className="orc-gfan__card" style={{ transform: `translateY(${index * FAN_ROW_H}px)` }} onClick={() => { onSelect(task.id); setFanLane(null) }} aria-label={t('graph.selectTask', { id: task.id, title: task.title })}><span className="orc-gfan__id">{task.id}</span><span className="orc-gfan__title">{task.title}</span></button>)}
           </div> : null}
 
@@ -973,14 +1083,14 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
             const task = node.task
             const pos = nodes.get(node.id)
             if (!pos) return null
-            if (!task) return /* biome-ignore lint/a11y/noStaticElementInteractions: This wrapper handles delegated pointer or keyboard events for its child controls. */ <div key={node.id} ref={(el) => { if (el) els.current.set(node.id, el); else els.current.delete(node.id) }} className={`orc-gnode orc-gnode--lane${lensOn && !visibleMatchIds.has(node.id) ? ' orc-gnode--dim' : ''}`} style={{ transform: `translate(${pos.x}px,${pos.y}px)`, width: NODE_W }} onPointerEnter={() => showFan(node.lane, true)} onPointerLeave={closeFan} onFocus={() => showFan(node.lane, false)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) closeFan() }}>
+            if (!task) return /* biome-ignore lint/a11y/noStaticElementInteractions: This wrapper handles delegated pointer or keyboard events for its child controls. */ <div key={node.id} ref={(el) => { if (el) els.current.set(node.id, el); else els.current.delete(node.id) }} className={`orc-gnode orc-gnode--lane${lensOn && !visibleMatchIds.has(node.id) ? ' orc-gnode--dim' : ''}`} style={{ transform: `translate(${pos.x}px,${pos.y}px)`, width: NODE_W, '--orc-tone': 'var(--orc-ok)' } as CSSProperties} onPointerEnter={() => showFan(node.lane, true)} onPointerLeave={closeFan} onFocus={() => showFan(node.lane, false)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) closeFan() }}>
               <button type="button" className="orc-gnode__body orc-gnode__body--lane" aria-label={t('graph.expandLane', { lane: laneTitle(node.lane) })} aria-expanded="false" onClick={() => toggleFold(node.lane)}>
                 <span className="orc-gnode__title">{laneTitle(node.lane) || t('graph.unnamedLane')} <span aria-hidden="true">⌄</span></span>
                 <span className="orc-gnode__meta"><em>{taskCount(node.count ?? 0)} · {node.summary}</em></span>
               </button>
             </div>
             const tone = taskTone(task)
-            const identity = workerIdentity(task.worker, workers)
+            const identity = taskIdentity(task, workers)
             const fact = runFact(task, now)
             const negativePredecessor = task.deps.some((id) => byId.get(id)?.closed === 'negative')
             const outcome = task.closed === 'negative' ? t('graph.negativeResult') : negativePredecessor ? t('graph.negativePredecessor') : null
@@ -998,16 +1108,17 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
                 className={`orc-gnode${node.guest ? ' orc-gnode--guest' : ''}${faded(task.id) ? ' orc-gnode--faded' : ''}${away.has(task.id) ? ' orc-gnode--away' : ''}${waiting ? ' orc-gnode--review' : ''}${
                   lensOn && !matchIds.has(task.id) ? ' orc-gnode--dim' : ''
                 }`}
-                style={{ transform: `translate(${pos.x}px,${pos.y}px)`, width: NODE_W }}
+                style={{ transform: `translate(${pos.x}px,${pos.y}px)`, width: NODE_W, '--orc-tone': tone.color } as CSSProperties}
               >
                 <button
                   type="button"
                   className={`orc-gnode__body${task.status === 'blocked' || task.status === 'backlog' ? ' orc-gnode__body--dim' : ''}${
-                    task.kind === 'decision' ? ' orc-gnode__body--decision' : ''
+                    task.kind === 'decision' || task.kind === 'root' ? ' orc-gnode__body--decision' : ''
                   }`}
                   aria-pressed={selectedId === task.id}
                   aria-label={`${task.title} · ${tone.label} · ${identityLabel(identity)} · ${fact}${outcome && outcome !== tone.label ? ` · ${outcome}` : ''}`}
-                  title={`${tone.label} · ${identityLabel(identity)} · ${fact}${outcome && outcome !== tone.label ? ` · ${outcome}` : ''}`}
+                  title={far ? undefined : `${tone.label} · ${identityLabel(identity)} · ${fact}${outcome && outcome !== tone.label ? ` · ${outcome}` : ''}`}
+                  aria-describedby={far && hovered === task.id ? 'orc-gtip' : undefined}
                   tabIndex={selectedId === task.id || (!selectedId && tasks[0]?.id === task.id) ? 0 : -1}
                   onPointerDown={(event) => onNodePointerDown(event, task.id)}
                   onPointerEnter={() => setHovered(task.id)}
@@ -1018,21 +1129,23 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
                       suppressClick.current = false
                       return
                     }
+                    // A block in the far view is too small to read: the click flies to the task first.
+                    if (farRef.current) camera.zoomTo({ minX: pos.x, minY: pos.y, maxX: pos.x + NODE_W, maxY: pos.y + NODE_H }, reducedRef.current)
                     onSelect(task.id)
                   }}
                   onDoubleClick={() => (task.pos ? unpin(task.id) : focusNeighbours(task.id))}
                 >
                   <span className={`orc-gnode__strip orc-gnode__strip--${task.status}`} style={{ backgroundColor: tone.color }} aria-hidden="true" />
                   <span className="orc-gnode__title">
-                    {task.kind === 'decision' ? <span aria-hidden="true">◆ </span> : null}
+                    {task.kind === 'decision' ? <span aria-hidden="true">◆ </span> : task.kind === 'root' ? <span aria-hidden="true">▣ </span> : null}
                     {density === 'detail' ? <span className="orc-card__id">{task.id} </span> : null}
                     {task.title}
                     {node.guest ? <span className="orc-gnode__guest-label">{node.lane}</span> : null}
                   </span>
                   <span className="orc-gnode__meta">
-                    <VendorMark identity={identity} />
+                    {task.kind === 'root' ? null : <VendorMark identity={identity} />}
                     <span className="orc-gnode__model">{identityLabel(identity)}</span>
-                    <span className="orc-gnode__fact">{outcome ?? (task.status === 'in_review' && isChecking(task.check) ? tone.label : fact)}</span>
+                    <span className="orc-gnode__fact">{outcome ?? ((task.status === 'in_review' && isChecking(task.check)) || task.byOrchestrator || task.preparing ? tone.label : fact)}</span>
                     {isHandPicked(task) ? <span className="orc-gnode__hand" role="img" aria-label={t('graph.handPicked')} title={t('graph.handPickedTitle')}>⚑</span> : null}
                   </span>
                   {task.pos ? (
@@ -1070,7 +1183,20 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
           })}
         </div>
 
+        {/* The far view's lane names: always in the tree so the switch is a fade, not a mount. */}
+        <div ref={laneLabelsRef} className="orc-glabels" aria-hidden="true">
+          {labelBands.map((band) => <span key={band.lane} className="orc-glabel">{laneTitle(band.lane)}</span>)}
+        </div>
+
         {offscreen ? <span className="orc-gedge-mark" style={{ left: offscreen.x, top: offscreen.y, background: offscreen.tone }} aria-hidden="true" /> : null}
+
+        {tip ? (
+          <div id="orc-gtip" className={`orc-gtip${tipBelow ? ' orc-gtip--below' : ''}`} role="tooltip" style={{ left: tip.x, top: tip.y }}>
+            <span className="orc-gtip__id">{tip.task.id}</span>
+            <span className="orc-gtip__title">{tip.task.title}</span>
+            <span className="orc-gtip__worker">{identityLabel(taskIdentity(tip.task, workers))}</span>
+          </div>
+        ) : null}
 
         {searching ? <GraphSearch tasks={tasks} onPick={pickFound} onClose={() => setSearching(false)} /> : null}
 
@@ -1080,6 +1206,9 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
           <button type="button" className="orc-chip" onClick={() => tidy()} disabled={!tasks.some((task) => manualPos(task.id))}>{t('graph.tidyAll')}</button>
           <button type="button" className="orc-chip" onClick={() => camera.fit(reducedRef.current)}>
             <span aria-hidden="true">⤢</span> {t('graph.fit')}
+          </button>
+          <button type="button" className="orc-chip" onClick={() => camera.overview(reducedRef.current)} title={t('graph.overviewHint')}>
+            <span aria-hidden="true">⊡</span> {t('graph.overview')}
           </button>
           <button type="button" className="orc-chip" aria-pressed={critical} onClick={() => setCritical(!critical)}>
             {t('graph.criticalPath', { count: shown.criticalPath.length })}
@@ -1120,4 +1249,4 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
   )
 }
 
-export const GraphView = memo(GraphViewImpl, (a, b) => JSON.stringify(a.repo) === JSON.stringify(b.repo) && a.workers === b.workers && a.selectedId === b.selectedId && a.onSelect === b.onSelect && a.density === b.density && a.lens === b.lens && a.setLens === b.setLens && a.walk === b.walk && a.lensStep === b.lensStep && a.camera === b.camera)
+export const GraphView = memo(GraphViewImpl, (a, b) => JSON.stringify(a.repo) === JSON.stringify(b.repo) && a.workers === b.workers && a.selectedId === b.selectedId && a.onSelect === b.onSelect && a.density === b.density && a.lens === b.lens && a.setLens === b.setLens && a.walk === b.walk && a.lensStep === b.lensStep && a.camera === b.camera && a.lane === b.lane && a.onLaneInView === b.onLaneInView)
