@@ -1,0 +1,263 @@
+{
+  "empty": {
+    "setup": [],
+    "env": {
+      "unset": []
+    },
+    "timeoutSec": 300
+  },
+  "recipes": {
+    "empty": {
+      "ok": true,
+      "data": {
+        "setup": [],
+        "env": {
+          "unset": []
+        },
+        "timeoutSec": 300
+      }
+    },
+    "full": {
+      "ok": true,
+      "data": {
+        "setup": [
+          "pnpm i",
+          {
+            "copy": ".env"
+          }
+        ],
+        "env": {
+          "unset": [
+            "CI"
+          ]
+        },
+        "baseline": "pnpm test",
+        "timeoutSec": 60
+      }
+    },
+    "envWithoutUnset": {
+      "ok": true,
+      "data": {
+        "setup": [],
+        "env": {
+          "unset": []
+        },
+        "timeoutSec": 300
+      }
+    },
+    "emptyStep": {
+      "ok": false,
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": [
+            "setup",
+            0
+          ],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    "emptyCopy": {
+      "ok": false,
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": [
+            "setup",
+            0,
+            "copy"
+          ],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    "badStep": {
+      "ok": false,
+      "issues": [
+        {
+          "code": "invalid_union",
+          "errors": [
+            [
+              {
+                "expected": "string",
+                "code": "invalid_type",
+                "path": [],
+                "message": "Invalid input: expected string, received number"
+              }
+            ],
+            [
+              {
+                "expected": "object",
+                "code": "invalid_type",
+                "path": [],
+                "message": "Invalid input: expected object, received number"
+              }
+            ]
+          ],
+          "path": [
+            "setup",
+            0
+          ],
+          "message": "Invalid input"
+        }
+      ]
+    },
+    "zeroTimeout": {
+      "ok": false,
+      "issues": [
+        {
+          "origin": "number",
+          "code": "too_small",
+          "minimum": 0,
+          "inclusive": false,
+          "path": [
+            "timeoutSec"
+          ],
+          "message": "Too small: expected number to be >0"
+        }
+      ]
+    },
+    "fractionalTimeout": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "int",
+          "format": "safeint",
+          "code": "invalid_type",
+          "path": [
+            "timeoutSec"
+          ],
+          "message": "Invalid input: expected int, received number"
+        }
+      ]
+    },
+    "stringTimeout": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "number",
+          "code": "invalid_type",
+          "path": [
+            "timeoutSec"
+          ],
+          "message": "Invalid input: expected number, received string"
+        }
+      ]
+    },
+    "badUnset": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [
+            "env",
+            "unset",
+            0
+          ],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    },
+    "notObject": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": [],
+          "message": "Invalid input: expected object, received string"
+        }
+      ]
+    }
+  },
+  "saved": {
+    "empty": {
+      "ok": true,
+      "data": {
+        "setup": [],
+        "env": {
+          "unset": []
+        },
+        "timeoutSec": 300
+      }
+    },
+    "full": {
+      "ok": false,
+      "name": "schema",
+      "message": "[\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"extra\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"extra\\\"\"\n  }\n]"
+    },
+    "envWithoutUnset": {
+      "ok": true,
+      "data": {
+        "setup": [],
+        "env": {
+          "unset": []
+        },
+        "timeoutSec": 300
+      }
+    },
+    "emptyStep": {
+      "ok": false,
+      "name": "schema",
+      "message": "[\n  {\n    \"origin\": \"string\",\n    \"code\": \"too_small\",\n    \"minimum\": 1,\n    \"inclusive\": true,\n    \"path\": [\n      \"setup\",\n      0\n    ],\n    \"message\": \"Too small: expected string to have >=1 characters\"\n  }\n]"
+    },
+    "emptyCopy": {
+      "ok": false,
+      "name": "schema",
+      "message": "[\n  {\n    \"origin\": \"string\",\n    \"code\": \"too_small\",\n    \"minimum\": 1,\n    \"inclusive\": true,\n    \"path\": [\n      \"setup\",\n      0,\n      \"copy\"\n    ],\n    \"message\": \"Too small: expected string to have >=1 characters\"\n  }\n]"
+    },
+    "badStep": {
+      "ok": false,
+      "name": "schema",
+      "message": "[\n  {\n    \"code\": \"invalid_union\",\n    \"errors\": [\n      [\n        {\n          \"expected\": \"string\",\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected string, received number\"\n        }\n      ],\n      [\n        {\n          \"expected\": \"object\",\n          \"code\": \"invalid_type\",\n          \"path\": [],\n          \"message\": \"Invalid input: expected object, received number\"\n        }\n      ]\n    ],\n    \"path\": [\n      \"setup\",\n      0\n    ],\n    \"message\": \"Invalid input\"\n  }\n]"
+    },
+    "zeroTimeout": {
+      "ok": false,
+      "name": "schema",
+      "message": "[\n  {\n    \"origin\": \"number\",\n    \"code\": \"too_small\",\n    \"minimum\": 0,\n    \"inclusive\": false,\n    \"path\": [\n      \"timeoutSec\"\n    ],\n    \"message\": \"Too small: expected number to be >0\"\n  }\n]"
+    },
+    "fractionalTimeout": {
+      "ok": false,
+      "name": "schema",
+      "message": "[\n  {\n    \"expected\": \"int\",\n    \"format\": \"safeint\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"timeoutSec\"\n    ],\n    \"message\": \"Invalid input: expected int, received number\"\n  }\n]"
+    },
+    "stringTimeout": {
+      "ok": false,
+      "name": "schema",
+      "message": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"timeoutSec\"\n    ],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
+    },
+    "badUnset": {
+      "ok": false,
+      "name": "schema",
+      "message": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"env\",\n      \"unset\",\n      0\n    ],\n    \"message\": \"Invalid input: expected string, received number\"\n  }\n]"
+    },
+    "notObject": {
+      "ok": false,
+      "name": "schema",
+      "message": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
+    },
+    "unknownKey": {
+      "ok": false,
+      "name": "schema",
+      "message": "[\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"extra\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"extra\\\"\"\n  }\n]"
+    },
+    "nestedUnknownKey": {
+      "ok": true,
+      "data": {
+        "setup": [],
+        "env": {
+          "unset": []
+        },
+        "timeoutSec": 300
+      }
+    }
+  }
+}

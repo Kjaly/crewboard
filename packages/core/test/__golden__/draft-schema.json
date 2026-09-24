@@ -1,0 +1,886 @@
+{
+  "drafts": {
+    "example": {
+      "ok": true,
+      "data": {
+        "id": "greeting-cli",
+        "goal": "Add a greeting command to the CLI",
+        "source": "chat",
+        "lanes": [
+          "core",
+          "docs"
+        ],
+        "tasks": [
+          {
+            "id": "greet-command",
+            "title": "Add the greet command",
+            "lane": "core",
+            "class": "code",
+            "kind": "implement",
+            "deps": [],
+            "contract": "Add `src/greet.ts` exporting `greet(name)` and wire it into the CLI.",
+            "acceptance": [
+              "pnpm test passes",
+              "`cli greet Ann` prints Hello, Ann"
+            ],
+            "sources": [
+              "## Greeting"
+            ]
+          },
+          {
+            "id": "greet-docs",
+            "title": "Document the command",
+            "lane": "docs",
+            "class": "design",
+            "kind": "implement",
+            "deps": [
+              "greet-command"
+            ],
+            "contract": "Describe `greet` in `README.md`.",
+            "acceptance": [
+              "README shows an example"
+            ],
+            "sources": [
+              "## Greeting"
+            ]
+          }
+        ],
+        "decisions": [
+          "Should the greeting be localised?"
+        ]
+      }
+    },
+    "extraKeys": {
+      "ok": true,
+      "data": {
+        "id": "greeting-cli",
+        "goal": "Add a greeting command to the CLI",
+        "source": "chat",
+        "lanes": [
+          "core",
+          "docs"
+        ],
+        "tasks": [
+          {
+            "id": "greet-command",
+            "title": "Add the greet command",
+            "lane": "core",
+            "class": "code",
+            "kind": "implement",
+            "deps": [],
+            "contract": "Add `src/greet.ts` exporting `greet(name)` and wire it into the CLI.",
+            "acceptance": [
+              "pnpm test passes",
+              "`cli greet Ann` prints Hello, Ann"
+            ],
+            "sources": [
+              "## Greeting"
+            ]
+          }
+        ],
+        "decisions": [
+          "Should the greeting be localised?"
+        ]
+      }
+    },
+    "notObject": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": [],
+          "message": "Invalid input: expected object, received array"
+        }
+      ]
+    },
+    "emptyObject": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [
+            "id"
+          ],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [
+            "goal"
+          ],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "code": "invalid_union",
+          "errors": [
+            [
+              {
+                "code": "invalid_value",
+                "values": [
+                  "chat"
+                ],
+                "path": [],
+                "message": "Invalid input: expected \"chat\""
+              }
+            ],
+            [
+              {
+                "expected": "object",
+                "code": "invalid_type",
+                "path": [],
+                "message": "Invalid input: expected object, received undefined"
+              }
+            ]
+          ],
+          "path": [
+            "source"
+          ],
+          "message": "Invalid input"
+        },
+        {
+          "expected": "array",
+          "code": "invalid_type",
+          "path": [
+            "lanes"
+          ],
+          "message": "Invalid input: expected array, received undefined"
+        },
+        {
+          "expected": "array",
+          "code": "invalid_type",
+          "path": [
+            "tasks"
+          ],
+          "message": "Invalid input: expected array, received undefined"
+        },
+        {
+          "expected": "array",
+          "code": "invalid_type",
+          "path": [
+            "decisions"
+          ],
+          "message": "Invalid input: expected array, received undefined"
+        }
+      ]
+    },
+    "badId": {
+      "ok": false,
+      "issues": [
+        {
+          "origin": "string",
+          "code": "invalid_format",
+          "format": "regex",
+          "pattern": "/^[a-z0-9][a-z0-9-]{0,40}$/",
+          "path": [
+            "id"
+          ],
+          "message": "Invalid string: must match pattern /^[a-z0-9][a-z0-9-]{0,40}$/"
+        }
+      ]
+    },
+    "longId": {
+      "ok": false,
+      "issues": [
+        {
+          "origin": "string",
+          "code": "invalid_format",
+          "format": "regex",
+          "pattern": "/^[a-z0-9][a-z0-9-]{0,40}$/",
+          "path": [
+            "id"
+          ],
+          "message": "Invalid string: must match pattern /^[a-z0-9][a-z0-9-]{0,40}$/"
+        }
+      ]
+    },
+    "emptyGoal": {
+      "ok": false,
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": [
+            "goal"
+          ],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    "sourceEmptyName": {
+      "ok": false,
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": [
+            "source",
+            "name"
+          ],
+          "message": "Too small: expected string to have >=1 characters"
+        },
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": [
+            "source",
+            "hash"
+          ],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    "sourceLiteral": {
+      "ok": false,
+      "issues": [
+        {
+          "code": "invalid_union",
+          "errors": [
+            [
+              {
+                "code": "invalid_value",
+                "values": [
+                  "chat"
+                ],
+                "path": [],
+                "message": "Invalid input: expected \"chat\""
+              }
+            ],
+            [
+              {
+                "expected": "object",
+                "code": "invalid_type",
+                "path": [],
+                "message": "Invalid input: expected object, received string"
+              }
+            ]
+          ],
+          "path": [
+            "source"
+          ],
+          "message": "Invalid input"
+        }
+      ]
+    },
+    "emptyLane": {
+      "ok": false,
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": [
+            "lanes",
+            0
+          ],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    "duplicateTasks": {
+      "ok": false,
+      "issues": [
+        {
+          "code": "custom",
+          "path": [
+            "tasks",
+            1,
+            "id"
+          ],
+          "message": "duplicate_task_id: greet-command"
+        },
+        {
+          "code": "custom",
+          "path": [
+            "tasks",
+            2,
+            "id"
+          ],
+          "message": "duplicate_task_id: greet-command"
+        }
+      ]
+    },
+    "badTaskSlug": {
+      "ok": false,
+      "issues": [
+        {
+          "origin": "string",
+          "code": "invalid_format",
+          "format": "regex",
+          "pattern": "/^[a-z0-9][a-z0-9-]*$/",
+          "path": [
+            "tasks",
+            0,
+            "id"
+          ],
+          "message": "Invalid string: must match pattern /^[a-z0-9][a-z0-9-]*$/"
+        },
+        {
+          "origin": "string",
+          "code": "invalid_format",
+          "format": "regex",
+          "pattern": "/^[a-z0-9][a-z0-9-]*$/",
+          "path": [
+            "tasks",
+            0,
+            "deps",
+            0
+          ],
+          "message": "Invalid string: must match pattern /^[a-z0-9][a-z0-9-]*$/"
+        }
+      ]
+    },
+    "missingTaskFields": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [
+            "tasks",
+            0,
+            "title"
+          ],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [
+            "tasks",
+            0,
+            "lane"
+          ],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "code": "invalid_value",
+          "values": [
+            "code",
+            "design",
+            "review",
+            "research"
+          ],
+          "path": [
+            "tasks",
+            0,
+            "class"
+          ],
+          "message": "Invalid option: expected one of \"code\"|\"design\"|\"review\"|\"research\""
+        },
+        {
+          "code": "invalid_value",
+          "values": [
+            "implement",
+            "review",
+            "research",
+            "decision"
+          ],
+          "path": [
+            "tasks",
+            0,
+            "kind"
+          ],
+          "message": "Invalid option: expected one of \"implement\"|\"review\"|\"research\"|\"decision\""
+        },
+        {
+          "expected": "array",
+          "code": "invalid_type",
+          "path": [
+            "tasks",
+            0,
+            "deps"
+          ],
+          "message": "Invalid input: expected array, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [
+            "tasks",
+            0,
+            "contract"
+          ],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "array",
+          "code": "invalid_type",
+          "path": [
+            "tasks",
+            0,
+            "acceptance"
+          ],
+          "message": "Invalid input: expected array, received undefined"
+        },
+        {
+          "expected": "array",
+          "code": "invalid_type",
+          "path": [
+            "tasks",
+            0,
+            "sources"
+          ],
+          "message": "Invalid input: expected array, received undefined"
+        }
+      ]
+    },
+    "badEnums": {
+      "ok": false,
+      "issues": [
+        {
+          "code": "invalid_value",
+          "values": [
+            "code",
+            "design",
+            "review",
+            "research"
+          ],
+          "path": [
+            "tasks",
+            0,
+            "class"
+          ],
+          "message": "Invalid option: expected one of \"code\"|\"design\"|\"review\"|\"research\""
+        },
+        {
+          "code": "invalid_value",
+          "values": [
+            "implement",
+            "review",
+            "research",
+            "decision"
+          ],
+          "path": [
+            "tasks",
+            0,
+            "kind"
+          ],
+          "message": "Invalid option: expected one of \"implement\"|\"review\"|\"research\"|\"decision\""
+        }
+      ]
+    },
+    "decisionObject": {
+      "ok": true,
+      "data": {
+        "id": "greeting-cli",
+        "goal": "Add a greeting command to the CLI",
+        "source": "chat",
+        "lanes": [
+          "core",
+          "docs"
+        ],
+        "tasks": [
+          {
+            "id": "greet-command",
+            "title": "Add the greet command",
+            "lane": "core",
+            "class": "code",
+            "kind": "implement",
+            "deps": [],
+            "contract": "Add `src/greet.ts` exporting `greet(name)` and wire it into the CLI.",
+            "acceptance": [
+              "pnpm test passes",
+              "`cli greet Ann` prints Hello, Ann"
+            ],
+            "sources": [
+              "## Greeting"
+            ]
+          },
+          {
+            "id": "greet-docs",
+            "title": "Document the command",
+            "lane": "docs",
+            "class": "design",
+            "kind": "implement",
+            "deps": [
+              "greet-command"
+            ],
+            "contract": "Describe `greet` in `README.md`.",
+            "acceptance": [
+              "README shows an example"
+            ],
+            "sources": [
+              "## Greeting"
+            ]
+          }
+        ],
+        "decisions": [
+          "Localise? — options: yes; no; recommendation: no"
+        ]
+      }
+    },
+    "decisionNumber": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [
+            "decisions",
+            0
+          ],
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    }
+  },
+  "sources": [
+    {
+      "ok": true,
+      "data": "chat"
+    },
+    {
+      "ok": true,
+      "data": {
+        "name": "a",
+        "hash": "b"
+      }
+    },
+    {
+      "ok": false,
+      "issues": [
+        {
+          "code": "invalid_union",
+          "errors": [
+            [
+              {
+                "code": "invalid_value",
+                "values": [
+                  "chat"
+                ],
+                "path": [],
+                "message": "Invalid input: expected \"chat\""
+              }
+            ],
+            [
+              {
+                "expected": "string",
+                "code": "invalid_type",
+                "path": [
+                  "hash"
+                ],
+                "message": "Invalid input: expected string, received undefined"
+              }
+            ]
+          ],
+          "path": [],
+          "message": "Invalid input"
+        }
+      ]
+    },
+    {
+      "ok": false,
+      "issues": [
+        {
+          "code": "invalid_union",
+          "errors": [
+            [
+              {
+                "code": "invalid_value",
+                "values": [
+                  "chat"
+                ],
+                "path": [],
+                "message": "Invalid input: expected \"chat\""
+              }
+            ],
+            [
+              {
+                "expected": "object",
+                "code": "invalid_type",
+                "path": [],
+                "message": "Invalid input: expected object, received number"
+              }
+            ]
+          ],
+          "path": [],
+          "message": "Invalid input"
+        }
+      ]
+    }
+  ],
+  "answers": {
+    "valid": {
+      "ok": true,
+      "draft": {
+        "id": "greeting-cli",
+        "goal": "Add a greeting command to the CLI",
+        "source": "chat",
+        "lanes": [
+          "core",
+          "docs"
+        ],
+        "tasks": [
+          {
+            "id": "greet-command",
+            "title": "Add the greet command",
+            "lane": "core",
+            "class": "code",
+            "kind": "implement",
+            "deps": [],
+            "contract": "Add `src/greet.ts` exporting `greet(name)` and wire it into the CLI.",
+            "acceptance": [
+              "pnpm test passes",
+              "`cli greet Ann` prints Hello, Ann"
+            ],
+            "sources": [
+              "## Greeting"
+            ]
+          },
+          {
+            "id": "greet-docs",
+            "title": "Document the command",
+            "lane": "docs",
+            "class": "design",
+            "kind": "implement",
+            "deps": [
+              "greet-command"
+            ],
+            "contract": "Describe `greet` in `README.md`.",
+            "acceptance": [
+              "README shows an example"
+            ],
+            "sources": [
+              "## Greeting"
+            ]
+          }
+        ],
+        "decisions": [
+          "Should the greeting be localised?"
+        ]
+      }
+    },
+    "sourceReplaced": {
+      "ok": true,
+      "draft": {
+        "id": "greeting-cli",
+        "goal": "Add a greeting command to the CLI",
+        "source": {
+          "name": "spec.md",
+          "hash": "h"
+        },
+        "lanes": [
+          "core",
+          "docs"
+        ],
+        "tasks": [
+          {
+            "id": "greet-command",
+            "title": "Add the greet command",
+            "lane": "core",
+            "class": "code",
+            "kind": "implement",
+            "deps": [],
+            "contract": "Add `src/greet.ts` exporting `greet(name)` and wire it into the CLI.",
+            "acceptance": [
+              "pnpm test passes",
+              "`cli greet Ann` prints Hello, Ann"
+            ],
+            "sources": [
+              "## Greeting"
+            ]
+          },
+          {
+            "id": "greet-docs",
+            "title": "Document the command",
+            "lane": "docs",
+            "class": "design",
+            "kind": "implement",
+            "deps": [
+              "greet-command"
+            ],
+            "contract": "Describe `greet` in `README.md`.",
+            "acceptance": [
+              "README shows an example"
+            ],
+            "sources": [
+              "## Greeting"
+            ]
+          }
+        ],
+        "decisions": [
+          "Should the greeting be localised?"
+        ]
+      }
+    },
+    "invalid": {
+      "ok": false,
+      "findings": [
+        {
+          "path": "id",
+          "code": "invalid_format",
+          "message": "Invalid string: must match pattern /^[a-z0-9][a-z0-9-]{0,40}$/"
+        },
+        {
+          "path": "tasks[0].deps[0]",
+          "code": "invalid_type",
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    }
+  },
+  "thrownDraft": {
+    "ok": false,
+    "message": "[\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tasks\",\n      1,\n      \"id\"\n    ],\n    \"message\": \"duplicate_task_id: greet-command\"\n  },\n  {\n    \"code\": \"custom\",\n    \"path\": [\n      \"tasks\",\n      2,\n      \"id\"\n    ],\n    \"message\": \"duplicate_task_id: greet-command\"\n  }\n]",
+    "findings": [
+      {
+        "path": "tasks[1].id",
+        "code": "custom",
+        "message": "duplicate_task_id: greet-command"
+      },
+      {
+        "path": "tasks[2].id",
+        "code": "custom",
+        "message": "duplicate_task_id: greet-command"
+      }
+    ]
+  },
+  "notSchemaError": null,
+  "jobs": {
+    "valid": {
+      "ok": true,
+      "data": {
+        "id": "dj-1",
+        "status": "running",
+        "source": "chat",
+        "spec": "spec.md",
+        "agent": "codex",
+        "createdAt": "x",
+        "updatedAt": "x",
+        "attempts": [
+          {
+            "runId": "r",
+            "kind": "draft",
+            "agent": "codex",
+            "startedAt": "x"
+          }
+        ],
+        "draftId": "d",
+        "findings": [
+          {
+            "path": "id",
+            "code": "c",
+            "message": "m"
+          }
+        ]
+      }
+    },
+    "badId": {
+      "ok": false,
+      "issues": [
+        {
+          "origin": "string",
+          "code": "invalid_format",
+          "format": "regex",
+          "pattern": "/^dj-[a-z0-9]+(?:-[a-z0-9]+)*$/",
+          "path": [
+            "id"
+          ],
+          "message": "Invalid string: must match pattern /^dj-[a-z0-9]+(?:-[a-z0-9]+)*$/"
+        }
+      ]
+    },
+    "badStatus": {
+      "ok": false,
+      "issues": [
+        {
+          "code": "invalid_value",
+          "values": [
+            "running",
+            "completed",
+            "needs_repair",
+            "failed",
+            "discarded"
+          ],
+          "path": [
+            "status"
+          ],
+          "message": "Invalid option: expected one of \"running\"|\"completed\"|\"needs_repair\"|\"failed\"|\"discarded\""
+        }
+      ]
+    },
+    "badAttempt": {
+      "ok": false,
+      "issues": [
+        {
+          "code": "invalid_value",
+          "values": [
+            "draft",
+            "repair"
+          ],
+          "path": [
+            "attempts",
+            0,
+            "kind"
+          ],
+          "message": "Invalid option: expected one of \"draft\"|\"repair\""
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [
+            "attempts",
+            0,
+            "agent"
+          ],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [
+            "attempts",
+            0,
+            "startedAt"
+          ],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    "badFinding": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [
+            "findings",
+            0,
+            "path"
+          ],
+          "message": "Invalid input: expected string, received number"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [
+            "findings",
+            0,
+            "code"
+          ],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [
+            "findings",
+            0,
+            "message"
+          ],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    }
+  }
+}

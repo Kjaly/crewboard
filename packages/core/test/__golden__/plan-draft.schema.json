@@ -1,0 +1,138 @@
+{
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,40}$",
+      "description": "Plan id: lowercase letters, digits and dashes, at most 41 characters"
+    },
+    "goal": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "chat"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "hash": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "name",
+            "hash"
+          ]
+        }
+      ]
+    },
+    "lanes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "Stable lowercase slug, unique in the draft"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "lane": {
+            "type": "string",
+            "minLength": 1,
+            "description": "One of the draft lanes"
+          },
+          "class": {
+            "type": "string",
+            "enum": [
+              "code",
+              "design",
+              "review",
+              "research"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "implement",
+              "review",
+              "research",
+              "decision"
+            ]
+          },
+          "deps": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "description": "Ids of tasks in this draft that must finish first"
+          },
+          "contract": {
+            "type": "string",
+            "description": "Markdown contract sketch: what to change, where, and how to check it"
+          },
+          "acceptance": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Checks a reviewer runs to accept the result"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Specification sections this task comes from"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "lane",
+          "class",
+          "kind",
+          "deps",
+          "contract",
+          "acceptance",
+          "sources"
+        ]
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Open questions for the human, each one plain string"
+    }
+  },
+  "required": [
+    "id",
+    "goal",
+    "source",
+    "lanes",
+    "tasks",
+    "decisions"
+  ]
+}

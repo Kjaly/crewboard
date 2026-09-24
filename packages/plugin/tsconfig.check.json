@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "paths": { "@crewboard/core": ["../core/src/index.ts"] } },
+  "include": ["src", "test"]
+}

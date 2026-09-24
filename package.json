@@ -1,0 +1,33 @@
+{
+  "name": "crewboard-workspace",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.5.2",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r --workspace-concurrency=1 test",
+    "typecheck": "pnpm -r typecheck",
+    "lint:i18n": "pnpm --filter dsh-crewboard lint:i18n",
+    "lint": "biome lint . && node scripts/check-docs.mjs",
+    "lint:docs": "node scripts/check-docs.mjs",
+    "format": "biome format --write .",
+    "release:check": "node scripts/release-check.mjs"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.14",
+    "@types/node": "^26.6.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:Kjaly/crewboard.git"
+  },
+  "homepage": "https://github.com/Kjaly/crewboard#readme",
+  "bugs": {
+    "url": "https://github.com/Kjaly/crewboard/issues"
+  }
+}

@@ -1,0 +1,15 @@
+name: Feature request
+description: Suggest an improvement to Crewboard
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What would you like to do?
+      description: The situation you are in and the outcome you need. A concrete example of your plans, workers, or repositories helps more than a proposed solution.
+    validations:
+      required: true
+  - type: textarea
+    id: approach
+    attributes:
+      label: Possible approach
+      description: Optional ideas, examples from other tools, or how you work around it today.

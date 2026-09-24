@@ -1,0 +1,193 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`keeps the ordinary task panel snapshot 1`] = `
+<aside
+  aria-label="Задача: Обычная задача"
+  class="orc-panel"
+>
+  <div
+    class="orc-panel__fixed"
+  >
+    <div
+      class="orc-sec orc-sec--head"
+    >
+      <h2
+        class="orc-h"
+      >
+        Обычная задача
+      </h2>
+      <button
+        class="orc-copyagent"
+        title="Скопировать краткое описание для чата с агентом"
+        type="button"
+      >
+        Скопировать для агента
+      </button>
+      <button
+        class="orc-run__link"
+        type="button"
+      >
+        Скопировать ссылку на задачу
+      </button>
+      <div
+        class="orc-panel__identity"
+      >
+        <span
+          aria-hidden="true"
+          class="orc-prov orc-prov--CX"
+        >
+          CX
+        </span>
+        <span
+          class="orc-panel__identity-name"
+        >
+          Codex GPT-6 Sol
+        </span>
+        <span>
+          · ждёт приёмки
+        </span>
+      </div>
+      <p
+        class="orc-meta orc-panel__choice"
+      >
+        Воркер: Codex GPT-6 Sol — выбран пресетом
+      </p>
+      <div
+        class="orc-panel__chips"
+      >
+        <span
+          class="orc-panel__chip"
+        >
+          По готовому коду
+        </span>
+      </div>
+    </div>
+    <div
+      class="orc-sec orc-sec--actions"
+    >
+      <div
+        class="orc-actions"
+      >
+        <button
+          class="orc-btn"
+          type="button"
+        >
+          Принять
+        </button>
+        <button
+          aria-expanded="false"
+          class="orc-btn orc-btn--ghost"
+          type="button"
+        >
+          Вернуть…
+        </button>
+      </div>
+      <p
+        class="orc-hint"
+      >
+        Подтвердите в окне macOS
+      </p>
+    </div>
+  </div>
+  <div
+    class="orc-panel__scroll"
+  >
+    <div
+      aria-label="Подробности задачи"
+      class="orc-tabs"
+      role="tablist"
+    >
+      <button
+        aria-selected="true"
+        class="orc-tab"
+        role="tab"
+        type="button"
+      >
+        Обзор
+      </button>
+      <button
+        aria-selected="false"
+        class="orc-tab"
+        role="tab"
+        type="button"
+      >
+        Активность
+      </button>
+      <button
+        aria-selected="false"
+        class="orc-tab"
+        role="tab"
+        type="button"
+      >
+        Изменения
+      </button>
+      <button
+        aria-selected="false"
+        class="orc-tab"
+        role="tab"
+        type="button"
+      >
+        Контракт
+      </button>
+    </div>
+    <div
+      class="orc-tabpanel"
+      role="tabpanel"
+    >
+      <div
+        class="orc-verdict orc-verdict--result"
+        role="status"
+      >
+        <span
+          aria-hidden="true"
+          class="orc-verdict__mark"
+        >
+          ✓
+        </span>
+        <strong>
+          Результат получен
+        </strong>
+      </div>
+      <section
+        class="orc-overview-section"
+      >
+        <h3>
+          Ваши действия
+        </h3>
+        <p
+          class="orc-meta"
+        >
+          Поправок и решений пока нет.
+        </p>
+      </section>
+      <section
+        class="orc-overview-section"
+      >
+        <h3>
+          Связи
+        </h3>
+        <p
+          class="orc-meta"
+        >
+          До этой задачи
+        </p>
+        <p
+          class="orc-meta"
+        >
+          ни от чего не зависит
+        </p>
+        <p
+          class="orc-meta"
+        >
+          После этой задачи
+        </p>
+        <p
+          class="orc-meta"
+        >
+          от неё ничего не зависит
+        </p>
+      </section>
+    </div>
+  </div>
+</aside>
+`;

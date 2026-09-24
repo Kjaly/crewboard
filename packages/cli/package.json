@@ -1,0 +1,40 @@
+{
+  "name": "crewboard",
+  "version": "0.3.0",
+  "description": "Command-line interface for coordinating crewboard workflows.",
+  "license": "MIT",
+  "author": "Anton Varlamkin",
+  "keywords": [
+    "deepseek-harness",
+    "orchestration",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kjaly/crewboard.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/Kjaly/crewboard#readme",
+  "bugs": {
+    "url": "https://github.com/Kjaly/crewboard/issues"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "type": "module",
+  "bin": {
+    "crewboard": "./dist/main.js",
+    "orch": "./dist/main.js"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "publishConfig": { "access": "public" },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@crewboard/core": "workspace:*",
+    "esbuild": "^0.28.2"
+  }
+}

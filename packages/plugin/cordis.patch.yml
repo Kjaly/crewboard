@@ -1,0 +1,7 @@
+# crewboard bundle patch: inserts the plugin row into the profile roster.
+# The node half (exports ".") runs in the host process (service, routes, tools,
+# prompt section); `dsh.client` makes the browser half (exports "./client",
+# served at /plugins/dsh-crewboard/client.js) load in the web GUI.
+- insert:
+    - id: crewboard
+      name: dsh-crewboard

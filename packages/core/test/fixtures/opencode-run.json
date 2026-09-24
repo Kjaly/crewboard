@@ -1,0 +1,15 @@
+[
+  {"ts": "2026-09-22T10:55:31.176723+00:00", "type": "progress", "backend": "opencode", "data": "plugin.added"},
+  {"ts": "2026-09-22T10:55:31.287947+00:00", "type": "progress", "backend": "opencode", "data": "session.updated"},
+  {"ts": "2026-09-22T10:56:50.000000+00:00", "type": "tool_started", "backend": "opencode", "data": "{\"tool\": \"bash\", \"status\": \"pending\", \"input\": {}}"},
+  {"ts": "2026-09-22T10:56:51.000000+00:00", "type": "tool_started", "backend": "opencode", "data": "{\"tool\": \"bash\", \"status\": \"running\", \"input\": {\"command\": \"node -e 'console.log(1)'\\nsecond line\"}}"},
+  {"ts": "2026-09-22T10:56:51.500000+00:00", "type": "tool_completed", "backend": "opencode", "data": "{\"tool\": \"bash\", \"status\": \"completed\"}"},
+  {"ts": "2026-09-22T10:56:51.600000+00:00", "type": "progress", "backend": "opencode", "data": "message.updated"},
+  {"ts": "2026-09-22T10:57:10.000000+00:00", "type": "answer_delta", "backend": "opencode", "data": "Confirmed ground truth. "},
+  {"ts": "2026-09-22T10:57:10.100000+00:00", "type": "progress", "backend": "opencode", "data": "message.updated"},
+  {"ts": "2026-09-22T10:57:10.200000+00:00", "type": "answer_delta", "backend": "opencode", "data": "Now writing both files:"},
+  {"ts": "2026-09-22T10:57:11.000000+00:00", "type": "tool_started", "backend": "opencode", "data": "{\"tool\": \"write\", \"status\": \"running\", \"input\": {\"filePath\": \"/repo/packages/core/src/shared/lib/text/pluralize-ru.test.ts\"}}"},
+  {"ts": "2026-09-22T10:57:12.000000+00:00", "type": "tool_completed", "backend": "opencode", "data": "{\"tool\": \"edit\", \"status\": \"error\"}"},
+  {"ts": "2026-09-22T10:57:12.500000+00:00", "type": "heartbeat", "backend": "opencode"},
+  {"ts": "2026-09-22T10:57:13.000000+00:00", "type": "run_failed", "backend": "opencode", "data": "permission_required: external_directory"}
+]

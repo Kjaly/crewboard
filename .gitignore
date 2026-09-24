@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.superpowers/
+.orchestration/
+*.log
+lib/
+# Staging output of an interrupted build (scripts/atomic-output.mjs).
+.dist-next-*/
+.lib-next-*/
+
+# Worker deviation journals live in each task worktree and are read before merge; they are
+# working notes, not project documentation, and must not return to the tree.
+docs/tmp/
+.pnpm-store/

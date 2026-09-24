@@ -1,0 +1,9 @@
+[
+  { "ts": "2026-09-22T11:09:12.000000+00:00", "type": "thinking_delta", "backend": "devin-cli", "data": "I'm starting by reading the two files." },
+  { "ts": "2026-09-22T11:09:12.100000+00:00", "type": "answer_delta", "backend": "devin-cli", "data": "I'll" },
+  { "ts": "2026-09-22T11:09:12.200000+00:00", "type": "answer_delta", "backend": "devin-cli", "data": " start by reading the two files." },
+  { "ts": "2026-09-22T11:09:13.000000+00:00", "type": "tool_started", "backend": "devin-cli", "data": "Read file" },
+  { "ts": "2026-09-22T11:12:14.000000+00:00", "type": "tool_started", "backend": "devin-cli", "data": "Edit file" },
+  { "ts": "2026-09-22T11:12:37.000000+00:00", "type": "tool_started", "backend": "devin-cli", "data": "Ran pnpm in ./apps/web" },
+  { "ts": "2026-09-22T11:13:00.000000+00:00", "type": "error", "backend": "devin-cli", "data": "Failed to authenticate: OAuth session expired" }
+]

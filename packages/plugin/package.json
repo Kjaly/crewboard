@@ -1,0 +1,69 @@
+{
+  "name": "dsh-crewboard",
+  "version": "0.3.0",
+  "description": "Orchestra panel and orchestra_* tools for DeepSeek Harness: plans, workers, supervision",
+  "license": "MIT",
+  "author": "Anton Varlamkin",
+  "keywords": [
+    "deepseek-harness",
+    "orchestration",
+    "plugin",
+    "workers"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kjaly/crewboard.git",
+    "directory": "packages/plugin"
+  },
+  "homepage": "https://github.com/Kjaly/crewboard#readme",
+  "bugs": {
+    "url": "https://github.com/Kjaly/crewboard/issues"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./elk.js": "./lib/elk.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "assets/vendors",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": { "access": "public" },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "test": "node ../../scripts/lint-i18n.mjs && node scripts/lint-dsh-boundary.mjs && vitest run",
+    "lint:i18n": "node ../../scripts/lint-i18n.mjs",
+    "stand": "node scripts/stand.mjs"
+  },
+  "devDependencies": {
+    "@crewboard/core": "workspace:*",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
+    "@types/react": "~18.3.31",
+    "@types/react-dom": "~18.3.7",
+    "elkjs": "^0.12.0",
+    "esbuild": "^0.28.2",
+    "jsdom": "^30.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}

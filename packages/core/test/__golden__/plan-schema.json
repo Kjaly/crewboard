@@ -1,0 +1,878 @@
+{
+  "plans": {
+    "minimal": {
+      "ok": true,
+      "data": {
+        "version": 1,
+        "goal": "Ship",
+        "rev": 0,
+        "updatedAt": "2026-09-24T00:00:00.000Z",
+        "tasks": [
+          {
+            "id": "a",
+            "title": "A",
+            "kind": "implement",
+            "status": "ready",
+            "deps": [],
+            "runs": [],
+            "notes": []
+          }
+        ]
+      }
+    },
+    "full": {
+      "ok": true,
+      "data": {
+        "version": 1,
+        "goal": "Ship",
+        "rev": 0,
+        "updatedAt": "2026-09-24T00:00:00.000Z",
+        "tasks": [
+          {
+            "id": "a",
+            "title": "A",
+            "kind": "implement",
+            "status": "ready",
+            "deps": [],
+            "runs": [],
+            "notes": []
+          },
+          {
+            "id": "full",
+            "title": "FULL",
+            "kind": "implement",
+            "class": "code",
+            "status": "ready",
+            "lane": "core",
+            "deps": [
+              "a"
+            ],
+            "worker": "codex",
+            "contract": "c.md",
+            "acceptance": [
+              "ok"
+            ],
+            "sources": [
+              "§1"
+            ],
+            "worktree": {
+              "path": "/w",
+              "branch": "b"
+            },
+            "runs": [
+              {
+                "runId": "run_abc-1",
+                "agent": "codex",
+                "startedAt": "2026-09-24T00:00:00.000Z",
+                "finishedAt": "x",
+                "outcome": "completed",
+                "quotaSamples": [
+                  {
+                    "sampleId": "s",
+                    "accountKey": "k",
+                    "provider": "p",
+                    "windowId": "w",
+                    "beforePct": 1,
+                    "afterPct": 2,
+                    "attribution": "shared"
+                  }
+                ],
+                "billingMode": "api",
+                "identityResolution": "alias",
+                "attemptIndex": 2,
+                "attemptTrigger": "human_relaunch"
+              }
+            ],
+            "notes": [
+              {
+                "at": "x",
+                "type": "accept",
+                "text": "t",
+                "verdict": {
+                  "kind": "result",
+                  "why": "blocked",
+                  "mismatch": "no_files"
+                }
+              }
+            ],
+            "reviewIntervals": [
+              {
+                "id": "r",
+                "enteredAt": "x",
+                "source": "human",
+                "association": "exact"
+              },
+              {
+                "id": "r2",
+                "enteredAt": "x",
+                "decision": "accepted",
+                "source": "legacy_note",
+                "association": "ambiguous"
+              }
+            ],
+            "pos": {
+              "x": 1,
+              "y": 2
+            },
+            "workerSource": "agent"
+          }
+        ],
+        "draftSource": {
+          "name": "spec.md",
+          "hash": "h"
+        },
+        "draftDecisions": [
+          "q"
+        ],
+        "preset": "p",
+        "archived": false,
+        "example": true,
+        "exampleLang": "ru",
+        "extra": "stripped"
+      }
+    },
+    "draftSourceChat": {
+      "ok": true,
+      "data": {
+        "version": 1,
+        "goal": "Ship",
+        "rev": 0,
+        "updatedAt": "2026-09-24T00:00:00.000Z",
+        "tasks": [],
+        "draftSource": "chat"
+      }
+    },
+    "notObject": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": [],
+          "message": "Invalid input: expected object, received string"
+        }
+      ]
+    },
+    "nullInput": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "object",
+          "code": "invalid_type",
+          "path": [],
+          "message": "Invalid input: expected object, received null"
+        }
+      ]
+    },
+    "emptyObject": {
+      "ok": false,
+      "issues": [
+        {
+          "code": "invalid_value",
+          "values": [
+            1
+          ],
+          "path": [
+            "version"
+          ],
+          "message": "Invalid input: expected 1"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [
+            "goal"
+          ],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "number",
+          "code": "invalid_type",
+          "path": [
+            "rev"
+          ],
+          "message": "Invalid input: expected number, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [
+            "updatedAt"
+          ],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "array",
+          "code": "invalid_type",
+          "path": [
+            "tasks"
+          ],
+          "message": "Invalid input: expected array, received undefined"
+        }
+      ]
+    },
+    "wrongVersion": {
+      "ok": false,
+      "issues": [
+        {
+          "code": "invalid_value",
+          "values": [
+            1
+          ],
+          "path": [
+            "version"
+          ],
+          "message": "Invalid input: expected 1"
+        }
+      ]
+    },
+    "negativeRev": {
+      "ok": false,
+      "issues": [
+        {
+          "origin": "number",
+          "code": "too_small",
+          "minimum": 0,
+          "inclusive": true,
+          "path": [
+            "rev"
+          ],
+          "message": "Too small: expected number to be >=0"
+        }
+      ]
+    },
+    "fractionalRev": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "int",
+          "format": "safeint",
+          "code": "invalid_type",
+          "path": [
+            "rev"
+          ],
+          "message": "Invalid input: expected int, received number"
+        }
+      ]
+    },
+    "stringRev": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "number",
+          "code": "invalid_type",
+          "path": [
+            "rev"
+          ],
+          "message": "Invalid input: expected number, received string"
+        }
+      ]
+    },
+    "badTaskId": {
+      "ok": false,
+      "issues": [
+        {
+          "origin": "string",
+          "code": "invalid_format",
+          "format": "regex",
+          "pattern": "/^[a-z0-9][a-z0-9-]*$/",
+          "path": [
+            "tasks",
+            0,
+            "id"
+          ],
+          "message": "Invalid string: must match pattern /^[a-z0-9][a-z0-9-]*$/"
+        }
+      ]
+    },
+    "emptyTitle": {
+      "ok": false,
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": [
+            "tasks",
+            0,
+            "title"
+          ],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    "badKind": {
+      "ok": false,
+      "issues": [
+        {
+          "code": "invalid_value",
+          "values": [
+            "implement",
+            "review",
+            "research",
+            "decision"
+          ],
+          "path": [
+            "tasks",
+            0,
+            "kind"
+          ],
+          "message": "Invalid option: expected one of \"implement\"|\"review\"|\"research\"|\"decision\""
+        }
+      ]
+    },
+    "badClass": {
+      "ok": true,
+      "data": {
+        "version": 1,
+        "goal": "Ship",
+        "rev": 0,
+        "updatedAt": "2026-09-24T00:00:00.000Z",
+        "tasks": [
+          {
+            "id": "a",
+            "title": "A",
+            "kind": "implement",
+            "status": "ready",
+            "deps": [],
+            "runs": [],
+            "notes": []
+          }
+        ]
+      }
+    },
+    "derivedStatus": {
+      "ok": false,
+      "issues": [
+        {
+          "code": "invalid_value",
+          "values": [
+            "backlog",
+            "ready",
+            "in_review",
+            "accepted",
+            "rejected",
+            "superseded"
+          ],
+          "path": [
+            "tasks",
+            0,
+            "status"
+          ],
+          "message": "Invalid option: expected one of \"backlog\"|\"ready\"|\"in_review\"|\"accepted\"|\"rejected\"|\"superseded\""
+        }
+      ]
+    },
+    "badDepsType": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "array",
+          "code": "invalid_type",
+          "path": [
+            "tasks",
+            0,
+            "deps"
+          ],
+          "message": "Invalid input: expected array, received string"
+        }
+      ]
+    },
+    "duplicateIds": {
+      "ok": false,
+      "issues": [
+        {
+          "code": "custom",
+          "message": "duplicate task id: a",
+          "path": [
+            "tasks"
+          ]
+        }
+      ]
+    },
+    "unknownDep": {
+      "ok": false,
+      "issues": [
+        {
+          "code": "custom",
+          "message": "task a depends on unknown task zzz",
+          "path": [
+            "tasks"
+          ]
+        }
+      ]
+    },
+    "duplicateAndUnknown": {
+      "ok": false,
+      "issues": [
+        {
+          "code": "custom",
+          "message": "duplicate task id: a",
+          "path": [
+            "tasks"
+          ]
+        },
+        {
+          "code": "custom",
+          "message": "task a depends on unknown task q",
+          "path": [
+            "tasks"
+          ]
+        }
+      ]
+    },
+    "badRunId": {
+      "ok": false,
+      "issues": [
+        {
+          "origin": "string",
+          "code": "invalid_format",
+          "format": "regex",
+          "pattern": "/^run_[a-z0-9-]+$/",
+          "path": [
+            "tasks",
+            0,
+            "runs",
+            0,
+            "runId"
+          ],
+          "message": "Invalid string: must match pattern /^run_[a-z0-9-]+$/"
+        }
+      ]
+    },
+    "emptyAgent": {
+      "ok": false,
+      "issues": [
+        {
+          "origin": "string",
+          "code": "too_small",
+          "minimum": 1,
+          "inclusive": true,
+          "path": [
+            "tasks",
+            0,
+            "runs",
+            0,
+            "agent"
+          ],
+          "message": "Too small: expected string to have >=1 characters"
+        }
+      ]
+    },
+    "zeroAttempt": {
+      "ok": false,
+      "issues": [
+        {
+          "origin": "number",
+          "code": "too_small",
+          "minimum": 0,
+          "inclusive": false,
+          "path": [
+            "tasks",
+            0,
+            "runs",
+            0,
+            "attemptIndex"
+          ],
+          "message": "Too small: expected number to be >0"
+        }
+      ]
+    },
+    "fractionalAttempt": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "int",
+          "format": "safeint",
+          "code": "invalid_type",
+          "path": [
+            "tasks",
+            0,
+            "runs",
+            0,
+            "attemptIndex"
+          ],
+          "message": "Invalid input: expected int, received number"
+        }
+      ]
+    },
+    "stringAttempt": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "number",
+          "code": "invalid_type",
+          "path": [
+            "tasks",
+            0,
+            "runs",
+            0,
+            "attemptIndex"
+          ],
+          "message": "Invalid input: expected number, received string"
+        }
+      ]
+    },
+    "badOutcome": {
+      "ok": false,
+      "issues": [
+        {
+          "code": "invalid_value",
+          "values": [
+            "completed",
+            "failed",
+            "cancelled"
+          ],
+          "path": [
+            "tasks",
+            0,
+            "runs",
+            0,
+            "outcome"
+          ],
+          "message": "Invalid option: expected one of \"completed\"|\"failed\"|\"cancelled\""
+        }
+      ]
+    },
+    "badQuotaSample": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [
+            "tasks",
+            0,
+            "runs",
+            0,
+            "quotaSamples",
+            0,
+            "accountKey"
+          ],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [
+            "tasks",
+            0,
+            "runs",
+            0,
+            "quotaSamples",
+            0,
+            "provider"
+          ],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [
+            "tasks",
+            0,
+            "runs",
+            0,
+            "quotaSamples",
+            0,
+            "windowId"
+          ],
+          "message": "Invalid input: expected string, received undefined"
+        },
+        {
+          "expected": "number",
+          "code": "invalid_type",
+          "path": [
+            "tasks",
+            0,
+            "runs",
+            0,
+            "quotaSamples",
+            0,
+            "beforePct"
+          ],
+          "message": "Invalid input: expected number, received undefined"
+        },
+        {
+          "expected": "number",
+          "code": "invalid_type",
+          "path": [
+            "tasks",
+            0,
+            "runs",
+            0,
+            "quotaSamples",
+            0,
+            "afterPct"
+          ],
+          "message": "Invalid input: expected number, received undefined"
+        },
+        {
+          "code": "invalid_value",
+          "values": [
+            "exclusive",
+            "shared",
+            "unknown"
+          ],
+          "path": [
+            "tasks",
+            0,
+            "runs",
+            0,
+            "quotaSamples",
+            0,
+            "attribution"
+          ],
+          "message": "Invalid option: expected one of \"exclusive\"|\"shared\"|\"unknown\""
+        }
+      ]
+    },
+    "badNote": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [
+            "tasks",
+            0,
+            "notes",
+            0,
+            "text"
+          ],
+          "message": "Invalid input: expected string, received number"
+        },
+        {
+          "code": "invalid_value",
+          "values": [
+            "result",
+            "negative",
+            "disputed"
+          ],
+          "path": [
+            "tasks",
+            0,
+            "notes",
+            0,
+            "verdict",
+            "kind"
+          ],
+          "message": "Invalid option: expected one of \"result\"|\"negative\"|\"disputed\""
+        }
+      ]
+    },
+    "badInterval": {
+      "ok": false,
+      "issues": [
+        {
+          "code": "invalid_value",
+          "values": [
+            "accepted",
+            "rejected",
+            "superseded",
+            "reopened"
+          ],
+          "path": [
+            "tasks",
+            0,
+            "reviewIntervals",
+            0,
+            "decision"
+          ],
+          "message": "Invalid option: expected one of \"accepted\"|\"rejected\"|\"superseded\"|\"reopened\""
+        }
+      ]
+    },
+    "badPos": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "number",
+          "code": "invalid_type",
+          "path": [
+            "tasks",
+            0,
+            "pos",
+            "x"
+          ],
+          "message": "Invalid input: expected number, received string"
+        },
+        {
+          "expected": "number",
+          "code": "invalid_type",
+          "path": [
+            "tasks",
+            0,
+            "pos",
+            "y"
+          ],
+          "message": "Invalid input: expected number, received undefined"
+        }
+      ]
+    },
+    "badWorktree": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [
+            "tasks",
+            0,
+            "worktree",
+            "branch"
+          ],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ]
+    },
+    "badDraftSource": {
+      "ok": false,
+      "issues": [
+        {
+          "code": "invalid_union",
+          "errors": [
+            [
+              {
+                "code": "invalid_value",
+                "values": [
+                  "chat"
+                ],
+                "path": [],
+                "message": "Invalid input: expected \"chat\""
+              }
+            ],
+            [
+              {
+                "expected": "string",
+                "code": "invalid_type",
+                "path": [
+                  "hash"
+                ],
+                "message": "Invalid input: expected string, received undefined"
+              }
+            ]
+          ],
+          "path": [
+            "draftSource"
+          ],
+          "message": "Invalid input"
+        }
+      ]
+    },
+    "badDraftSourceLiteral": {
+      "ok": false,
+      "issues": [
+        {
+          "code": "invalid_union",
+          "errors": [
+            [
+              {
+                "code": "invalid_value",
+                "values": [
+                  "chat"
+                ],
+                "path": [],
+                "message": "Invalid input: expected \"chat\""
+              }
+            ],
+            [
+              {
+                "expected": "object",
+                "code": "invalid_type",
+                "path": [],
+                "message": "Invalid input: expected object, received string"
+              }
+            ]
+          ],
+          "path": [
+            "draftSource"
+          ],
+          "message": "Invalid input"
+        }
+      ]
+    },
+    "badExampleLang": {
+      "ok": true,
+      "data": {
+        "version": 1,
+        "goal": "Ship",
+        "rev": 0,
+        "updatedAt": "2026-09-24T00:00:00.000Z",
+        "tasks": []
+      }
+    },
+    "tasksNotArray": {
+      "ok": false,
+      "issues": [
+        {
+          "expected": "array",
+          "code": "invalid_type",
+          "path": [
+            "tasks"
+          ],
+          "message": "Invalid input: expected array, received object"
+        }
+      ]
+    }
+  },
+  "task": {
+    "ok": true,
+    "data": {
+      "id": "solo",
+      "title": "SOLO",
+      "kind": "implement",
+      "status": "ready",
+      "deps": [],
+      "runs": [],
+      "notes": []
+    }
+  },
+  "newTask": {
+    "ok": true,
+    "data": {
+      "id": "n",
+      "title": "N",
+      "kind": "implement",
+      "status": "ready",
+      "deps": [
+        "a"
+      ],
+      "runs": [],
+      "notes": []
+    }
+  },
+  "newTaskInvalid": {
+    "ok": false,
+    "message": "[\n  {\n    \"origin\": \"string\",\n    \"code\": \"invalid_format\",\n    \"format\": \"regex\",\n    \"pattern\": \"/^[a-z0-9][a-z0-9-]*$/\",\n    \"path\": [\n      \"id\"\n    ],\n    \"message\": \"Invalid string: must match pattern /^[a-z0-9][a-z0-9-]*$/\"\n  },\n  {\n    \"origin\": \"string\",\n    \"code\": \"too_small\",\n    \"minimum\": 1,\n    \"inclusive\": true,\n    \"path\": [\n      \"title\"\n    ],\n    \"message\": \"Too small: expected string to have >=1 characters\"\n  }\n]",
+    "findings": [
+      {
+        "path": "id",
+        "code": "invalid_format",
+        "message": "Invalid string: must match pattern /^[a-z0-9][a-z0-9-]*$/"
+      },
+      {
+        "path": "title",
+        "code": "too_small",
+        "message": "Too small: expected string to have >=1 characters"
+      }
+    ]
+  },
+  "thrownPlan": {
+    "ok": false,
+    "message": "[\n  {\n    \"code\": \"custom\",\n    \"message\": \"duplicate task id: a\",\n    \"path\": [\n      \"tasks\"\n    ]\n  },\n  {\n    \"code\": \"custom\",\n    \"message\": \"task a depends on unknown task q\",\n    \"path\": [\n      \"tasks\"\n    ]\n  }\n]",
+    "findings": [
+      {
+        "path": "tasks",
+        "code": "custom",
+        "message": "duplicate task id: a"
+      },
+      {
+        "path": "tasks",
+        "code": "custom",
+        "message": "task a depends on unknown task q"
+      }
+    ]
+  }
+}
