@@ -35,7 +35,6 @@ it('restores the per-task tab after visiting another task and returning (A→B�
 })
 
 it('restores the selected older run after visiting another task and returning (A→B→A)', async () => {
-  const user = userEvent.setup()
   installFetch((url) => (url.includes('/api/task') ? jsonOk(makeDetail({ id: 'a', status: 'running', runs: [RUN1, RUN2] })) : jsonOk(null)))
   const a = makeTask({ id: 'a', status: 'running', runs: 2, lastRunId: 'r2' })
   const b = makeTask({ id: 'b', status: 'running', runs: 1, lastRunId: 'r1' })

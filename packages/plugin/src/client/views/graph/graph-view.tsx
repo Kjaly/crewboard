@@ -398,8 +398,7 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
 
   // The camera pose is remembered per physical root + plan, and written when the reader leaves that plan (or
   // the screen): it is restored on a return only. Nothing here is persisted to storage.
-  const cameraMemoryKey = `${shown.root}\n${shown.planId ?? ''}`
-  useEffect(() => () => { rememberPlan(shown.root, shown.planId, { camera: camera.pose() }) }, [cameraMemoryKey, camera])
+  useEffect(() => () => { rememberPlan(shown.root, shown.planId, { camera: camera.pose() }) }, [shown.root, shown.planId, camera])
 
   const bands = useMemo(() => decision.folded.size ? foldBands : laneBands(nodes), [nodes, foldBands, decision.folded])
   const box = useMemo(() => {

@@ -182,9 +182,9 @@ export function App() {
   useEffect(() => { const show = () => { if (repo?.example) { setSettingsOpen(false); setTourStep(0) } }; window.addEventListener('orchestra:show-introduction', show); return () => window.removeEventListener('orchestra:show-introduction', show) }, [repo?.example])
   // biome-ignore lint/correctness/useExhaustiveDependencies: The listed key intentionally triggers a refresh when its underlying data changes.
   useEffect(() => { setRunTrace(null) }, [repo?.root, repo?.planId])
-  // biome-ignore lint/correctness/useExhaustiveDependencies: The listed key intentionally triggers a refresh when its underlying data changes.
   // A review frame is scoped by root+plan+task: changing the scope clears the stack instead of carrying a
   // same-id task's P1 frame into P2 (the route effect rebuilds it for the new scope when the route says so).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: The reset body reads no reactive value; the root+plan scope key is deliberately the trigger that clears the stack.
   useEffect(() => { setReviewStack([]); reviewShown.current = null }, [repo?.root, repo?.planId])
   useEffect(() => {
     const onPop = () => {

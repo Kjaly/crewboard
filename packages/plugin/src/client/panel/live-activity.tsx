@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import type { Attention, TaskDetail, TaskSnapshot } from '../../shared/types.js'
 import type { ToolDetail } from '@crewboard/core'
 import { t, useLang } from '../i18n.js'
@@ -123,8 +123,12 @@ export function LiveActivity({
   const writeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const lastWritten = useRef('')
   const latest = useRef<{ anchor?: string; anchorOffset?: number; offset: number; follow: boolean } | null>(null)
-  const capturePosition = (element = scrollRef.current) => {
-    if (!element || !onPosition) return
+  // `onPosition` is an inline prop, so it is read through a ref: the helpers stay stable and the unmount
+  // flush never re-runs because the reporter got a new identity.
+  const onPositionRef = useRef(onPosition)
+  onPositionRef.current = onPosition
+  const capturePosition = useCallback((element = scrollRef.current) => {
+    if (!element || !onPositionRef.current) return
     // Everything is measured by rects against the scroll viewport: `offsetTop` can use a different offsetParent.
     const fold = element.getBoundingClientRect?.().top ?? 0
     let anchor: string | undefined
@@ -140,21 +144,21 @@ export function LiveActivity({
       }
     }
     latest.current = { ...(anchor ? { anchor } : {}), ...(anchorOffset !== undefined ? { anchorOffset } : {}), offset: element.scrollTop, follow: atBottom.current }
-  }
-  const flushPosition = () => {
+  }, [scrollRef])
+  const flushPosition = useCallback(() => {
     const snapshot = latest.current
-    if (!snapshot || !onPosition) return
+    if (!snapshot || !onPositionRef.current) return
     const signature = `${snapshot.anchor ?? ''}|${snapshot.anchorOffset ?? ''}|${snapshot.follow}|${Math.round(snapshot.offset / 40)}`
     if (signature === lastWritten.current) return
     lastWritten.current = signature
-    onPosition(snapshot)
-  }
-  const schedulePosition = () => {
+    onPositionRef.current(snapshot)
+  }, [])
+  const schedulePosition = useCallback(() => {
     if (writeTimer.current) return
     writeTimer.current = setTimeout(() => { writeTimer.current = undefined; flushPosition() }, 120)
-  }
+  }, [flushPosition])
   // Leaving the panel inside the throttle window still persists the captured snapshot — never detached DOM.
-  useEffect(() => () => { if (writeTimer.current) clearTimeout(writeTimer.current); flushPosition() }, [])
+  useEffect(() => () => { if (writeTimer.current) clearTimeout(writeTimer.current); flushPosition() }, [flushPosition])
   useEffect(() => {
     if (typeof document === 'undefined') return
     const sync = () => setPaused(document.visibilityState === 'hidden')
@@ -193,7 +197,7 @@ export function LiveActivity({
     } else {
       setNewCount((count) => count + added)
     }
-  }, [events, scrollRef])
+  }, [events, scrollRef, capturePosition])
 
   useEffect(() => {
     const element = scrollRef.current
@@ -209,31 +213,34 @@ export function LiveActivity({
     measure()
     element.addEventListener('scroll', measure, { passive: true })
     return () => element.removeEventListener('scroll', measure)
-  }, [scrollRef])
+  }, [scrollRef, capturePosition, schedulePosition])
 
   // Start a live feed at its latest activity, once. It is a mount decision, not a completion one: a run
   // that finishes while the person is reading above keeps their place. The component is keyed by root+plan+
-  // task+run, so `position` is already the position of *this* run; a new run gets its own mount and a fresh start.
+  // task+run, so the position at mount is already the position of *this* run; a new run gets its own mount
+  // and a fresh start, and a later `position` update belongs to memory rather than to this restore.
+  const initialPosition = useRef(position)
   const started = useRef(false)
   useEffect(() => {
     if (started.current) return
     started.current = true
     const element = scrollRef.current
     if (!element) return
+    const remembered = initialPosition.current
     // Restore the remembered reading position: by the exact turn anchor when it is still in the bounded history,
     // at the same alignment inside it; else by the saved offset; else start a live feed at its latest activity.
-    if (position?.anchor) {
-      const target = element.querySelector<HTMLElement>(`[data-event-anchor="${position.anchor}"]`)
+    if (remembered?.anchor) {
+      const target = element.querySelector<HTMLElement>(`[data-event-anchor="${remembered.anchor}"]`)
       if (target) {
-        atBottom.current = position.follow ?? false
+        atBottom.current = remembered.follow ?? false
         if (atBottom.current) { element.scrollTop = element.scrollHeight; return }
-        if (position.anchorOffset !== undefined) {
+        if (remembered.anchorOffset !== undefined) {
           const rect = target.getBoundingClientRect?.()
           const fold = element.getBoundingClientRect?.().top ?? 0
           if (rect) {
             const max = Math.max(0, element.scrollHeight - element.clientHeight)
             // Re-apply the saved alignment: move by how far the anchor's top drifts from where it was saved.
-            const next = element.scrollTop + (rect.top - fold) - position.anchorOffset
+            const next = element.scrollTop + (rect.top - fold) - remembered.anchorOffset
             element.scrollTop = max > 0 ? Math.min(max, Math.max(0, next)) : Math.max(0, next)
             return
           }
@@ -242,10 +249,10 @@ export function LiveActivity({
         return
       }
     }
-    if (position?.offset !== undefined) {
-      atBottom.current = position.follow ?? false
+    if (remembered?.offset !== undefined) {
+      atBottom.current = remembered.follow ?? false
       // The anchor expired: a bounded raw offset is the honest fallback.
-      element.scrollTop = position.follow ? element.scrollHeight : Math.min(Math.max(0, position.offset), element.scrollHeight)
+      element.scrollTop = remembered.follow ? element.scrollHeight : Math.min(Math.max(0, remembered.offset), element.scrollHeight)
       return
     }
     if (live) { element.scrollTop = element.scrollHeight; atBottom.current = true }
