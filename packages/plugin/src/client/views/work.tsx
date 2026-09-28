@@ -8,6 +8,7 @@ import { TaskCard, attentionByTask } from './board.js'
 import { AcceptBatch } from './accept-batch.js'
 import type { ViewProps } from './types.js'
 import { laneOf, laneTitle } from './graph/layout.js'
+import { usePlanMemory } from '../store.js'
 
 type DoneFilter = 'all' | 'accepted' | 'closed' | 'superseded' | 'dropped' | 'followup'
 
@@ -35,11 +36,11 @@ function RunningCard({ task, repo, ...props }: { task: TaskSnapshot; repo: ViewP
   // biome-ignore lint/correctness/useExhaustiveDependencies: The listed key intentionally triggers a refresh when its underlying data changes.
   useEffect(() => {
     let live = true
-    void shared.task(repo.root, task.id, taskVersion(repo, task.id)).then((result) => {
+    void shared.task(repo.root, task.id, taskVersion(repo, task.id, repo.planId), repo.planId).then((result) => {
       if (live && result.ok) setLast(result.value.events.at(-1)?.text ?? null)
     }).catch(() => {})
     return () => { live = false }
-  }, [repo.root, task.id, task.lastRunId, repo.rev])
+  }, [repo.root, repo.planId, task.id, task.lastRunId, repo.rev])
   return <div><TaskCard {...props} task={task} /><p className="orc-work__last">{[sinceLabel(task.activeSince, props.now), last].filter(Boolean).join(' · ')}</p></div>
 }
 
@@ -48,8 +49,13 @@ export function WorkView({ repo: plan, workers, selectedId, onSelect, lens, dens
   // A lane picked in the sidebar tree (or opened by `?lane=`) narrows every column to that lane's
   // tasks; the chip above the board says so and clears it. Dependencies still count across the plan.
   const repo = lane ? { ...plan, tasks: plan.tasks.filter((task) => laneOf(task) === lane.lane) } : plan
-  const [filter, setFilter] = useState<DoneFilter>('all')
-  const [doneOpen, setDoneOpen] = useState(false)
+  // The Done filter and its expansion are window-session memory keyed by root+plan: A→B→A returns them.
+  const [memory, rememberPlan] = usePlanMemory(plan.root, plan.planId)
+  const storedFilter = memory.work?.filter
+  const filter: DoneFilter = storedFilter === 'followup' || storedFilter === 'accepted' || storedFilter === 'closed' || storedFilter === 'superseded' || storedFilter === 'dropped' ? storedFilter : 'all'
+  const doneOpen = memory.work?.doneOpen ?? false
+  const setFilter = (next: DoneFilter) => { rememberPlan({ work: { ...memory.work, filter: next } }) }
+  const setDoneOpen = (next: boolean) => { rememberPlan({ work: { ...memory.work, doneOpen: next } }) }
   const columns = workColumns(repo)
   const attention = attentionByTask(repo.attention)
   const dependedOn = new Set(plan.tasks.flatMap((task) => task.deps))

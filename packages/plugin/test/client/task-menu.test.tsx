@@ -60,7 +60,7 @@ it('uses the existing accept API', async () => {
   const accept = vi.spyOn(api, 'accept').mockResolvedValue({ ok: true, value: { task: 'parent', status: 'accepted' } as never })
   setup('in_review')
   await user.click(screen.getByRole('menuitem', { name: 'Accept…' }))
-  expect(accept).toHaveBeenCalledWith('/repo', 'parent')
+  expect(accept).toHaveBeenCalledWith('/repo', 'parent', undefined)
 })
 
 it('creates a dependent follow-up with its parent link and typed content', async () => {
@@ -71,7 +71,7 @@ it('creates a dependent follow-up with its parent link and typed content', async
   await user.type(screen.getByRole('textbox', { name: 'Task title' }), 'Fix review')
   await user.type(screen.getByRole('textbox', { name: 'What to do' }), 'Fix the failing check')
   await user.click(screen.getByRole('button', { name: 'Create task' }))
-  await waitFor(() => expect(upsert).toHaveBeenCalledWith('/repo', expect.objectContaining({ id: 'fix-review', parent: 'parent', depends: true, note: 'Fix the failing check' })))
+  await waitFor(() => expect(upsert).toHaveBeenCalledWith('/repo', expect.objectContaining({ id: 'fix-review', parent: 'parent', depends: true, note: 'Fix the failing check' }), undefined))
   expect(onSelect).toHaveBeenCalledWith('fix-review')
 })
 
@@ -113,7 +113,7 @@ it('closes a task as not needed with a reason, and offers it only while the task
   await user.click(screen.getByRole('menuitem', { name: 'Close as not needed…' }))
   await user.type(screen.getByRole('textbox', { name: 'Why is the task not needed?' }), 'Done by hand')
   await user.click(screen.getByRole('button', { name: 'Close task' }))
-  expect(drop).toHaveBeenCalledWith('/repo', 'parent', 'Done by hand')
+  expect(drop).toHaveBeenCalledWith('/repo', 'parent', 'Done by hand', undefined)
   cleanup()
   setup('running')
   expect(screen.queryByRole('menuitem', { name: 'Close as not needed…' })).toBeNull()

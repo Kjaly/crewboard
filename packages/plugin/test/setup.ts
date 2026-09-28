@@ -11,9 +11,10 @@ installDictionary('en', en)
 installDictionary('ru', ru)
 
 import { forgetAll } from '../src/client/api.js'
+import { resetSessionMemory } from '../src/client/store.js'
 
 beforeEach(() => { setLang('en'); forgetAll() })
-afterEach(() => setLang('en'))
+afterEach(() => { setLang('en'); resetSessionMemory() })
 
 process.env.HOME = mkdtempSync(join(tmpdir(), 'orch-plugin-test-home-'))
 
@@ -31,9 +32,11 @@ import { TraceScreen } from '../src/client/panel/trace.js'
 import { TaskPanel } from '../src/client/panel/task-panel.js'
 import { TaskMenu } from '../src/client/task-menu.js'
 import { GraphView } from '../src/client/views/graph/index.js'
+import { NowView } from '../src/client/views/now.js'
 
 globalThis.__orchScreenBundles = {
   review: { ReviewView, ReviewDrilldown }, welcome: { Welcome, Tour },
   settings: { OrchestraSettings }, draft: { DraftReview, DraftJobView }, ledger: { LedgerView },
+  now: { NowView },
   trace: { TraceScreen }, task: { TaskPanel, TaskMenu }, graph: { GraphView },
 }

@@ -6,7 +6,7 @@ import { CopyForAgent } from '../copy-agent.js'
 import { taskHandoff } from '../handoff.js'
 import { identityLabel, taskIdentity, workerIdentity } from '../provider.js'
 import { CLASS_LABEL, classOfTask } from '../routing.js'
-import { orchestraStore, type Density } from '../store.js'
+import { deliveryForRun, feedPositionOf, orchestraStore, steerSettledPatch, taskMemoryOf, useTaskMemory, type Density } from '../store.js'
 import { taskTone } from '../styles.js'
 import { isChecking, isOwnWork } from '../../../../core/src/plan/graph.js'
 import { incompleteText, nowPhrase, sinceLabel } from '../summary.js'
@@ -159,18 +159,22 @@ export function TaskPanel({
   /** A failed detail read blocks acceptance until the contract and evidence can be loaded again. */
   const [detailFailed, setDetailFailed] = useState(false)
   const [detailRetry, setDetailRetry] = useState(0)
-  const [tab, setTab] = useState<TabKey>(() => taskDefaultTab(task))
+  // The panel's window-session memory, keyed by repo + plan + task: the open tab, the selected older run, the
+  // composer's unsent text and its delivery receipt. A poll, a tab change, or leaving and returning to the task
+  // reads them back; a task in another plan never inherits them. Nothing here is written to localStorage.
+  const [memory, remember] = useTaskMemory(repo.root, repo.planId, task.id)
+  const [tab, setTab] = useState<TabKey>(() => (memory.tab ? resolveTab(memory.tab) : taskDefaultTab(task)))
   /** A pinned tab is an explicit choice (click, URL, queue, menu, trace) and survives snapshots and completion. */
-  const [tabPinned, setTabPinned] = useState(false)
+  const [tabPinned, setTabPinned] = useState(() => !!memory.tab)
   /** The panel's own scroll container: the live feed follows it instead of creating a second viewport. */
   const liveScroll = useRef<HTMLDivElement>(null)
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(() => memory.run ?? null)
   const [panelTrace, setPanelTrace] = useState<TraceTarget | null>(null)
   const [form, setForm] = useState<'none' | 'steer' | 'reject' | 'unchecked' | 'markMerged' | 'dirty'>('none')
   /** Uncommitted changes the copy holds, when a start asked the person what to do with them (fo1). */
   const [dirtyCount, setDirtyCount] = useState(0)
-  const [message, setMessage] = useState('')
-  const [steerOutcome, setSteerOutcome] = useState<SteerFeedback | null>(null)
+  const message = memory.draft ?? ''
+  const setMessage = (text: string) => { remember({ draft: text }) }
   /** Bumped by «Give direction» / a trace correction: the Activity composer takes focus, never a second form. */
   const [composerFocus, setComposerFocus] = useState(0)
   const [reason, setReason] = useState('')
@@ -192,6 +196,10 @@ export function TaskPanel({
   const [copyError, setCopyError] = useState('')
   const [removingCopy, setRemovingCopy] = useState(false)
   const [reportJump, setReportJump] = useState<{ line: number; seq: number } | null>(null)
+  /** An explicit tab choice is remembered per task; a default policy move is not. */
+  const chooseTab = (next: TabKey, pin = true) => { setTab(next); setTabPinned(pin); remember({ tab: next }) }
+  /** An explicitly picked run is remembered per task (`null` follows the latest again). */
+  const chooseRun = (runId: string | null) => { setSelectedRunId(runId); remember({ run: runId ?? undefined }); setPanelTrace(null); setTabPinned(true) }
   useLang()
   const action = useAction()
   const checksAction = useAction()
@@ -223,8 +231,6 @@ export function TaskPanel({
   // biome-ignore lint/correctness/useExhaustiveDependencies: The listed key intentionally triggers a refresh when its underlying data changes.
   useEffect(() => {
     setForm('none')
-    setMessage('')
-    setSteerOutcome(null)
     setReason('')
     setRerunWorker(SAME)
     setWorker(task.workerSource && task.worker ? KEEP : AUTO)
@@ -257,8 +263,11 @@ export function TaskPanel({
     const fresh = !previous || previous.key !== taskScope
     const running = task.status === 'running'
     if (fresh) {
-      setTabPinned(false)
-      setTab(taskDefaultTab(task))
+      // A remembered tab/run for this task is an explicit earlier choice: restore it pinned; else the default.
+      const rememberedTab = memory.tab ? resolveTab(memory.tab) : undefined
+      setTabPinned(!!rememberedTab)
+      setTab(rememberedTab ?? taskDefaultTab(task))
+      setSelectedRunId(memory.run ?? null)
     } else if (!tabPinned && running && !previous.running) {
       setTab('activity')
     }
@@ -286,13 +295,11 @@ export function TaskPanel({
   useEffect(() => {
     if (!steerDraft || steerDraft.taskId !== task.id) return
     setMessage(steerDraft.text)
-    setSteerOutcome(null)
+    remember({ delivery: undefined })
     // A live run writes in the Activity composer; anything else (an older run, a finished task) keeps the form.
     if (task.status === 'running') {
-      setSelectedRunId(null)
-      setPanelTrace(null)
-      setTab('activity')
-      setTabPinned(true)
+      chooseRun(null)
+      chooseTab('activity')
       setComposerFocus((count) => count + 1)
     } else setForm('steer')
   }, [steerDraft?.seq, steerDraft?.taskId, task.id])
@@ -303,15 +310,13 @@ export function TaskPanel({
   useEffect(() => {
     if (!tabRequest) return
     if (tabRequest.taskId && tabRequest.taskId !== task.id) return
-    setTab(resolveTab(tabRequest.tab))
-    setTabPinned(true)
+    chooseTab(resolveTab(tabRequest.tab))
   }, [tabRequest?.seq, tabRequest?.taskId, tabRequest?.tab, task.id])
   // biome-ignore lint/correctness/useExhaustiveDependencies: The selected identity and request keys intentionally control this hook’s refresh cadence.
   useEffect(() => {
     if (runTraceRequest?.target.taskId !== task.id) return
     setPanelTrace(runTraceRequest.target)
-    setTab('activity')
-    setTabPinned(true)
+    chooseTab('activity')
   }, [runTraceRequest?.seq, task.id])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: The selected identity and request keys intentionally control this hook’s refresh cadence.
@@ -323,8 +328,8 @@ export function TaskPanel({
     setDetailFailed(false)
     // The first read is shared with the other readers of this task (pf1); a running task's feed then asks every 2 s,
     // since the host does not follow a live run's steps.
-    const version = taskVersion(repo, task.id)
-    const refresh = (first: boolean) => { void (first ? shared.task : shared.taskReload)(repo.root, task.id, version)
+    const version = taskVersion(repo, task.id, repo.planId)
+    const refresh = (first: boolean) => { void (first ? shared.task : shared.taskReload)(repo.root, task.id, version, repo.planId)
       .then((r) => {
         if (!alive) return
         if (r.ok) setDetailState({ scope: taskScope, value: r.value })
@@ -343,14 +348,15 @@ export function TaskPanel({
     }
   }, [taskScope, freshness, detailRetry])
 
+  // A successful unrelated action (accept, send back, merge…) must never delete an unsent composer draft: only
+  // the actual steer/correction path clears the exact submitted text, through `steerSettledPatch`.
   const after = async (ok: boolean) => {
     if (!ok) return
     setForm('none')
-    setMessage('')
     setReason('')
   }
   const accept = () => void action.call(async () => {
-    const result = await api.accept(repo.root, task.id)
+    const result = await api.accept(repo.root, task.id, repo.planId)
     if (result.ok && result.value.worktreeRemoved) setCopyRemoved(true)
     return result
   }).then(after)
@@ -358,7 +364,7 @@ export function TaskPanel({
   // Start and «Try again» share one call; a copy with uncommitted changes asks the person first (fo1).
   const start = (dirtyCopy?: 'keep' | 'reset') => void action.call(async () => {
     // «Auto» on an assigned task clears the assignment; KEEP leaves the choice to the launch rule.
-    const r = await api.run(repo.root, task.id, worker === KEEP ? undefined : worker === AUTO ? (assigned ? AUTO : undefined) : worker, dirtyCopy)
+    const r = await api.run(repo.root, task.id, worker === KEEP ? undefined : worker === AUTO ? (assigned ? AUTO : undefined) : worker, dirtyCopy, undefined, repo.planId)
     if (!r.ok && r.error === 'dirty_copy') {
       setDirtyCount(Number(r.vars?.count ?? 0))
       setForm('dirty')
@@ -371,23 +377,23 @@ export function TaskPanel({
     }
     return r
   })
-  const continueRun = () => void action.call(() => api.continueRun(repo.root, task.id))
+  const continueRun = () => void action.call(() => api.continueRun(repo.root, task.id, repo.planId))
   // wk1 (B29): a worker's run can be sent back and started again at once; a decision or root task has no run to repeat.
   const canRerun = !isDecision && task.kind !== 'root' && task.runs > 0
   const lastWorker = detail?.runs?.at(-1)?.agent
   const presetWorkers = (repo.effectiveRouting?.routing[taskClass] ?? []).filter((id) => id !== lastWorker)
-  const sendBack = (rerun: boolean) => void action.call(() => api.reject(repo.root, task.id, reason.trim(), rerun ? { rerun: true, ...(rerunWorker !== SAME ? { agent: rerunWorker } : {}) } : undefined)).then(after)
+  const sendBack = (rerun: boolean) => void action.call(() => api.reject(repo.root, task.id, reason.trim(), rerun ? { rerun: true, ...(rerunWorker !== SAME ? { agent: rerunWorker } : {}) } : undefined, repo.planId)).then(after)
   const sentBack = task.lastDecision?.verdict === 'sent_back' && task.status !== 'running' && task.status !== 'in_review' ? task.lastDecision : undefined
   // The answer is the task's detail with the new record: the snapshot does not change, so nothing else refreshes it (ck1).
   const runChecks = () => void checksAction.call(async () => {
-    const r = await api.runChecks(repo.root, task.id)
+    const r = await api.runChecks(repo.root, task.id, repo.planId)
     if (r.ok) setDetailState({ scope: taskScope, value: r.value })
     return r
   })
   const attempt = task.status === 'running' ? undefined : task.lastAttempt
   // mg1: the person's Merge — the host checks, asks natively and refuses with the same texts as `crewboard merge`.
   const merge = (strategy: 'no-ff' | 'squash') => void action.call(async () => {
-    const result = await api.merge(repo.root, task.id, strategy)
+    const result = await api.merge(repo.root, task.id, strategy, repo.planId)
     if (result.ok) {
       setMerged(result.value)
       if (result.value.copy === 'removed') setCopyRemoved(true)
@@ -395,7 +401,7 @@ export function TaskPanel({
     return result
   })
   // mk1: work that reached the base in a way Crewboard cannot see — the person records it, with a reason.
-  const markMerged = () => void action.call(() => api.markMerged(repo.root, task.id, reason.trim())).then(after)
+  const markMerged = () => void action.call(() => api.markMerged(repo.root, task.id, reason.trim(), repo.planId)).then(after)
   // mk1: a detached main checkout has no branch to name — say which checkout's current commit it is.
   const mergeInto = detail?.merge?.detached ? t('panel.task.mergeDetached', { path: detail.merge.detached.root }) : detail?.merge?.into ?? t('panel.task.mergeBase')
   const conflicts = task.status === 'in_review' ? task.conflicts ?? [] : []
@@ -470,9 +476,9 @@ export function TaskPanel({
   const deps = dependencyChips(task.deps)
   const selectedRun = detail?.runs?.find((run) => run.runId === selectedRunId) ?? detail?.runs?.at(-1)
   // The terminal status keeps Activity open; its «Open report» is an explicit move to the Overview report.
-  const openReport = () => { setTab('overview'); setTabPinned(true); setPanelTrace(null); onTabChange?.('overview') }
+  const openReport = () => { chooseTab('overview'); setPanelTrace(null); onTabChange?.('overview') }
   const latestRunId = task.lastRunId ?? detail?.runs?.at(-1)?.runId
-  const selectRun = (runId: string) => { setSelectedRunId(runId); setPanelTrace(null); setTabPinned(true) }
+  const selectRun = (runId: string) => chooseRun(runId)
 
   /**
    * A running task steers through the Activity composer — the latest run, or before the first detail arrives.
@@ -480,6 +486,9 @@ export function TaskPanel({
    * a poll, a tab change, a send failure and the run finishing mid-request.
    */
   const composerAvailable = primary === 'steer' && (!selectedRun || selectedRun.runId === latestRunId)
+  // A restored receipt belongs to the run captured when it was sent: on a newer run it is not shown as current.
+  const restored = deliveryForRun(memory.delivery, latestRunId)
+  const steerOutcome: SteerFeedback | null = restored?.result ? { result: restored.result, text: restored.text } : null
   const steerRecord = steerOutcome ? detail?.steers?.find((item) => item.id === steerOutcome.result.steerId) : undefined
   // The latest run a correction would reach right now; a response is only local feedback if it still matches.
   const latestRunRef = useRef(latestRunId)
@@ -487,29 +496,49 @@ export function TaskPanel({
   const sendSteer = () => {
     const submitted = message.trim()
     if (!submitted) return
-    // Capture the exact text and target this request carries; a newer draft or another task must never inherit it.
+    // Capture the exact text, task and run this request carries; a newer draft, another task or a newer run
+    // must never inherit its receipt. The 'sending' state is recorded in the task's own session memory before
+    // the await, so leaving and returning to the task still shows the request is in flight.
     const scope = taskScope
     const runId = latestRunId
+    remember({ delivery: { state: 'sending', text: submitted, runId, at: Date.now() } })
     void action.call(async () => {
-      const result = await api.steer(repo.root, task.id, submitted)
-      const current = taskScopeRef.current === scope && latestRunRef.current === runId
-      // A host that answers without a delivery record gets no feedback rather than a fabricated one.
-      if (current && result.ok && result.value) setSteerOutcome({ result: result.value as SteerResult, text: submitted })
-      // A stale request also owns its error: do not project an old task failure into the newly selected task.
-      return current ? result : { ok: true as const, value: null }
+      const result = await api.steer(repo.root, task.id, submitted, repo.planId)
+      const value = result.ok ? (result.value as SteerResult | undefined) : undefined
+      const state = value ? value.delivery : 'failed'
+      // The captured task's memory receives the receipt even if the panel has moved on; only this exact text is
+      // cleared, so a newer draft typed before the answer survives. `remember` is bound to the captured task.
+      const current = taskMemoryOf(repo.root, repo.planId, task.id)
+      // One rule, shared with the memory tests: only an accepted write clears the exact submitted revision.
+      remember(steerSettledPatch(current, submitted, { state, text: submitted, runId, at: Date.now(), ...(value ? { steerId: value.steerId, result: value } : {}) }))
+      // A stale request owns its error: do not project an old task failure into the newly selected task.
+      const still = taskScopeRef.current === scope && latestRunRef.current === runId
+      return still ? result : { ok: true as const, value: null }
     })
   }
-  const relaunchWithCorrection = () => void action.call(() => api.relaunch(repo.root, task.id, { note: message })).then(after)
+  // A correction relaunches with what the person sees now, else with the captured receipt's own text: an
+  // abandoned or refused queued steer must still be relaunchable after its draft was cleared, and an empty
+  // note is never sent. A newer typed draft is what it relaunches with, never overwritten by the old text.
+  const relaunchWithCorrection = () => {
+    const note = message.trim() || restored?.text?.trim() || ''
+    if (!note) return
+    void action.call(() => api.relaunch(repo.root, task.id, { note }, repo.planId)).then((ok) => {
+      // A correction that succeeded may clear the exact text it carried; a newer draft is left alone.
+      if (ok) {
+        const current = taskMemoryOf(repo.root, repo.planId, task.id)
+        if (current.draft === note) remember({ draft: '' })
+      }
+      return after(ok)
+    })
+  }
   /**
    * «Give direction» always lands in the latest active conversation, even from an older-run or trace view:
    * the person must never type into a form that would send against a run they are not looking at.
    */
   const giveDirection = () => {
     if (primary === 'steer') {
-      setSelectedRunId(null)
-      setPanelTrace(null)
-      setTab('activity')
-      setTabPinned(true)
+      chooseRun(null)
+      chooseTab('activity')
       setComposerFocus((count) => count + 1)
       return
     }
@@ -588,7 +617,7 @@ export function TaskPanel({
               </>
             ) : null}
             {primary === 'continue' && !attempt ? <button type="button" className="orc-btn" disabled={action.pending} onClick={continueRun}>{t('panel.task.continue')}</button> : null}
-            {primary === 'steer' ? <><button type="button" className="orc-btn" onClick={giveDirection} aria-expanded={form === 'steer'}>{t('panel.task.steer')}</button><button type="button" className="orc-btn orc-btn--ghost" disabled={action.pending} onClick={() => action.call(() => api.stop(repo.root, task.id))}>{t('panel.task.stop')}</button></> : null}
+            {primary === 'steer' ? <><button type="button" className="orc-btn" onClick={giveDirection} aria-expanded={form === 'steer'}>{t('panel.task.steer')}</button><button type="button" className="orc-btn orc-btn--ghost" disabled={action.pending} onClick={() => action.call(() => api.stop(repo.root, task.id, repo.planId))}>{t('panel.task.stop')}</button></> : null}
             {riskyResult && !checking && !reviewDetailPending ? <button type="button" className="orc-btn" onClick={() => setForm(form === 'reject' ? 'none' : 'reject')} aria-expanded={form === 'reject'}>{t('panel.task.sendBackMore')}</button> : null}
             {(primary === 'accept' && !checking && !closing && !reviewDetailPending) || primary === 'decision' ? <><button type="button" className={riskyResult ? 'orc-btn orc-btn--ghost' : 'orc-btn'} disabled={action.pending} onClick={accept}>{primary === 'decision' ? t('panel.task.acceptDecision') : negativeResult ? t('panel.task.acceptNoResult') : verdict?.kind === 'disputed' ? t('panel.task.acceptDisputed') : verdict?.caution ? t('panel.task.acceptDeviation') : t('panel.task.accept')}</button>{!riskyResult ? <button type="button" className="orc-btn orc-btn--ghost" onClick={() => setForm(form === 'reject' ? 'none' : 'reject')} aria-expanded={form === 'reject'}>{t('panel.task.sendBackMore')}</button> : null}</> : null}
             {primary === 'orchestrator' ? <span className="orc-meta">{orchestratorMove(task)}</span> : null}
@@ -644,13 +673,12 @@ export function TaskPanel({
         const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1
         if (next < 0) return
         event.preventDefault()
-        setTab(tabs[next]!.key)
-        setTabPinned(true)
+        chooseTab(tabs[next]!.key)
         onTabChange?.(tabs[next]!.key)
         event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus()
       }}>
         {tabs.map(({ key, label }) => (
-          <button key={key} type="button" role="tab" className="orc-tab" aria-selected={tab === key} onClick={() => { setTab(key); setTabPinned(true); setPanelTrace(null); onTabChange?.(key) }}>
+          <button key={key} type="button" role="tab" className="orc-tab" aria-selected={tab === key} onClick={() => { chooseTab(key); setPanelTrace(null); onTabChange?.(key) }}>
             {label}
           </button>
         ))}
@@ -670,8 +698,8 @@ export function TaskPanel({
             {detailReady && detail ? <ReportCard key={task.id} task={task} detail={detail} onTab={setTab} jump={reportJump} /> : null}
             <details className="orc-panel__history">
               <summary>{t('panel.task.historyDetails')}</summary>
-            {detail?.id === task.id ? <PreviousRuns detail={detail} workers={workers} onOpenRun={(runId) => { selectRun(runId); setTab('activity'); onTabChange?.('activity') }} /> : null}
-            {detail?.steers?.length ? <section className="orc-overview-section"><h3>{t('panel.task.steersLabel')}</h3><ul className="orc-list orc-steers" aria-label={t('panel.task.steersLabel')}>{detail.steers.map(steer => <li key={steer.id} className="orc-steer"><p className="orc-steer__text">{steer.preview}</p><p className="orc-steer__meta"><span>{t(`panel.task.steerState.${steer.state}`)}</span> · <time dateTime={steer.timestamps[steer.state]}>{new Date(steer.timestamps[steer.state] ?? steer.createdAt).toLocaleTimeString()}</time></p>{steer.state === 'abandoned' ? <div className="orc-steer__recovery"><span>{t(`panel.task.steerReason.${steer.reason ?? 'run_finished'}`)}</span>{task.status === 'accepted' || task.status === 'superseded' ? null : <button type="button" className="orc-btn" disabled={action.pending} onClick={() => void action.call(() => api.relaunch(repo.root, task.id, { note: steer.text ?? steer.preview })).then(after)}>{t('panel.task.relaunchWithCorrection')}</button>}</div> : null}</li>)}</ul></section> : null}
+            {detail?.id === task.id ? <PreviousRuns detail={detail} workers={workers} onOpenRun={(runId) => { selectRun(runId); chooseTab('activity'); onTabChange?.('activity') }} /> : null}
+            {detail?.steers?.length ? <section className="orc-overview-section"><h3>{t('panel.task.steersLabel')}</h3><ul className="orc-list orc-steers" aria-label={t('panel.task.steersLabel')}>{detail.steers.map(steer => <li key={steer.id} className="orc-steer"><p className="orc-steer__text">{steer.preview}</p><p className="orc-steer__meta"><span>{t(`panel.task.steerState.${steer.state}`)}</span> · <time dateTime={steer.timestamps[steer.state]}>{new Date(steer.timestamps[steer.state] ?? steer.createdAt).toLocaleTimeString()}</time></p>{steer.state === 'abandoned' ? <div className="orc-steer__recovery"><span>{t(`panel.task.steerReason.${steer.reason ?? 'run_finished'}`)}</span>{task.status === 'accepted' || task.status === 'superseded' ? null : <button type="button" className="orc-btn" disabled={action.pending} onClick={() => void action.call(() => api.relaunch(repo.root, task.id, { note: steer.text ?? steer.preview }, repo.planId)).then(after)}>{t('panel.task.relaunchWithCorrection')}</button>}</div> : null}</li>)}</ul></section> : null}
             <section className="orc-overview-section"><h3>{t('panel.task.tab.notes')}</h3><NotesTab detail={detail} /></section>
             <section className="orc-overview-section"><h3>{t('panel.task.tab.links')}</h3><LinksTab task={task} detail={detail} onSelect={onSelect} /></section>
             </details>
@@ -679,11 +707,11 @@ export function TaskPanel({
             {copyExists ? candidate.keep ? <p className="orc-meta">{t(`worktree.keep.${candidate.keep}`)}</p> : <button type="button" className="orc-run__link" disabled={removingCopy} onClick={() => void removeCopy()}>{t('panel.task.removeCopy')}</button> : null}
             {copyError ? <p className="orc-error" role="alert">{copyError}</p> : null}
           </> : null}
-          {tab === 'activity' ? panelTrace?.taskId === task.id ? <RunTracePanel root={repo.root} target={panelTrace} onBack={() => setPanelTrace(null)} /> : <>
+          {tab === 'activity' ? panelTrace?.taskId === task.id ? <RunTracePanel root={repo.root} plan={repo.planId} target={panelTrace} onBack={() => setPanelTrace(null)} /> : <>
             {detail?.runs.length ? <div className="orc-activity-run"><label htmlFor="orc-activity-run">{t('panel.task.pickRun')}</label><select id="orc-activity-run" className="orc-select" value={selectedRun?.runId ?? ''} onChange={(e) => selectRun(e.target.value)}>{detail.runs.map((run, i) => <option key={run.runId} value={run.runId}>{t('panel.task.runNumber', { count: i + 1 })} · {identityLabel(workerIdentity(run.agent, workers))} · {run.outcome ? t(`panel.tabs.outcome.${run.outcome}`) : t('panel.tabs.runActive')}</option>)}</select>{selectedRun ? <button type="button" className="orc-run__link" onClick={() => { const target = { taskId: detail.id, taskTitle: detail.title, run: { runId: selectedRun.runId, agent: selectedRun.agent, startedAt: selectedRun.startedAt, active: !selectedRun.finishedAt } }; if (onTrace) onTrace(target); else setPanelTrace(target) }}>{t('panel.task.openLedger')} →</button> : null}</div> : <p className="orc-meta">{t('panel.tabs.noRuns')}</p>}
-            {detail && selectedRun && selectedRun.runId === latestRunId ? <LiveActivity key={selectedRun.runId} detail={detail} task={task} run={selectedRun} scrollRef={liveScroll} attention={attention} onOpenReport={openReport} /> : selectedRun ? <OlderRunActivity root={repo.root} taskId={task.id} runId={selectedRun.runId} /> : null}
+            {detail && selectedRun && selectedRun.runId === latestRunId ? <LiveActivity key={`${repo.root}:${repo.planId ?? ''}:${task.id}:${selectedRun.runId}`} detail={detail} task={task} run={selectedRun} scrollRef={liveScroll} attention={attention} onOpenReport={openReport} position={feedPositionOf(memory, selectedRun.runId)} onPosition={(pos) => remember({ anchor: pos.anchor, anchorOffset: pos.anchorOffset, offset: pos.offset, follow: pos.follow, feedRun: selectedRun.runId })} /> : selectedRun ? <OlderRunActivity root={repo.root} plan={repo.planId} taskId={task.id} runId={selectedRun.runId} /> : null}
           </> : null}
-          {tab === 'changes' ? <ChangesTab detail={detail} root={repo.root} /> : null}
+          {tab === 'changes' ? <ChangesTab detail={detail} root={repo.root} plan={repo.planId} /> : null}
           {tab === 'contract' ? <ContractTab detail={detail} /> : null}
         </div>
       </div>
@@ -692,8 +720,9 @@ export function TaskPanel({
           value={message}
           onChange={setMessage}
           onSend={sendSteer}
-          pending={action.pending}
+          pending={action.pending || restored?.state === 'sending'}
           outcome={steerOutcome}
+          unconfirmed={restored?.state === 'unconfirmed'}
           {...(steerRecord ? { record: steerRecord } : {})}
           onRelaunch={relaunchWithCorrection}
           focusSignal={composerFocus}

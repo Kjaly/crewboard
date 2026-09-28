@@ -31,7 +31,7 @@ const finishedSteps = new Map<string, RunStepSummary>()
  * Strips for the rows on screen only: the plan summary stays free of raw events, and a finished
  * run's strip is fetched once. Live runs refresh with every new cost snapshot.
  */
-export function useRunSteps(root: string, runs: PlanRunCost[], refresh: string) {
+export function useRunSteps(root: string, plan: string | undefined, runs: PlanRunCost[], refresh: string) {
   const [fetched, setFetched] = useState<{ root: string; value: Record<string, RunStepSummary>; failed: string[] }>({ root, value: {}, failed: [] })
   const want = runs.filter((run) => !run.finishedAt || !finishedSteps.has(`${root}:${run.runId}`)).map((run) => run.runId)
   const key = want.join(',')
@@ -40,14 +40,14 @@ export function useRunSteps(root: string, runs: PlanRunCost[], refresh: string) 
     if (!want.length) return
     let live = true
     const fail = () => { if (live) setFetched((old) => ({ root, value: old.root === root ? old.value : {}, failed: want })) }
-    void api.runSteps(root, want).then((result) => {
+    void api.runSteps(root, want, plan).then((result) => {
       if (!live) return
       if (!result.ok) { fail(); return }
       for (const [id, steps] of Object.entries(result.value)) if (steps.completeness !== 'live') finishedSteps.set(`${root}:${id}`, steps)
       setFetched((old) => ({ root, value: { ...(old.root === root ? old.value : {}), ...result.value }, failed: [] }))
     }).catch(fail)
     return () => { live = false }
-  }, [root, key, refresh])
+  }, [root, plan, key, refresh])
   return (runId: string): RunStepSummary | 'loading' | 'unavailable' =>
     finishedSteps.get(`${root}:${runId}`) ?? (fetched.root === root ? fetched.value[runId] : undefined) ?? (fetched.failed.includes(runId) ? 'unavailable' : 'loading')
 }

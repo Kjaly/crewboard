@@ -54,8 +54,10 @@ it('an archived plan, even the only (current) one, waits on nobody; unarchived, 
   }
   const waiting = await read()
   expect(waiting.cli).toHaveLength(3)
-  // at2: one waiting number — the sidebar heading, the badge and the tab title agree (the failed run counts once, in all of them).
-  expect(counts(waiting.snapshot)).toMatchObject({ inbox: 3, badge: 3, repo: { waiting: 2, attention: 1 }, title: [3, 1] })
+  // at2: one waiting number — the sidebar heading and the badge agree (the failed run counts once, in both).
+  // The tree row reads the plan's own progress: only the presented decision is a person's move, so the
+  // row's waiting count is 1 while the legacy «Needs you» queue still holds the plain review.
+  expect(counts(waiting.snapshot)).toMatchObject({ inbox: 3, badge: 3, repo: { waiting: 1, attention: 1 }, title: [3, 1] })
 
   await cli('plan', 'archive', 'main')
   const archived = await read()
@@ -64,7 +66,7 @@ it('an archived plan, even the only (current) one, waits on nobody; unarchived, 
   expect(archived.snapshot.repos[0]!.tasks.map((task) => [task.id, task.status])).toEqual([['plain', 'in_review'], ['pick', 'ready'], ['broke', 'ready']])
   expect(archived.cli).toEqual([])
   expect(inboxItems(archived.snapshot, { root, planId: 'main' })).toEqual([])
-  expect(counts(archived.snapshot)).toEqual({ inbox: 0, badge: 0, repo: { waiting: 0, attention: 0 }, group: [[0, 0]], rows: [{ running: 0, waiting: 0, failed: 0 }], title: [0, 0] })
+  expect(counts(archived.snapshot)).toEqual({ inbox: 0, badge: 0, repo: { waiting: 0, attention: 0 }, group: [[0, 0]], rows: [{ running: 0, waiting: 0, failed: 0, checking: 0, unmerged: 0 }], title: [0, 0] })
 
   // Notifications: nothing new appears on the archived snapshot (the orchestrator's chat: chat.test.ts).
   const notifier = createAttentionNotifier(() => {})

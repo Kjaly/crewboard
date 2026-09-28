@@ -3,11 +3,13 @@ import { setLang } from '../../src/client/i18n.js'
 import { useRef } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor, act } from '@testing-library/react'
 import { userEvent } from '@testing-library/user-event'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Attention, TaskDetail, TaskSnapshot } from '../../src/shared/types.js'
 import { TaskPanel } from '../../src/client/panel/task-panel.js'
 import { LiveActivity, activityPhase, overlapCount, runIsLive, stabilizeGroupKeys } from '../../src/client/panel/live-activity.js'
+import { turnAnchors } from '../../src/client/panel/feed-window.js'
 import { groupEvents } from '../../src/client/panel/tabs.js'
+import { resetSessionMemory, rememberTask, taskMemoryOf } from '../../src/client/store.js'
 import { installFetch, jsonOk, makeDetail, makeRepo, makeTask } from './helpers.js'
 
 type Event = TaskDetail['events'][number]
@@ -332,6 +334,142 @@ describe('LiveActivity following', () => {
     expect(screen.queryByText('Работает')).toBeNull()
     await user.click(screen.getByRole('button', { name: 'Открыть отчёт' }))
     expect(opened).toBe(true)
+  })
+})
+
+describe('feed reading position: an anchor plus the offset within it', () => {
+  const anchorOf = (kind: string, ts: string) => `${kind}|${ts}`
+  // jsdom reports no layout; mock the two viewport sizes on the prototype so the effect sees them at mount.
+  const metricsOwn = {
+    scrollHeight: Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight'),
+    clientHeight: Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight'),
+  }
+  const mockMetrics = (scrollHeight = 1000, clientHeight = 300) => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => scrollHeight })
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => clientHeight })
+  }
+  const restoreMetrics = () => {
+    for (const key of ['scrollHeight', 'clientHeight'] as const) {
+      const descriptor = metricsOwn[key]
+      if (descriptor) Object.defineProperty(HTMLElement.prototype, key, descriptor)
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[key]
+    }
+  }
+  let positionEl: HTMLDivElement | null = null
+  /**
+   * A rect mock: the scroll viewport sits at top 0 and each turn's top comes from `layout` by its deterministic
+   * anchor. This is the only geometry the component reads, so `offsetTop`'s `offsetParent` can never matter.
+   */
+  function mockLayout(layout: Map<string, number>) {
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      const element = this as HTMLElement
+      const anchor = element.dataset?.eventAnchor
+      const top = anchor ? (layout.get(anchor) ?? 0) : 0
+      const height = anchor ? 60 : 0
+      return { top, bottom: top + height, left: 0, right: 0, width: 0, height, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+    })
+  }
+  function PositionHarness({ detail, task, run, position, onPosition }: {
+    detail: TaskDetail
+    task: TaskSnapshot
+    run: Run
+    position?: { anchor?: string; anchorOffset?: number; offset?: number; follow?: boolean }
+    onPosition?(pos: { anchor?: string; anchorOffset?: number; offset: number; follow: boolean }): void
+  }) {
+    const ref = useRef<HTMLDivElement | null>(null)
+    return <div ref={(node) => { ref.current = node; positionEl = node }}><LiveActivity detail={detail} task={task} run={run} scrollRef={ref} position={position} onPosition={onPosition} /></div>
+  }
+  beforeEach(() => mockMetrics())
+  afterEach(() => { restoreMetrics(); vi.restoreAllMocks(); vi.useRealTimers(); positionEl = null; resetSessionMemory() })
+
+  it('gives two turns with the same timestamp distinct deterministic anchors', () => {
+    const events: Event[] = [message(1, 'first'), message(1, 'second')]
+    const anchors = turnAnchors([{ events: [events[0]!] }, { events: [events[1]!] }])
+    expect(anchors).toEqual([anchorOf('message', at(1)), `${anchorOf('message', at(1))}|1`])
+    // The rendered rows carry those anchors, not just a timestamp a selector could confuse.
+    const task = makeTask({ id: 'a', status: 'in_review' })
+    const { container } = render(<PositionHarness detail={detailWith(events, { status: 'in_review' })} task={task} run={{ ...RUN, finishedAt: at(30) }} />)
+    expect([...container.querySelectorAll('[data-event-anchor]')].map((node) => node.getAttribute('data-event-anchor'))).toEqual([anchorOf('message', at(1)), `${anchorOf('message', at(1))}|1`])
+  })
+
+  it('restores the alignment halfway through a tall message by the anchor\u2019s own rect', () => {
+    const anchor = anchorOf('message', at(1))
+    mockLayout(new Map([[anchor, 40]]))
+    const task = makeTask({ id: 'a', status: 'in_review' })
+    const { container } = render(<PositionHarness detail={detailWith([message(1, 'x'.repeat(40))], { status: 'in_review' })} task={task} run={{ ...RUN, finishedAt: at(30) }} position={{ anchor, anchorOffset: -120, offset: 400, follow: false }} />)
+    // top(40) - savedOffset(-120) = 160: the message keeps the same 120px scrolled-past lead.
+    expect((container.firstElementChild as HTMLElement).scrollTop).toBe(160)
+  })
+
+  it('restores the exact duplicate-timestamp row, not the first with that time', () => {
+    const first = anchorOf('message', at(1))
+    const second = `${first}|1`
+    mockLayout(new Map([[first, 0], [second, 250]]))
+    const task = makeTask({ id: 'a', status: 'in_review' })
+    const { container } = render(<PositionHarness detail={detailWith([message(1, 'first'), message(1, 'second')], { status: 'in_review' })} task={task} run={{ ...RUN, finishedAt: at(30) }} position={{ anchor: second, anchorOffset: 0, follow: false }} />)
+    expect((container.firstElementChild as HTMLElement).scrollTop).toBe(250)
+  })
+
+  it('retains the anchor when the bounded window shifts underneath it', () => {
+    const anchor = anchorOf('action', at(1))
+    mockLayout(new Map([[anchor, 500]]))
+    const task = makeTask({ id: 'a', status: 'in_review' })
+    const { container } = render(<PositionHarness detail={detailWith([action(1), action(2), action(3)], { status: 'in_review' })} task={task} run={{ ...RUN, finishedAt: at(30) }} position={{ anchor, anchorOffset: -80, follow: false }} />)
+    expect((container.firstElementChild as HTMLElement).scrollTop).toBe(580)
+  })
+
+  it('falls back to the bounded raw offset once the anchor is outside the history', () => {
+    const task = makeTask({ id: 'a', status: 'in_review' })
+    const { container } = render(<PositionHarness detail={detailWith([action(1), action(2)], { status: 'in_review' })} task={task} run={{ ...RUN, finishedAt: at(30) }} position={{ anchor: anchorOf('message', 'gone'), offset: 420, follow: false }} />)
+    expect((container.firstElementChild as HTMLElement).scrollTop).toBe(420)
+  })
+
+  it('saves the topmost turn and the viewport offset within it', () => {
+    vi.useFakeTimers()
+    const anchor = anchorOf('message', at(1))
+    mockLayout(new Map([[anchor, -10]]))
+    const onPosition = vi.fn()
+    const task = makeTask({ id: 'a', status: 'running' })
+    render(<PositionHarness detail={detailWith([message(1, 'long')])} task={task} run={RUN} onPosition={onPosition} />)
+    const scroller = positionEl!
+    scroller.scrollTop = 30
+    fireEvent.scroll(scroller)
+    act(() => { vi.advanceTimersByTime(200) })
+    expect(onPosition).toHaveBeenLastCalledWith({ anchor, anchorOffset: -10, offset: 30, follow: false })
+  })
+
+  it('starts a new run fresh instead of inheriting the previous run\u2019s scroll', async () => {
+    const runs = [{ runId: 'r1', agent: 'dsh', startedAt: at(0), finishedAt: at(5), outcome: 'completed' as const }, { runId: 'r2', agent: 'dsh', startedAt: at(6) }]
+    installFetch((url) => (url.includes('/api/task') ? jsonOk(makeDetail({ id: 'a', status: 'running', runs, events: [action(7)] })) : jsonOk(null)))
+    // The reader had scrolled run r1 far up; the new latest run r2 must not reopen there.
+    rememberTask('/repo', undefined, 'a', { feedRun: 'r1', anchor: anchorOf('message', 'gone'), anchorOffset: -300, offset: 650, follow: false })
+    const task = makeTask({ id: 'a', status: 'running', runs: 2, lastRunId: 'r2' })
+    const { container } = render(<TaskPanel repo={makeRepo([task])} task={task} attention={[]} onSelect={() => {}} density="overview" />)
+    await waitFor(() => expect(container.querySelector('.orc-panel__scroll')).toBeTruthy())
+    const scroller = container.querySelector('.orc-panel__scroll') as HTMLElement
+    // Fresh start for a live run: at the latest activity (the bottom), not r1's 650px offset.
+    expect(scroller.scrollTop).toBe(1000)
+  })
+
+  it('flushes the latest reading offset when the panel is left before the throttle fires', async () => {
+    const a = makeTask({ id: 'a', status: 'running', runs: 1 })
+    const b = makeTask({ id: 'b', status: 'running', runs: 1 })
+    installFetch((url) => jsonOk(makeDetail({ id: url.includes('id=b') ? 'b' : 'a', status: 'running', runs: [RUN], events: [action(0), action(1), action(2)] })))
+    const repo = makeRepo([a, b])
+    const { container, rerender } = render(<TaskPanel repo={repo} task={a} attention={[]} onSelect={() => {}} density="overview" />)
+    await waitFor(() => expect(container.querySelector('.orc-live')).toBeTruthy())
+    const scroller = container.querySelector('.orc-panel__scroll') as HTMLElement
+    // The reader scrolls up: the geometry is captured at once, the write-back stays throttled.
+    scroller.scrollTop = 250
+    fireEvent.scroll(scroller)
+    // Leave for B before the 120ms timer fires: the unmount must flush the captured snapshot.
+    rerender(<TaskPanel repo={repo} task={b} attention={[]} onSelect={() => {}} density="overview" />)
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Задача b' })).toBeTruthy())
+    expect(taskMemoryOf('/repo', undefined, 'a').offset).toBe(250)
+    // Returning to A restores that exact offset, not the bottom.
+    rerender(<TaskPanel repo={repo} task={a} attention={[]} onSelect={() => {}} density="overview" />)
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Задача a' })).toBeTruthy())
+    await waitFor(() => expect((container.querySelector('.orc-panel__scroll') as HTMLElement).scrollTop).toBe(250))
   })
 })
 

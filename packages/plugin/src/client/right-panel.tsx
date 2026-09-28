@@ -124,7 +124,7 @@ function NoPlan({ repo }: { repo: OrchestraRepoSnapshot }) {
  * the report line need it; expanding the row reuses the same detail for the file list. Accept and
  * return go through the same routes — and the same macOS confirm — as the queue on the big screen.
  */
-function ReviewRow({ root, task, wait, onOpenTask }: { root: string; task: TaskSnapshot; wait?: string; onOpenTask(id: string): void }) {
+function ReviewRow({ root, plan, task, wait, onOpenTask }: { root: string; plan?: string; task: TaskSnapshot; wait?: string; onOpenTask(id: string): void }) {
   const action = useAction()
   const [open, setOpen] = useState(false)
   const [detail, setDetail] = useState<TaskDetail | null>(null)
@@ -137,7 +137,7 @@ function ReviewRow({ root, task, wait, onOpenTask }: { root: string; task: TaskS
   useEffect(() => {
     let alive = true
     api
-      .task(root, task.id)
+      .task(root, task.id, plan)
       .then((r) => {
         if (alive) setDetail(r.ok ? r.value : null)
       })
@@ -145,7 +145,7 @@ function ReviewRow({ root, task, wait, onOpenTask }: { root: string; task: TaskS
     return () => {
       alive = false
     }
-  }, [root, task.id, task.runs, task.lastRunId])
+  }, [root, plan, task.id, task.runs, task.lastRunId])
 
   const files = detail?.changedFiles
   const report = detail?.report?.text.trim() ? reportLine(detail.report.text) : undefined
@@ -194,7 +194,7 @@ function ReviewRow({ root, task, wait, onOpenTask }: { root: string; task: TaskS
             {t('panel.side.openDecision')}
           </button>
         ) : (
-          <button type="button" className="orc-btn" disabled={action.pending} onClick={() => action.call(() => api.accept(root, task.id))}>
+          <button type="button" className="orc-btn" disabled={action.pending} onClick={() => action.call(() => api.accept(root, task.id, plan))}>
             {t('panel.side.accept')}
           </button>
         )}
@@ -226,7 +226,7 @@ function ReviewRow({ root, task, wait, onOpenTask }: { root: string; task: TaskS
               className="orc-btn"
               disabled={action.pending || !reason.trim()}
               onClick={() =>
-                action.call(() => api.reject(root, task.id, reason.trim())).then((ok) => {
+                action.call(() => api.reject(root, task.id, reason.trim(), undefined, plan)).then((ok) => {
                   if (ok) {
                     setRejecting(false)
                     setReason('')
@@ -272,7 +272,7 @@ function RunningRow({ task, now, onOpenTask }: { task: TaskSnapshot; now: Date; 
   )
 }
 
-function ReadyRow({ root, task }: { root: string; task: TaskSnapshot }) {
+function ReadyRow({ root, plan, task }: { root: string; plan?: string; task: TaskSnapshot }) {
   const action = useAction()
   const tone = taskTone(task)
   return (
@@ -286,7 +286,7 @@ function ReadyRow({ root, task }: { root: string; task: TaskSnapshot }) {
       </div>
       <span className="orc-meta">{task.worker ?? t('panel.side.workerAuto')}</span>
       <div className="orc-qrow__acts">
-        <button type="button" className="orc-btn" disabled={action.pending} onClick={() => action.call(() => api.run(root, task.id))}>
+        <button type="button" className="orc-btn" disabled={action.pending} onClick={() => action.call(() => api.run(root, task.id, undefined, undefined, undefined, plan))}>
           {t('panel.side.run')}
         </button>
       </div>
@@ -309,7 +309,7 @@ function PlanView({ repo, sessionId }: { repo: OrchestraRepoSnapshot; sessionId?
   const reviewIds = useMemo(() => new Set(review.map((t) => t.id)), [review])
   const running = repo.tasks.filter((t) => t.status === 'running')
   const ready = repo.tasks.filter((t) => t.status === 'ready' && !reviewIds.has(t.id))
-  const { cost } = usePlanCost(repo.root, repo.rev)
+  const { cost } = usePlanCost(repo.root, repo.rev, false, repo.planId ?? '')
   const waits = useMemo(() => waitLabels(cost, new Date()), [cost])
   // biome-ignore lint/correctness/useExhaustiveDependencies: The listed key intentionally triggers a refresh when its underlying data changes.
   const now = useMemo(() => new Date(), [repo.updatedAt])
@@ -359,7 +359,7 @@ function PlanView({ repo, sessionId }: { repo: OrchestraRepoSnapshot; sessionId?
             <h3 className="orc-rp__label orc-rp__label--warn">{t('panel.side.reviewCount', { count: review.length })}</h3>
             <ul className="orc-rp__list">
               {review.map((task) => (
-                <ReviewRow key={task.id} root={repo.root} task={task} wait={waits.get(task.id)} onOpenTask={openScreen} />
+                <ReviewRow key={task.id} root={repo.root} plan={repo.planId} task={task} wait={waits.get(task.id)} onOpenTask={openScreen} />
               ))}
             </ul>
             <p className="orc-hint">{t('panel.side.confirmHint')}</p>
@@ -382,7 +382,7 @@ function PlanView({ repo, sessionId }: { repo: OrchestraRepoSnapshot; sessionId?
             <h3 className="orc-rp__label">{t('panel.side.readyCount', { count: ready.length })}</h3>
             <ul className="orc-rp__list">
               {ready.map((task) => (
-                <ReadyRow key={task.id} root={repo.root} task={task} />
+                <ReadyRow key={task.id} root={repo.root} plan={repo.planId} task={task} />
               ))}
             </ul>
           </section>

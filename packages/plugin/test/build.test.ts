@@ -27,11 +27,14 @@ describe('plugin build', () => {
     // size plus ~5% (296.0 KiB, 2026-09-24, after opt2); scripts/release-check.mjs holds the same number.
     // Client measured after wave 1 (w1a–w1f), 2026-09-24: 312.8 KiB → 329; host index.js 459.4 KiB → 483.
     // Client re-measured after wave 2 (2026-09-25): 334.8 KiB → 352.
-    expect(Buffer.byteLength(client)).toBeLessThan(352 * 1024)
+    // Navigation stage (2026-09-28): the global Now screen and the compact project switcher add to the
+    // always-loaded client. Now is a lazy screen (`screen-now.js`), so the measured client is 369.0 KiB;
+    // this raises the ceiling deliberately to measured + ~5% (388), not silently.
+    expect(Buffer.byteLength(client)).toBeLessThan(388 * 1024)
     expect(client).not.toContain('Task actions')
     expect(client).not.toContain('Действия с задачей')
     for (const lang of ['en', 'ru']) expect((await readFile(`${pkg}/lib/dict-${lang}.js`, 'utf8')).length).toBeGreaterThan(1000)
-    for (const name of ['review', 'welcome', 'settings', 'draft', 'ledger', 'trace', 'task']) {
+    for (const name of ['review', 'welcome', 'settings', 'draft', 'ledger', 'trace', 'task', 'now']) {
       const asset = await readFile(`${pkg}/lib/screen-${name}.js`, 'utf8')
       expect(client).toContain(`/crewboard/assets/screen-${name}.js`)
       expect(client).not.toContain(`__orchScreenBundles["${name}"]`)
@@ -41,6 +44,17 @@ describe('plugin build', () => {
       // and give the screen its own language and style state.
       expect(asset).not.toContain('worktree.policy.afterAccept')
       expect(asset).not.toContain('.orc-root{')
+    }
+    // Window-session memory (drafts, steer receipts, feed positions) and the shared task-detail cache must be
+    // ONE module across the shell and every lazy screen. `store` and `api` are externalized to `__orchShared/*`
+    // and the shell registers them; a screen that inlined its own copy would fork the reader's drafts, receipts
+    // and the same-task-in-another-plan cache in one tab.
+    expect(client).toContain('__orchShared/store')
+    expect(client).toContain('__orchShared/api')
+    for (const name of ['task', 'ledger']) {
+      const asset = await readFile(`${pkg}/lib/screen-${name}.js`, 'utf8')
+      expect(asset, name).toContain('__orchShared/store')
+      expect(asset, name).toContain('__orchShared/api')
     }
     expect(client).not.toContain('elk.bundled')
     expect(client).toContain('/crewboard/assets/elk.js')
@@ -78,7 +92,9 @@ describe('plugin build', () => {
     // Result attestation added current proof/receipt verification (2026-09-28): index.js 657.0 KiB → 691.
     // API-only Claude policy (2026-09-28): cli-runner-main carries its own resolved-route guard so a direct
     // `runCliRun`/stale args file refuses an unsupported channel before any worker child — 44 → 50 KiB.
-    for (const [name, ceiling] of [['index.js', 691], ['cli-runner-main.js', 50], ['runner-main.js', 10]] as const) {
+    // Explicit plan APIs and lightweight progress (2026-09-28): host 707161 → 716536 B (+1.3%), 699.7 KiB → 735 (~5% margin).
+    // No new dependencies; runner/client budgets remain unchanged.
+    for (const [name, ceiling] of [['index.js', 735], ['cli-runner-main.js', 50], ['runner-main.js', 10]] as const) {
       expect(Buffer.byteLength(await readFile(`${pkg}/lib/${name}`)), name).toBeLessThan(ceiling * 1024)
     }
     // Classic zod registers `ZodString`/`ZodObject`; zod/mini registers `ZodMini…`. No bundle — host,

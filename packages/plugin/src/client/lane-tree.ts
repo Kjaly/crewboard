@@ -10,23 +10,24 @@ import { laneOf, laneOrder } from './views/graph/layout.js'
  * Pure — the sidebar renders it, the graph orders by it, the tests drive it without a DOM.
  */
 
-/** A task that can no longer move: accepted, closed with a negative verdict, superseded or dropped. */
-export const isFinished = (task: Pick<TaskSnapshot, 'status'>): boolean =>
-  task.status === 'accepted' || task.status === 'closed' || task.status === 'superseded' || task.status === 'dropped'
+/** A task that can no longer move: accepted (and merged), closed with a negative verdict, superseded or dropped. */
+export const isFinished = (task: Pick<TaskSnapshot, 'status' | 'unmerged'>): boolean =>
+  (task.status === 'accepted' && !task.unmerged) || task.status === 'closed' || task.status === 'superseded' || task.status === 'dropped'
 
-/** ● running · ◐ awaiting the person · ○ ready · · queued or blocked · ✓ accepted. */
-export type LaneCounts = { running: number; review: number; ready: number; queued: number; accepted: number }
+/** ● running · ◌ orchestrator checking · ◐ awaiting the person · ○ ready · · queued or blocked · ✓ accepted. */
+export type LaneCounts = { running: number; checking: number; review: number; ready: number; queued: number; accepted: number }
 /** The row's dot: amber when the lane waits for a person, blue while it runs, neutral otherwise. */
 export type LaneTone = 'waiting' | 'running' | 'idle'
 export type LaneRow = { lane: string; tone: LaneTone; counts: LaneCounts; total: number; finished: boolean }
 export type LaneTree = { now: LaneRow[]; history: LaneRow[] }
 
 function countLane(tasks: readonly TaskSnapshot[]): LaneCounts {
-  const counts: LaneCounts = { running: 0, review: 0, ready: 0, queued: 0, accepted: 0 }
+  const counts: LaneCounts = { running: 0, checking: 0, review: 0, ready: 0, queued: 0, accepted: 0 }
   for (const task of tasks) {
     if (waitsForHuman(task)) counts.review++
-    // Work the orchestrator is still checking, or a decision it still prepares, is its move: live.
-    else if (task.status === 'running' || (task.status === 'in_review' && isChecking(task.check)) || task.preparing) counts.running++
+    // Work the orchestrator is still checking is its move, but a *check*, not a worker run.
+    else if (task.status === 'in_review' && isChecking(task.check)) counts.checking++
+    else if (task.status === 'running' || task.preparing) counts.running++
     else if (task.status === 'ready') counts.ready++
     else if (task.status === 'blocked' || task.status === 'backlog') counts.queued++
     else if (task.status === 'accepted' || task.status === 'closed') counts.accepted++
@@ -34,7 +35,7 @@ function countLane(tasks: readonly TaskSnapshot[]): LaneCounts {
   return counts
 }
 
-const toneOf = (counts: LaneCounts): LaneTone => (counts.review > 0 ? 'waiting' : counts.running > 0 ? 'running' : 'idle')
+const toneOf = (counts: LaneCounts): LaneTone => (counts.review > 0 ? 'waiting' : counts.running > 0 || counts.checking > 0 ? 'running' : 'idle')
 const RANK: Record<LaneTone, number> = { waiting: 0, running: 1, idle: 2 }
 
 /**

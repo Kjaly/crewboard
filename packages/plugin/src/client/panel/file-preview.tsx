@@ -67,7 +67,7 @@ export function parseDelimited(input: string, delimiter: string): string[][] {
   return rows
 }
 
-type Props = { repo: string; id: string; file: string; expanded?: boolean }
+type Props = { repo: string; plan?: string; id: string; file: string; expanded?: boolean }
 type SideState = { url: string; text?: string; bytes: number; error?: string }
 
 function FileSide({ kind, side, state, expanded, delimiter }: { kind: PreviewKind; side: 'before' | 'after'; state: SideState; expanded?: boolean; delimiter: string }) {
@@ -141,7 +141,7 @@ function DxfView({ text }: { text: string }) {
   </div>
 }
 
-export function FilePreview({ repo, id, file, expanded }: Props) {
+export function FilePreview({ repo, plan, id, file, expanded }: Props) {
   const kind = previewKind(file)
   const [sides, setSides] = useState<Partial<Record<'before' | 'after', SideState>>>({})
   const [compare, setCompare] = useState<'sides' | 'overlay'>('sides')
@@ -153,7 +153,7 @@ export function FilePreview({ repo, id, file, expanded }: Props) {
     setCompare('sides')
     setMarkdownSide('after')
     for (const side of ['before', 'after'] as const) {
-      const route = api.fileUrl(repo, id, file, side)
+      const route = api.fileUrl(repo, id, file, side, plan)
       fetch(route).then(async (response) => {
         if (!response.ok) {
           const result = await response.json().catch(() => ({})) as { error?: string }
@@ -170,7 +170,7 @@ export function FilePreview({ repo, id, file, expanded }: Props) {
       }).catch(() => { if (alive) setSides((prev) => ({ ...prev, [side]: { url: '', bytes: 0, error: t('panel.preview.unavailable') } })) })
     }
     return () => { alive = false; urls.forEach((url) => { URL.revokeObjectURL(url) }) }
-  }, [repo, id, file, kind])
+  }, [repo, plan, id, file, kind])
   const before = sides.before, after = sides.after
   const hasBefore = before && before.error !== 'no_before'
   return <div className={'orc-preview' + (expanded ? ' orc-preview--expanded' : '')}>

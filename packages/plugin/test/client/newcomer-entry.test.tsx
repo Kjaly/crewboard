@@ -48,7 +48,7 @@ describe('sidebar', () => {
     expect(screen.queryByRole('heading', { name: 'How to start' })).toBeNull()
     await user.click(screen.getByRole('treeitem', { name: /^fresh/ }))
     expect(await screen.findByRole('heading', { name: 'How to start' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'fresh' })).toBeTruthy()
+    expect(screen.getByTitle('/work/fresh')).toBeTruthy()
   })
 
   it('opens a repository added with «+» on its welcome', async () => {
@@ -61,7 +61,7 @@ describe('sidebar', () => {
     await waitFor(() => expect(calls.find((call) => call.url.endsWith('/repo-add'))?.body).toMatchObject({ path: '/work/fresh' }))
     await emit(makeSnapshot(busy, fresh))
     expect(await screen.findByRole('heading', { name: 'How to start' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'fresh' })).toBeTruthy()
+    expect(screen.getByTitle('/work/fresh')).toBeTruthy()
   })
 })
 
@@ -92,7 +92,7 @@ describe('welcome', () => {
     await user.type(screen.getByRole('textbox', { name: 'Task' }), 'Add a sign-in form')
     await user.type(screen.getByRole('textbox', { name: 'Done when (optional)' }), 'The form signs in')
     await user.click(screen.getByRole('button', { name: 'Create task' }))
-    await waitFor(() => expect(calls.find((call) => call.url.endsWith('/task-add'))?.body).toEqual({ repo: '/repo', title: 'Add a sign-in form', result: 'The form signs in' }))
+    await waitFor(() => expect(calls.find((call) => call.url.endsWith('/task-add'))?.body).toEqual({ repo: '/repo', title: 'Add a sign-in form', result: 'The form signs in', plan: 'main' }))
   })
 
   it('asks for the goal before «From chat» creates a plan', async () => {

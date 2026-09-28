@@ -62,7 +62,7 @@ export function DecisionBrief({ repo, workers, task, detail, onSelect }: {
     setPredecessorsLoaded(false)
     void Promise.all(deps.map(async (id) => {
       try {
-        const result = await api.task(repo.root, id)
+        const result = await api.task(repo.root, id, repo.planId)
         return result.ok ? result.value : null
       } catch {
         return null
@@ -74,7 +74,7 @@ export function DecisionBrief({ repo, workers, task, detail, onSelect }: {
       }
     })
     return () => { alive = false }
-  }, [repo.root, depsKey])
+  }, [repo.root, repo.planId, depsKey])
 
   const lines = source?.text.split(/\r?\n/) ?? []
   const textLines: Array<{ text: string; line: number }> = []

@@ -193,8 +193,9 @@ it('background plans appear as «ещё M» and offer «Перейти»', async
   await user.click(screen.getByRole('button', { name: /Очередь разбора · в этом плане 1 · всего 3/ }))
   const queue = screen.getByRole('complementary', { name: 'Очередь приёмки' })
   await user.click(within(queue).getByRole('button', { name: 'Перейти' }))
-  const post = calls.find((c) => c.url.endsWith('/plan-use'))
-  expect(post?.body).toMatchObject({ repo: ROOT, plan: 'release' })
+  const read = calls.find((c) => c.url.includes('/plan-state') && c.url.includes('plan=release'))
+  expect(read).toBeTruthy()
+  expect(calls.some((c) => c.url.endsWith('/plan-use'))).toBe(false)
 })
 
 it('an empty queue reads «Очередь разбора»', async () => {

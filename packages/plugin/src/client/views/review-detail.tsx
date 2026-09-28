@@ -87,11 +87,11 @@ export function UsageOverTime({ run, trace }: { run: PlanRunCost; trace: Traject
   </section>
 }
 
-function useTaskReview(root: string, taskId: string) {
+function useTaskReview(root: string, plan: string | undefined, taskId: string) {
   const [state, setState] = useState<{ data: TaskReviewDetail | null; error: boolean }>({ data: null, error: false })
   const [retry, setRetry] = useState(0)
   // biome-ignore lint/correctness/useExhaustiveDependencies: The listed key intentionally triggers a refresh when its underlying data changes.
-  useEffect(() => { let live = true; let timer: ReturnType<typeof setTimeout> | undefined; setState({ data: null, error: false }); const schedule = () => { timer = setTimeout(() => { if (document.visibilityState === 'hidden') schedule(); else load() }, 5000) }; const load = () => { void api.taskReview(root, taskId).then((result) => { if (!live) return; setState((current) => result.ok ? { data: result.value, error: false } : { ...current, error: true }); if (!result.ok || result.value.attempts.some((run) => !run.finishedAt || run.pending)) schedule() }).catch(() => { if (live) { setState((current) => ({ ...current, error: true })); schedule() } }) }; load(); return () => { live = false; clearTimeout(timer) } }, [root, taskId, retry])
+  useEffect(() => { let live = true; let timer: ReturnType<typeof setTimeout> | undefined; setState({ data: null, error: false }); const schedule = () => { timer = setTimeout(() => { if (document.visibilityState === 'hidden') schedule(); else load() }, 5000) }; const load = () => { void api.taskReview(root, taskId, plan).then((result) => { if (!live) return; setState((current) => result.ok ? { data: result.value, error: false } : { ...current, error: true }); if (!result.ok || result.value.attempts.some((run) => !run.finishedAt || run.pending)) schedule() }).catch(() => { if (live) { setState((current) => ({ ...current, error: true })); schedule() } }) }; load(); return () => { live = false; clearTimeout(timer) } }, [root, plan, taskId, retry])
   return { ...state, retry: () => setRetry((n) => n + 1) }
 }
 
@@ -100,7 +100,7 @@ function RunDetail({ repo, run, summary, task, beside, backTask, backPanel, onBa
   const [error, setError] = useState(false)
   const [retry, setRetry] = useState(0)
   // biome-ignore lint/correctness/useExhaustiveDependencies: The listed key intentionally triggers a refresh when its underlying data changes.
-  useEffect(() => { let live = true; let timer: ReturnType<typeof setTimeout> | undefined; setTrace(null); setError(false); const schedule = () => { timer = setTimeout(() => { if (document.visibilityState === 'hidden') schedule(); else load() }, 5000) }; const load = () => { void api.trace(repo.root, run.taskId, run.runId).then((result) => { if (!live) return; if (result.ok) { setTrace(result.value); setError(false); if (!run.finishedAt || run.pending) schedule() } else { setError(true); schedule() } }).catch(() => { if (live) { setError(true); schedule() } }) }; load(); return () => { live = false; clearTimeout(timer) } }, [repo.root, run.taskId, run.runId, run.finishedAt, run.pending, retry])
+  useEffect(() => { let live = true; let timer: ReturnType<typeof setTimeout> | undefined; setTrace(null); setError(false); const schedule = () => { timer = setTimeout(() => { if (document.visibilityState === 'hidden') schedule(); else load() }, 5000) }; const load = () => { void api.trace(repo.root, run.taskId, run.runId, undefined, repo.planId).then((result) => { if (!live) return; if (result.ok) { setTrace(result.value); setError(false); if (!run.finishedAt || run.pending) schedule() } else { setError(true); schedule() } }).catch(() => { if (live) { setError(true); schedule() } }) }; load(); return () => { live = false; clearTimeout(timer) } }, [repo.root, repo.planId, run.taskId, run.runId, run.finishedAt, run.pending, retry])
   const intervals = (task?.reviewIntervals ?? summary?.reviewIntervals ?? []).filter((item) => item.runId === run.runId && item.association !== 'task_only').map((item) => ({ from: Date.parse('enteredAt' in item ? item.enteredAt : item.from), to: Date.parse(('enteredAt' in item ? item.decidedAt : item.to) ?? new Date().toISOString()) })).sort((a, b) => a.from - b.from)
   let wait = intervals.length ? 0 : undefined
   let end = 0
@@ -163,7 +163,7 @@ export function TaskHistory({ repo, summary, data, backRun, onBack, onRun }: { r
 
 export function ReviewDrilldown({ repo, detail, summary, run, beside = false, backTask, backRun, backPanel, onBack, onTask, onRun, onExpand }: { repo: RepoSnapshot; detail: ReviewDetail; summary?: TaskReviewSummary; run?: PlanRunCost; beside?: boolean; backTask?: boolean; backRun?: boolean; backPanel?: boolean; onBack(): void; onTask(): void; onRun(id: string): void; onExpand(): void }) {
   useLang()
-  const task = useTaskReview(repo.root, detail.taskId)
+  const task = useTaskReview(repo.root, repo.planId, detail.taskId)
   if (detail.kind === 'task') return task.data ? <TaskHistory repo={repo} summary={task.data.summary ?? summary} data={task.data} backRun={backRun} onBack={onBack} onRun={onRun} /> : <section className="orc-drill"><button type="button" onClick={onBack}>← {t(backRun ? 'review.backRun' : 'review.back')}</button><p role={task.error ? 'alert' : 'status'}>{task.error ? t('review.unavailable') : t('review.loading')}</p>{task.error ? <button type="button" onClick={task.retry}>{t('review.retry')}</button> : null}</section>
   const chosen = task.data?.attempts.find((item) => item.runId === detail.runId) ?? run
   return chosen ? <RunDetail repo={repo} run={chosen} summary={task.data?.summary ?? summary} task={task.data} beside={beside} backTask={backTask} backPanel={backPanel} onBack={onBack} onTask={onTask} onExpand={onExpand} /> : <p role="alert">{t('review.unavailable')}</p>

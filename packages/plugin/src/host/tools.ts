@@ -217,13 +217,16 @@ export function orchestraTools(deps: ToolsDeps): ToolSpec[] {
   }
   /**
    * The snapshot as the chat reads it (op1, ux2:F16): the preset's routing once, as `effectiveRouting.routing` —
-   * not again inside `preset` or on every plan of the list; this chat acts on one plan.
+   * not again inside `preset` or on every plan of the list; this chat acts on one plan. UI-only projection
+   * fields are stripped here: the repository `generation` is a client cache token, and a plan's
+   * `progress.items` is the global «Now» row set repeated for every plan. The concise `progress.coverage`
+   * stays (an unreadable plan is still reported as `unknown`, never as «nothing»), and every task fact stays.
    */
   const planAnswer = (snap: Awaited<ReturnType<typeof planSnapshot>>) => {
-    const { effectiveRouting, plans, ...rest } = snap as typeof snap & { effectiveRouting?: EffectiveRouting }
+    const { effectiveRouting, plans, generation: _generation, ...rest } = snap as typeof snap & { effectiveRouting?: EffectiveRouting; generation?: number }
     return {
       ...rest,
-      ...(plans ? { plans: (plans as Array<(typeof plans)[number] & { effectiveRouting?: EffectiveRouting }>).map(({ effectiveRouting: _routing, ...plan }) => plan) } : {}),
+      ...(plans ? { plans: (plans as Array<(typeof plans)[number] & { effectiveRouting?: EffectiveRouting; progress?: { coverage: 'known' | 'unknown'; items: unknown[] } }>).map(({ effectiveRouting: _routing, progress, ...plan }) => (progress ? { ...plan, progress: { coverage: progress.coverage } } : plan)) } : {}),
       ...(effectiveRouting ? { effectiveRouting: { ...effectiveRouting, preset: { id: effectiveRouting.preset.id, label: effectiveRouting.preset.label, ...(effectiveRouting.preset.builtin ? { builtin: true } : {}) } } } : {}),
     }
   }

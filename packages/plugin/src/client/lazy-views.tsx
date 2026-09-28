@@ -10,6 +10,7 @@ import type { LedgerView as LedgerViewType } from './panel/trace-ledger.js'
 import type { TraceScreen as TraceScreenType } from './panel/trace.js'
 import type { TaskPanel as TaskPanelType } from './panel/task-panel.js'
 import type { TaskMenu as TaskMenuType } from './task-menu.js'
+import type { NowView as NowViewType } from './views/now.js'
 
 export const ReviewView = lazyScreen<ComponentProps<typeof ReviewViewType>>('review', 'ReviewView')
 export const ReviewDrilldown = lazyScreen<ComponentProps<typeof ReviewDrilldownType>>('review', 'ReviewDrilldown')
@@ -22,5 +23,7 @@ export const LedgerView = lazyScreen<ComponentProps<typeof LedgerViewType>>('led
 export const TraceScreen = lazyScreen<ComponentProps<typeof TraceScreenType>>('trace', 'TraceScreen')
 export const TaskPanel = lazyScreen<ComponentProps<typeof TaskPanelType>>('task', 'TaskPanel')
 export const TaskMenu = lazyScreen<ComponentProps<typeof TaskMenuType>>('task', 'TaskMenu')
+// The global «Now» screen is opened on demand; it must not sit in the first paint.
+export const NowView = lazyScreen<ComponentProps<typeof NowViewType>>('now', 'NowView')
 // The graph is the default view: it stays in the main bundle so a cold start never shows a loader.
 export { GraphView } from './views/graph/index.js'

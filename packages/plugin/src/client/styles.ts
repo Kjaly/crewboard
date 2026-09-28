@@ -323,6 +323,9 @@ const CSS = `
   color:var(--orc-fg3);font:10px/14px var(--orc-mono);pointer-events:none}
 .orc-side__hits{margin:2px 0 0;padding:0 12px;list-style:none}
 .orc-side__empty{padding:4px 12px 6px;color:var(--orc-fg3);font-size:12px;list-style:none}
+.orc-side__total{padding:5px 6px 2px;color:var(--orc-fg3);font-size:11px;font-variant-numeric:tabular-nums}
+.orc-side__more{display:block;width:100%;border:1px solid var(--orc-hair);border-radius:6px;margin:3px 0 5px;padding:4px 8px;background:transparent;color:var(--orc-accent);font:inherit;font-size:12px;text-align:left;cursor:pointer}
+.orc-side__more:hover{background:var(--orc-hover)}
 .orc-ghit__row{display:flex;align-items:baseline;gap:6px;width:100%;min-width:0;min-height:24px;padding:3px 6px;
   border:0;border-radius:6px;background:transparent;color:var(--orc-fg2);font:inherit;font-size:12px;text-align:left;cursor:pointer}
 .orc-ghit__row:hover{background:var(--orc-hover);color:var(--orc-fg)}
@@ -385,6 +388,9 @@ const CSS = `
 .orc-srow__arrow--open{transform:rotate(90deg)}
 .orc-srow__name{flex:1 1 auto;min-width:40px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .orc-srow__example{color:var(--orc-fg3);font-weight:400}
+/* A selected plan that is finished or archived stays foreground: its truthful quiet note says so. */
+.orc-srow__note{color:var(--orc-fg3);font-weight:400}
+.orc-srow__hint{color:var(--orc-fg3);font-weight:400;font-family:var(--orc-mono);font-size:11px}
 .orc-srow__meta{flex:none;color:var(--orc-fg3);font-size:11px;white-space:nowrap}
 /* Numbers stay muted and surface only while the row is hovered or focused. */
 .orc-srow__peek{position:absolute;right:30px;top:50%;translate:0 -50%;z-index:1;padding:1px 5px;
@@ -401,6 +407,8 @@ const CSS = `
 .orc-sdot--waiting{color:var(--orc-warn)}
 .orc-sdot--failed{color:var(--orc-error)}
 .orc-sdot--running{color:var(--orc-accent-strong)}
+.orc-sdot--checking{color:var(--orc-accent)}
+.orc-sdot--unmerged{color:var(--orc-ok)}
 .orc-sdot-matrix{flex:none;color:var(--orc-accent-strong)}
 .orc-sdot-matrix rect{fill:currentColor;animation:orc-sdot-chase 1s infinite}
 @keyframes orc-sdot-chase{
@@ -487,6 +495,9 @@ const CSS = `
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .orc-crumb__repo:hover{background:var(--orc-hover)}
 .orc-crumb__sep{color:var(--orc-fg3)}
+/* Global «Now» breadcrumb: «All projects / Now» — a scope, not an interactive repository button. */
+.orc-crumb__all{max-width:20ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--orc-fg2);font-size:13px}
+.orc-crumb__scope{color:var(--orc-fg);font-weight:600;font-size:13px}
 /* Status chips open an anchored list; the lens stays a lens, the list is its table of contents. */
 .orc-lenschip{position:relative;display:inline-flex;flex:none}
 .orc-lenspop{position:absolute;top:calc(100% + 4px);right:0;z-index:35;width:288px;max-height:330px;display:flex;flex-direction:column;
@@ -1534,6 +1545,63 @@ const CSS = `
 .orc-task-menu__buttons button{border:1px solid var(--orc-line);border-radius:6px;padding:7px 11px;background:var(--orc-layer1);color:var(--orc-fg);cursor:pointer}
 .orc-task-menu__buttons button:first-child{background:var(--orc-accent-strong);color:#fff}
 .orc-root [data-task-id][data-multiselect=true]{outline:2px solid var(--orc-accent)!important;outline-offset:2px}
+/* Global «Now»: a compact, non-card overview of the work in every served plan. */
+.orc-plans__now{margin-left:auto;margin-right:6px;border:1px solid var(--orc-hair);border-radius:6px;padding:2px 8px;background:transparent;color:var(--orc-fg2);font:inherit;font-size:11px;line-height:16px;cursor:pointer}
+.orc-plans__now:hover{background:var(--orc-hover);color:var(--orc-fg)}
+.orc-plans__now--active{border-color:var(--orc-accent);background:color-mix(in srgb,var(--orc-accent) 14%,var(--orc-layer1));color:var(--orc-fg)}
+.orc-plans__railbtn--active{color:var(--orc-accent);border-color:color-mix(in srgb,var(--orc-accent) 45%,var(--orc-line))}
+.orc-now{display:flex;flex-direction:column;gap:14px;height:100%;overflow:auto;padding:18px 22px 40px;box-sizing:border-box}
+.orc-now__head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.orc-now__title{margin:0;font-size:19px;line-height:26px;font-weight:650;color:var(--orc-fg)}
+.orc-now__hint{color:var(--orc-fg3);font-size:12px}
+.orc-now__spacer{flex:1}
+.orc-now__coverage{display:flex;flex-direction:column;gap:4px;padding:9px 11px;border:1px solid color-mix(in srgb,var(--orc-warn) 40%,var(--orc-line));border-radius:9px;background:color-mix(in srgb,var(--orc-warn) 8%,var(--orc-layer1));color:var(--orc-fg2);font-size:12px}
+.orc-now__unknown{margin:0;padding-left:18px;color:var(--orc-fg3)}
+.orc-now__empty{color:var(--orc-fg3)}
+.orc-now__block{display:flex;flex-direction:column;gap:6px}
+.orc-now__blockhead{margin:0;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--orc-fg3);font-weight:600}
+.orc-now__blockhead strong{color:var(--orc-fg);font-variant-numeric:tabular-nums}
+.orc-now__calm{margin:0;color:var(--orc-fg3);font-size:12px}
+.orc-now__group{display:flex;flex-direction:column;gap:4px}
+.orc-now__grouphead{margin:2px 0 0;font-size:11px;font-weight:600;color:var(--orc-fg2)}
+.orc-now__list{display:flex;flex-direction:column;gap:4px;margin:0;padding:0;list-style:none}
+.orc-now__row{display:grid;grid-template-columns:minmax(0,220px) minmax(0,1fr) auto;align-items:center;gap:10px;width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--orc-hair);border-radius:8px;background:var(--orc-layer1);color:var(--orc-fg);font:inherit;font-size:12px;text-align:left;cursor:pointer}
+.orc-now__row:hover{background:var(--orc-hover);border-color:var(--orc-line)}
+.orc-now__row:focus-visible{outline:2px solid var(--orc-accent);outline-offset:1px}
+.orc-now__loc{color:var(--orc-fg3);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orc-now__rowtitle{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.orc-now__meta{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0;white-space:nowrap}
+.orc-now__chevron{color:var(--orc-fg3);font-size:15px;line-height:1;padding-left:2px}
+.orc-now__stage{color:var(--orc-fg2);white-space:nowrap}
+.orc-now__stage--worker,.orc-now__stage--orchestrator{color:var(--orc-accent)}
+.orc-now__stage--unmerged{color:var(--orc-warn)}
+.orc-now__stage--alert{color:var(--orc-error)}
+.orc-now__fact{border:1px solid var(--orc-line);border-radius:5px;padding:0 5px;font-size:10px;color:var(--orc-fg2);white-space:nowrap}
+.orc-now__fact--human{border-color:color-mix(in srgb,var(--orc-warn) 45%,var(--orc-line));color:var(--orc-warn)}
+.orc-now__fact--alert{border-color:color-mix(in srgb,var(--orc-error) 45%,var(--orc-line));color:var(--orc-error)}
+.orc-now__worker{color:var(--orc-fg3);white-space:nowrap}
+.orc-now__age{color:var(--orc-fg3);white-space:nowrap;font-variant-numeric:tabular-nums}
+@media(max-width:900px){.orc-now{padding:14px 12px 34px}.orc-now__row{grid-template-columns:minmax(0,1fr) auto}.orc-now__loc,.orc-now__worker,.orc-now__age{display:none}}
+@media(prefers-reduced-motion:reduce){.orc-now *{transition:none!important;animation:none!important}}
+/* Compact project switcher above the content: canonical names, copy chips, current/active marks. */
+.orc-project-switcher{display:flex;align-items:center;gap:8px;min-height:34px;padding:4px 14px;border-bottom:1px solid var(--orc-hair);background:var(--orc-layer1);overflow-x:auto;font-size:12px;scrollbar-width:thin}
+.orc-project-switcher__title{flex:none;color:var(--orc-fg3);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+.orc-project-switcher__list{display:flex;align-items:center;gap:6px;margin:0;padding:0;list-style:none}
+.orc-project-switcher__item{display:inline-flex;align-items:center;gap:4px}
+.orc-project-switcher__proj{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--orc-line);border-radius:999px;padding:2px 10px;background:var(--orc-layer2);color:var(--orc-fg2);font:inherit;font-size:12px;white-space:nowrap;cursor:pointer}
+.orc-project-switcher__proj:hover{background:var(--orc-hover);color:var(--orc-fg)}
+.orc-project-switcher__proj--current{border-color:var(--orc-accent);color:var(--orc-fg)}
+.orc-project-switcher__proj--pinned{box-shadow:inset 0 -2px 0 var(--orc-warn)}
+.orc-project-switcher__item--active .orc-project-switcher__proj{font-weight:600;color:var(--orc-fg)}
+.orc-project-switcher__mark{width:6px;height:6px;border-radius:50%;display:inline-block}
+.orc-project-switcher__mark--human{background:var(--orc-warn)}
+.orc-project-switcher__mark--work{background:var(--orc-accent)}
+.orc-project-switcher__mark--alert{background:var(--orc-error)}
+.orc-project-switcher__copy-name{color:var(--orc-fg3);font-size:11px}
+.orc-project-switcher__copy{border:1px solid var(--orc-hair);border-radius:5px;padding:1px 4px;background:var(--orc-layer1);color:var(--orc-fg2);font:inherit;font-size:11px}
+.orc-project-switcher__more{flex:none;margin-left:auto;border:1px solid var(--orc-hair);border-radius:999px;padding:2px 9px;background:transparent;color:var(--orc-fg3);font:inherit;font-size:11px;white-space:nowrap;cursor:pointer}
+.orc-project-switcher__more:hover{background:var(--orc-hover);color:var(--orc-fg)}
+@media(prefers-reduced-motion:reduce){.orc-project-switcher *{transition:none!important;animation:none!important}}
 @media(prefers-reduced-motion:reduce){.orc-task-menu *{transition:none!important;animation:none!important}}
 `
 

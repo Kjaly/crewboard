@@ -83,10 +83,11 @@ describe('repository sidebar', () => {
     const user = userEvent.setup()
     mountSidebar()
     await user.click(screen.getByRole('treeitem', { name: /^Фоновый рефактор/ }))
-    await waitFor(() => expect(posts('plan-use')).toHaveLength(1))
-    expect(posts('plan-use')[0]?.body).toEqual({ repo: ROOT, plan: 'bg' })
+    // Ordinary navigation never moves the shared CLI current pointer (a sidebar mounted without the app
+    // snapshot records the intent for when the snapshot arrives instead of posting plan-use).
+    expect(posts('plan-use')).toHaveLength(0)
     await user.click(screen.getByRole('treeitem', { name: /Плагин 1–2e/ }))
-    expect(posts('plan-use')).toHaveLength(1)
+    expect(posts('plan-use')).toHaveLength(0)
   })
 
   it('creates a plan from the composer on Enter', async () => {
@@ -144,7 +145,7 @@ describe('repository sidebar', () => {
     expect(row).toBeTruthy()
     expect(row?.getAttribute('title')).toContain('2 ждут вас')
     await user.click(row as HTMLElement)
-    await waitFor(() => expect(posts('plan-use')).toHaveLength(1))
+    expect(posts('plan-use')).toHaveLength(0)
   })
 
   it('falls back to the plan on screen when the host sends no plans list', () => {

@@ -39,8 +39,8 @@ async function gitBytes(root: string, rev: string, file: string): Promise<Buffer
   })
 }
 
-export async function getTaskFile(root: string, taskId: string, file: string, side: FileSide, exec: Exec): Promise<Buffer> {
-  const plan = await loadPlan(root)
+export async function getTaskFile(root: string, taskId: string, file: string, side: FileSide, exec: Exec, planId?: string): Promise<Buffer> {
+  const plan = await loadPlan(root, planId)
   const task = plan.tasks.find((item) => item.id === taskId)
   if (!task) throw new DetailError('unknown_task', { id: taskId })
   if (plan.example) {

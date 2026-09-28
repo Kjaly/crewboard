@@ -7,7 +7,7 @@ import type { TraceTarget } from './trace.js'
 import { KIND_NAME, offset, toSteps } from './trace-steps.js'
 
 /** The selected run's trace stays beside the plan, under Activity. */
-export function RunTracePanel({ root, target, onBack }: { root: string; target: TraceTarget; onBack(): void }) {
+export function RunTracePanel({ root, plan, target, onBack }: { root: string; plan?: string; target: TraceTarget; onBack(): void }) {
   useLang()
   const [trajectory, setTrajectory] = useState<Trajectory | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -15,13 +15,13 @@ export function RunTracePanel({ root, target, onBack }: { root: string; target: 
     let live = true
     setTrajectory(null)
     setError(null)
-    void api.trace(root, target.taskId, target.run.runId).then((result) => {
+    void api.trace(root, target.taskId, target.run.runId, undefined, plan).then((result) => {
       if (!live) return
       if (result.ok) setTrajectory(result.value)
       else setError(result.message ?? result.error)
     }).catch(() => { if (live) setError(t('panel.trace.serverUnavailable')) })
     return () => { live = false }
-  }, [root, target.taskId, target.run.runId])
+  }, [root, plan, target.taskId, target.run.runId])
   return <section className="orc-runtrace" aria-label={t('panel.trace.aria', { id: target.run.runId })}>
     <button type="button" className="orc-more" onClick={onBack}>← {t('panel.task.tab.activity')}</button>
     <h3 className="orc-block__head">{target.run.agent} · {target.run.runId}</h3>

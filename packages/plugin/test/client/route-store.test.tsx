@@ -39,14 +39,16 @@ it('restores the last route for the repository without a hash', async () => {
   expect(orchestraStore.viewOf(ROOT, 'p')).toBe('review')
 })
 
-it('falls back from a missing repository and plan', async () => {
+it('falls back from a missing repository, and an unknown plan fails closed', async () => {
   window.history.replaceState(null, '', '#orchestra/missing/old/review/gone')
   orchestraStore.startRouting()
   await mount()
   expect(orchestraStore.getState().repoRoot).toBe(ROOT)
   expect(orchestraStore.viewOf(ROOT, 'p')).toBe('graph')
+  // A route to a plan the repository does not list is not silently folded into the current plan.
   act(() => orchestraStore.applyRoute({ repo: ROOT, plan: 'old', view: 'work', task: 'a' }))
-  expect(orchestraStore.getState().selected[`${ROOT}:p`]).toBe('a')
+  expect(orchestraStore.getState().browse?.error).toBe('bad_plan')
+  expect(orchestraStore.getState().selected[`${ROOT}:p`] ?? '').not.toBe('a')
 })
 
 it('pushes task navigation, replaces tab refinement, and applies Back', async () => {

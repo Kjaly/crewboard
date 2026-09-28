@@ -69,13 +69,13 @@ function Row({
 
 type RowLens = { dim: boolean; rowRef(el: HTMLLIElement | null): void }
 
-function AttentionRow({ item, task, selected, detailed, onSelect, root, dim, rowRef }: { item: Attention; task: TaskSnapshot; selected: boolean; detailed: boolean; onSelect(id: string): void; root: string } & RowLens) {
+function AttentionRow({ item, task, selected, detailed, onSelect, root, plan, dim, rowRef }: { item: Attention; task: TaskSnapshot; selected: boolean; detailed: boolean; onSelect(id: string): void; root: string; plan?: string } & RowLens) {
   const action = useAction()
   const meta = item.hint ? `${attentionText(item)} → ${item.hint}` : attentionText(item)
   return (
     <Row task={task} meta={meta} tone={item.severity === 'alert' ? 'alert' : 'warn'} selected={selected} detailed={detailed} dim={dim} rowRef={rowRef} onSelect={onSelect}>
       {task.status === 'running' ? (
-        <button type="button" className="orc-btn orc-btn--ghost" disabled={action.pending} onClick={() => action.call(() => api.stop(root, task.id))}>
+        <button type="button" className="orc-btn orc-btn--ghost" disabled={action.pending} onClick={() => action.call(() => api.stop(root, task.id, plan))}>
           {t('panel.console.stop')}
         </button>
       ) : (
@@ -88,7 +88,7 @@ function AttentionRow({ item, task, selected, detailed, onSelect, root, dim, row
   )
 }
 
-function ReadyRow({ task, selected, detailed, onSelect, root, now, dim, rowRef }: { task: TaskSnapshot; selected: boolean; detailed: boolean; onSelect(id: string): void; root: string; now: Date } & RowLens) {
+function ReadyRow({ task, selected, detailed, onSelect, root, plan, now, dim, rowRef }: { task: TaskSnapshot; selected: boolean; detailed: boolean; onSelect(id: string): void; root: string; plan?: string; now: Date } & RowLens) {
   const action = useAction()
   // A decision is never handed to a worker: it opens in the panel, where the human answers it.
   if (task.needsHuman) {
@@ -106,7 +106,7 @@ function ReadyRow({ task, selected, detailed, onSelect, root, now, dim, rowRef }
         type="button"
         className="orc-btn"
         disabled={action.pending}
-        onClick={() => action.call(() => api.run(root, task.id))}
+        onClick={() => action.call(() => api.run(root, task.id, undefined, undefined, undefined, plan))}
       >
           {t('panel.console.run')}
       </button>
@@ -156,7 +156,7 @@ export function ConsoleView({ repo, selectedId, onSelect, density, lens = null, 
     }
     let alive = true
     api
-      .task(repo.root, selected.id)
+      .task(repo.root, selected.id, repo.planId)
       .then((r) => {
         if (alive) setDetail(r.ok ? r.value : null)
       })
@@ -181,7 +181,7 @@ export function ConsoleView({ repo, selectedId, onSelect, density, lens = null, 
           {attention.map((item) => {
             const task = byId.get(item.taskId)
             return task ? (
-              <AttentionRow key={`${item.runId}:${item.kind}`} item={item} task={task} selected={selectedId === task.id} detailed={detailed} onSelect={onSelect} root={repo.root} {...lensOf(task.id)} />
+              <AttentionRow key={`${item.runId}:${item.kind}`} item={item} task={task} selected={selectedId === task.id} detailed={detailed} onSelect={onSelect} root={repo.root} plan={repo.planId} {...lensOf(task.id)} />
             ) : null
           })}
         </Block>

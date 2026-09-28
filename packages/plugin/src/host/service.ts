@@ -2,13 +2,21 @@ import { existsSync, watch } from 'node:fs'
 import { homedir } from 'node:os'
 import { BUILD_ID } from '../shared/build.js'
 import { basename, join } from 'node:path'
-import { type Backends, type DshWorkspace, CREWBOARD_DIR, advanceDraftJobs, draftsStamp, recoverDraftOrphans, type RepoPreferenceMap, type RepoSnapshot, buildRepoSnapshot, createRepoFamilyResolver, gcRecheckAccepted, loadPlan, mergeWorkspaces, nodeExec, discoverWorktreeRepos, folderKey, type Exec, type RepositoryRef, resolveRouting, splitSuggestion, worktreeConfigPath, loadProfileStore, markOutsidePreset, type SidebarOrder } from '@crewboard/core'
-import type { OrchestraRepoSnapshot, OrchestraSnapshot, WorkerInfo, WorkerSettingsIssue } from '../shared/types.js'
+import { type Backends, type DshWorkspace, CREWBOARD_DIR, advanceDraftJobs, draftsStamp, recoverDraftOrphans, type RepoPreferenceMap, type RepoSnapshot, buildRepoSnapshot, createRepoFamilyResolver, gcRecheckAccepted, loadPlan, mergeWorkspaces, nodeExec, discoverWorktreeRepos, folderKey, type Exec, type RepositoryRef, resolveRouting, splitSuggestion, worktreeConfigPath, loadProfileStore, markOutsidePreset, type SidebarOrder, PlanIdError, planIds, PLAN_ID, type PlanProgressRef } from '@crewboard/core'
+import type { OrchestraNow, OrchestraPlanSummary, OrchestraRepoSnapshot, OrchestraSnapshot, WorkerInfo, WorkerSettingsIssue } from '../shared/types.js'
 import type { ChatBindings } from './chat.js'
 import type { OrchestraConfig } from './config.js'
 
 /** Files a plan save or a broken read writes beside the plan: no refresh of their own (the save brings one). */
 const QUARANTINE_COPY = /\.(corrupt-[^/\\]*|prev(\.tmp-[^/\\]*)?)$/
+
+/** How many explicit-plan snapshots the service keeps; the oldest is dropped past this. */
+const PLAN_STATE_LIMIT = 24
+/**
+ * The upper bound on an explicit-plan answer even when its revision and repository generation are unchanged: a
+ * short window that coalesces a burst of on-demand reads without ever serving a stale plan indefinitely.
+ */
+const PLAN_STATE_MAX_AGE_MS = 2000
 
 export type Watcher = (dir: string, onChange: (file?: string) => void) => () => void
 
@@ -89,6 +97,16 @@ export class OrchestraService {
   /** Live `.orchestration` watchers by root; re-synced after each full refresh so a new repository is watched too. */
   private readonly watched = new Map<string, () => void>()
   private watchChange: ((root: string, file?: string) => void) | undefined
+  /** Read-only snapshots of explicitly named plans, cached by `<root>\0<planId>`; bounded, dropped when revision/generation move. */
+  private readonly planStates = new Map<string, { version: number; generation: number; at: number; snapshot: OrchestraRepoSnapshot }>()
+  /** On-demand plan reads in flight, keyed by plan and generation, so two callers of one plan share a single build (no N+1). */
+  private readonly planStatesInflight = new Map<string, Promise<OrchestraRepoSnapshot>>()
+  /**
+   * Bumped whenever a repository is refreshed — timer tick, watcher event or an explicit `refresh(root)`. A plan's
+   * `rev` alone cannot describe runtime-only movement (evidence, receipts, run logs, files, Git), so the explicit-plan
+   * cache is keyed by this generation too and never outlives it.
+   */
+  private readonly generations = new Map<string, number>()
 
   constructor(private readonly deps: ServiceDeps) {}
 
@@ -105,16 +123,47 @@ export class OrchestraService {
   }
 
   snapshot(): OrchestraSnapshot {
+    const repos = this.repositories()
+      .map((r) => this.snapshots.get(r.root))
+      .filter((s): s is OrchestraRepoSnapshot => s !== undefined)
     return {
       generatedAt: this.deps.now().toISOString(),
       build: BUILD_ID,
       workers: this.workers,
       ...(this.workerSettings ? { workerSettings: this.workerSettings } : this.routingFailure ? { workerSettings: { code: 'unreadable' as const, detail: this.routingFailure } } : {}),
       ...(this.order && (this.order.repos?.length || Object.keys(this.order.plans ?? {}).length) ? { order: this.order } : {}),
-      repos: this.repositories()
-        .map((r) => this.snapshots.get(r.root))
-        .filter((s): s is OrchestraRepoSnapshot => s !== undefined),
+      repos,
+      now: this.nowProjection(repos),
     }
+  }
+
+  /**
+   * The global «Now» projection, assembled from the per-plan `progress` the SSE traversal already derived — the
+   * host never scans roots or plans again here. A plan whose read failed is named in `unknown`, so an empty
+   * `items` is never silently a claim that nothing is happening.
+   */
+  private nowProjection(repos: OrchestraRepoSnapshot[]): OrchestraNow {
+    const items: PlanProgressRef[] = []
+    const unknown: Array<{ root: string; planId: string }> = []
+    let partial = false
+    for (const repo of repos) {
+      if (repo.missing) continue
+      if (repo.partial) partial = true
+      // A repository whose plan could not be read (`degraded`) carries no `plans`: its current work is unknown,
+      // not empty. `degraded` is set only when the plan read itself failed.
+      if (repo.degraded && !(repo.plans?.length)) {
+        unknown.push({ root: repo.root, planId: repo.planId ?? '' })
+        continue
+      }
+      for (const plan of repo.plans ?? []) {
+        if (!plan.progress || plan.progress.coverage === 'unknown') {
+          unknown.push({ root: repo.root, planId: plan.id })
+          continue
+        }
+        items.push(...plan.progress.items)
+      }
+    }
+    return { coverage: unknown.length ? 'unknown' : partial ? 'partial' : 'known', items, unknown }
   }
 
   /**
@@ -180,6 +229,8 @@ export class OrchestraService {
 
   private async refreshOne(ref: RepositoryRef, quick = false): Promise<void> {
     const { root, title } = ref
+    // Every refresh is a new generation: an explicit-plan snapshot read before it is no longer fresh.
+    this.generations.set(root, this.generationOf(root) + 1)
     const running = quick ? undefined : this.inflight.get(root)
     if (running) return running
     const origin = { ...(ref.sources?.length ? { sources: ref.sources } : {}), ...(ref.worktreeOf ? { worktreeOf: ref.worktreeOf } : {}) }
@@ -207,34 +258,10 @@ export class OrchestraService {
           phase('gc')
         }
         const stamp = await draftsStamp(root).catch(() => '')
-        const chats = this.deps.chatsFor ? await this.deps.chatsFor(root).catch(() => undefined) : undefined
-        const enriched = await withChats(root, s, chats)
-        phase('chats')
-        const env = this.deps.env ?? process.env
-        // Routing that cannot be resolved (an unreadable plan — pq1 — or broken worker settings — B07) leaves
-        // the snapshot without it; the repository itself is always served.
-        const routingOf = (planId: string | undefined) => resolveRouting(root, planId, env).catch((err: unknown) => {
-          if (!(s.degraded && s.error)) this.routingFailure = messageOf(err)
-          return undefined
-        })
-        const plans = await Promise.all((enriched.plans ?? []).map(async (plan) => {
-          const routing = await routingOf(plan.id)
-          return routing ? { ...plan, effectiveRouting: routing } : plan
-        }))
-        const effectiveRouting = await routingOf(enriched.planId)
-        const aliases = (await loadProfileStore(env, env.HOME ?? homedir()).catch(() => ({ aliases: {} }))).aliases
-        const tasks = effectiveRouting ? markOutsidePreset(enriched.tasks, effectiveRouting, aliases) : enriched.tasks
-        const resolved = await this.families.resolve(root).catch(() => ({ root, name: basename(root) }))
-        // Git prints the real path; a family whose main checkout is served under another spelling
-        // (`/tmp` vs `/private/tmp`) takes that spelling, so the group and the worktree mark line up.
-        const familyKey = folderKey(resolved.root)
-        const family = { ...resolved, root: this.repositories().find((r) => folderKey(r.root) === familyKey)?.root ?? resolved.root }
-        const prefs = this.deps.prefsFor ? await this.deps.prefsFor().catch(() => ({} as RepoPreferenceMap)) : {}
-        const flags = prefs[root] ?? {}
-        phase('routing')
+        const presented = await this.present(root, s, ref, { quick, stamp, phase })
         // A full snapshot that landed while this quick one was read is never replaced by it.
         if (quick && this.snapshots.has(root) && !this.snapshots.get(root)?.partial) return
-        this.snapshots.set(root, { ...enriched, ...(stamp ? { draftsStamp: stamp } : {}), tasks, family, ...(flags.pinned ? { pinned: true } : {}), ...(flags.hidden ? { hidden: true } : {}), plans, ...(effectiveRouting ? { effectiveRouting } : {}), ...(title ? { title } : {}), ...origin })
+        this.snapshots.set(root, presented)
       })
     if (quick) return p
     const tracked = p.finally(() => {
@@ -242,6 +269,105 @@ export class OrchestraService {
     })
     this.inflight.set(root, tracked)
     return tracked
+  }
+
+  /**
+   * The one place a core snapshot becomes the served repository view: chats, effective routing and the
+   * `outsidePreset` marks, the family, prefs and origin. Shared by the refresh traversal and the on-demand
+   * `planState` read, so both present the same shape. With `plans` given, the enriched summaries already in hand
+   * are reused verbatim (the plan-state read must not re-read every plan through `withChats`).
+   */
+  private async present(root: string, s: RepoSnapshot, ref: RepositoryRef, opts: { quick: boolean; stamp?: string; phase: (name: string) => void; plans?: OrchestraPlanSummary[] }): Promise<OrchestraRepoSnapshot> {
+    const { title } = ref
+    const { phase } = opts
+    const origin = { ...(ref.sources?.length ? { sources: ref.sources } : {}), ...(ref.worktreeOf ? { worktreeOf: ref.worktreeOf } : {}) }
+    const enriched = opts.plans ? { ...s, plans: opts.plans } : await withChats(root, s, this.deps.chatsFor ? await this.deps.chatsFor(root).catch(() => undefined) : undefined)
+    phase('chats')
+    const env = this.deps.env ?? process.env
+    // Routing that cannot be resolved (an unreadable plan — pq1 — or broken worker settings — B07) leaves
+    // the snapshot without it; the repository itself is always served.
+    const routingOf = (planId: string | undefined) => resolveRouting(root, planId, env).catch((err: unknown) => {
+      if (!(s.degraded && s.error)) this.routingFailure = messageOf(err)
+      return undefined
+    })
+    // The already-enriched summaries (plan-state) are reused verbatim: only the selected plan's routing is
+    // resolved below. Without them, the refresh traversal enriches each plan once, as before.
+    const plans = opts.plans ?? await Promise.all((enriched.plans ?? []).map(async (plan) => {
+      const routing = await routingOf(plan.id)
+      return routing ? { ...plan, effectiveRouting: routing } : plan
+    }))
+    const effectiveRouting = await routingOf(enriched.planId)
+    const aliases = (await loadProfileStore(env, env.HOME ?? homedir()).catch(() => ({ aliases: {} }))).aliases
+    const tasks = effectiveRouting ? markOutsidePreset(enriched.tasks, effectiveRouting, aliases) : enriched.tasks
+    const resolved = await this.families.resolve(root).catch(() => ({ root, name: basename(root) }))
+    // Git prints the real path; a family whose main checkout is served under another spelling
+    // (`/tmp` vs `/private/tmp`) takes that spelling, so the group and the worktree mark line up.
+    const familyKey = folderKey(resolved.root)
+    const family = { ...resolved, root: this.repositories().find((r) => folderKey(r.root) === familyKey)?.root ?? resolved.root }
+    const prefs = this.deps.prefsFor ? await this.deps.prefsFor().catch(() => ({} as RepoPreferenceMap)) : {}
+    const flags = prefs[root] ?? {}
+    phase('routing')
+    return { ...enriched, ...(opts.stamp ? { draftsStamp: opts.stamp } : {}), tasks, family, generation: this.generationOf(root), ...(flags.pinned ? { pinned: true } : {}), ...(flags.hidden ? { hidden: true } : {}), plans, ...(effectiveRouting ? { effectiveRouting } : {}), ...(title ? { title } : {}), ...origin }
+  }
+
+  /**
+   * A full, read-only snapshot of an explicitly named plan — the screen's `GET /api/plan-state`. It never moves
+   * the `current` pointer and never reconciles run bookkeeping or merge state, and it reuses the plan summaries the
+   * SSE traversal already derived (`skipSummaries`) instead of re-scanning every plan. Answers are coalesced while a
+   * read is in flight and cached only within the repository's current generation and a short TTL: a `rev` alone
+   * misses runtime-only movement (evidence, receipts, run logs, files, Git), so a refresh invalidates the cache at
+   * once. A *corrupt* plan read still writes the reader's recovery quarantine copy (core `readPlanFile`), a recovery
+   * artifact of a damaged file rather than a change to a healthy plan. The cache is bounded. `planId` omitted keeps
+   * the legacy current-plan behavior; a present but empty/unknown plan fails closed.
+   */
+  async planState(root: string, planId?: string): Promise<OrchestraRepoSnapshot> {
+    // `undefined` (omitted) is the legacy current-plan behavior; anything present must be a real plan id. An empty
+    // string is refused, never folded into the current plan.
+    const id = planId === undefined ? undefined : planId.trim()
+    if (id !== undefined && (!PLAN_ID.test(id) || !(await planIds(root)).includes(id))) throw new PlanIdError(`No plan ${id || planId}`)
+    const repo = this.snapshots.get(root)
+    // Omitted plan: the already-served current snapshot is exactly the legacy answer.
+    if (!id && repo) return repo
+    const key = `${root}\0${id ?? ''}`
+    const generation = this.generationOf(root)
+    const known = this.planStates.get(key)
+    const currentRev = id ? repo?.plans?.find((plan) => plan.id === id)?.rev : repo?.rev
+    const fresh = known !== undefined
+      && known.generation === generation
+      && (currentRev === undefined || known.version === currentRev)
+      && Date.now() - known.at < PLAN_STATE_MAX_AGE_MS
+    if (fresh) return known.snapshot
+    // In-flight reads coalesce per plan and generation: a refresh that bumped the generation starts a new read.
+    const inflightKey = `${key}\0${generation}`
+    const inflight = this.planStatesInflight.get(inflightKey)
+    if (inflight) return inflight
+    const ref = this.repositories().find((r) => r.root === root) ?? { root }
+    const p = (async () => {
+      const s = await buildRepoSnapshot(root, this.deps.backendsFor(root), this.deps.now(), id, { readOnly: true, skipSummaries: true })
+      const presented = await this.present(root, s, ref, { quick: false, phase: () => {}, plans: repo?.plans ?? [] })
+      // A refresh that landed while this read ran is a newer generation: this answer is served but must not seed
+      // the cache as fresh.
+      if (this.generationOf(root) === generation) {
+        this.planStates.delete(key)
+        this.planStates.set(key, { version: presented.rev, generation, at: Date.now(), snapshot: presented })
+        while (this.planStates.size > PLAN_STATE_LIMIT) {
+          const oldest = this.planStates.keys().next().value
+          if (oldest === undefined) break
+          this.planStates.delete(oldest)
+        }
+      }
+      return presented
+    })()
+    this.planStatesInflight.set(inflightKey, p)
+    try {
+      return await p
+    } finally {
+      this.planStatesInflight.delete(inflightKey)
+    }
+  }
+
+  private generationOf(root: string): number {
+    return this.generations.get(root) ?? 0
   }
 
   /**

@@ -1,4 +1,4 @@
-import type { AgentTotals, Note, EffectiveRouting, GcCandidate, GcResult, PlanSummary, RepoFamily, RepoSnapshot, RepoSource, Routing, RunCost, SidebarOrder, TaskClass, WorktreePolicy, OrchestratorUsage } from '@crewboard/core'
+import type { AgentTotals, Note, EffectiveRouting, GcCandidate, GcResult, PlanProgressRef, PlanSummary, RepoFamily, RepoSnapshot, RepoSource, Routing, RunCost, SidebarOrder, TaskClass, WorktreePolicy, OrchestratorUsage } from '@crewboard/core'
 import type { SplitSuggestion } from '@crewboard/core'
 import type { OtherReason, SubscriptionCli, Transport, WorkerSection } from '@crewboard/core'
 export { PROFILE_ALIASES, canonicalWorkerId } from '../../../core/src/routing/identity.js'
@@ -27,6 +27,9 @@ export type {
   RunStepSummary,
   VerdictFact,
   ViewStatus,
+  PlanProgress,
+  PlanProgressRef,
+  PlanProgressStage,
 } from '@crewboard/core'
 
 /** Plugin id: the sidebar list id, the main panel key and the client bundle id. */
@@ -50,11 +53,39 @@ export type OrchestraRepoSnapshot = Omit<RepoSnapshot, 'plans'> & {
   worktreeOf?: string
   /** The listed folder does not exist any more; the snapshot carries nothing else. */
   missing?: boolean
+  /**
+   * How many times the host has refreshed this repository. It moves even when no plan revision does — a run's
+   * evidence, a receipt or the Git state can change without a plan write — so it is the authoritative token the
+   * client uses to invalidate an on-demand plan snapshot.
+   */
+  generation?: number
 }
 export type { SidebarOrder }
 /** Broken worker settings: the repositories are still served, the screen shows this as a banner (B07). */
 export type WorkerSettingsIssue = { code: 'unreadable'; detail: string; path?: string } | { code: 'incomplete'; classes: TaskClass[]; path: string }
-export type OrchestraSnapshot = { generatedAt: string; repos: OrchestraRepoSnapshot[]; workers: WorkerInfo[]; build?: string; order?: SidebarOrder; workerSettings?: WorkerSettingsIssue }
+
+/**
+ * The global «Now» projection: one flat, lightweight list of the current work of every served plan, assembled
+ * by the host from the per-plan progress the snapshot pass already derives (`PlanSummary.progress`). The screen
+ * renders it directly — it never scans roots itself. `coverage` says how complete the list is: `known` when every
+ * served, non-excluded plan was read; `unknown` when at least one read failed (so an empty list is never a claim
+ * that nothing is happening); `partial` when some repositories have only their first paint so far. `unknown`
+ * names the plan reads that failed. `items` are ordered by repository then plan (stable across polls).
+ */
+export type OrchestraNow = {
+  coverage: 'known' | 'unknown' | 'partial'
+  items: PlanProgressRef[]
+  unknown: Array<{ root: string; planId: string }>
+}
+
+export type OrchestraSnapshot = { generatedAt: string; repos: OrchestraRepoSnapshot[]; workers: WorkerInfo[]; build?: string; order?: SidebarOrder; workerSettings?: WorkerSettingsIssue; now?: OrchestraNow }
+
+/**
+ * GET /api/plan-state?repo=<root>&plan=<planId> — the full snapshot of one explicitly named plan, built
+ * read-only (no reconciliation write, no current-plan pointer change) and cached by the service until that
+ * plan's revision moves. Omitted `plan` keeps the legacy current-plan behavior.
+ */
+export type PlanState = OrchestraRepoSnapshot
 
 /**
  * A run's cost with the plan coordinates the timeline and review screens need: which task it

@@ -11,6 +11,28 @@ export function eventSignature(event: Pick<Event, 'kind' | 'ts'>): string {
 }
 
 /**
+ * The deterministic reading-position identity of each rendered turn. Unlike a React key it survives a remount,
+ * and unlike a bare timestamp it cannot select the wrong row:
+ *
+ *  - the base is the turn's *first* event signature — the boundary that defines the turn — so a technical group
+ *    that later gains steps keeps its identity while its oldest step is still in the bounded window;
+ *  - two turns that still share a timestamp (the normalized feed can repeat one) are told apart by their ordinal
+ *    in document order.
+ *
+ * The value never contains a newline, quote or NUL, so it is safe as a DOM data attribute and in a selector.
+ */
+export function turnAnchors(turns: readonly { events: readonly Pick<Event, 'kind' | 'ts'>[] }[]): string[] {
+  const seen = new Map<string, number>()
+  return turns.map((turn) => {
+    const first = turn.events[0]
+    const base = first ? `${first.kind}|${first.ts}` : ''
+    const ordinal = seen.get(base) ?? 0
+    seen.set(base, ordinal + 1)
+    return ordinal === 0 ? base : `${base}|${ordinal}`
+  })
+}
+
+/**
  * Two events are the same line when kind and time agree and the text is equal or a prefix of the other —
  * `answer_delta` grows a message's text in place, and that is an update, not a new line.
  */

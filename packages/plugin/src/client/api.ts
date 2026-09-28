@@ -1,4 +1,4 @@
-import { API_PREFIX, type AcceptResult, type RepoSnapshot as SharedRepoSnapshot, type OrchestraSnapshot, type PlanCost, type RepoSnapshot, type Routing, type RunStepSummary, type TaskDetail, type TaskReviewDetail, type Trajectory, type WorkersInfo, type WorktreeGcResult, type WorktreePolicyResult, type WorktreesInfo, type WorkerPreset, type EffectiveRouting, type SidebarOrder, type CheckSetting, type DefaultBaseSetting } from '../shared/types.js'
+import { API_PREFIX, type AcceptResult, type OrchestraRepoSnapshot, type RepoSnapshot as SharedRepoSnapshot, type OrchestraSnapshot, type PlanCost, type RepoSnapshot, type Routing, type RunStepSummary, type TaskDetail, type TaskReviewDetail, type Trajectory, type WorkersInfo, type WorktreeGcResult, type WorktreePolicyResult, type WorktreesInfo, type WorkerPreset, type EffectiveRouting, type SidebarOrder, type CheckSetting, type DefaultBaseSetting } from '../shared/types.js'
 import type { WorktreePolicy, Recipe } from '@crewboard/core'
 import type { Finding, PlanDraft } from '../../../core/src/plan/draft.js'
 import type { DraftJobSummary } from '../../../core/src/plan/draft-jobs.js'
@@ -68,47 +68,53 @@ export const api = {
   /** bs1: the base new copies branch from; `value: null` clears the override at that scope. */
   defaultBase: (repo: string, scope: 'repo' | 'plan', value: string | null, planId?: string) => post<DefaultBaseSetting>('default-base', { repo, scope, value, ...(planId ? { planId } : {}) }),
   state: async (): Promise<ApiResult<OrchestraSnapshot>> => readJson(await fetch(`${API_PREFIX}/state`)),
-  task: async (repo: string, id: string): Promise<ApiResult<TaskDetail>> => readJson(await fetch(`${API_PREFIX}/task?${query({ repo, id })}`)),
-  diff: async (repo: string, id: string, file: string): Promise<string> => {
-    const res = await fetch(`${API_PREFIX}/diff?${query({ repo, id, file })}`)
+  /**
+   * `GET /api/plan-state` — the full, read-only snapshot of one explicitly named plan. It never moves the CLI/agent
+   * current-plan pointer and never reconciles state; the host caches it (bounded, invalidated when the repository is
+   * refreshed). `plan` omitted keeps the legacy current-plan behavior.
+   */
+  planState: async (repo: string, plan?: string): Promise<ApiResult<OrchestraRepoSnapshot>> => readJson(await fetch(`${API_PREFIX}/plan-state?${query({ repo, ...(plan ? { plan } : {}) })}`)),
+  task: async (repo: string, id: string, plan?: string): Promise<ApiResult<TaskDetail>> => readJson(await fetch(`${API_PREFIX}/task?${query({ repo, id, ...(plan ? { plan } : {}) })}`)),
+  diff: async (repo: string, id: string, file: string, plan?: string): Promise<string> => {
+    const res = await fetch(`${API_PREFIX}/diff?${query({ repo, id, file, ...(plan ? { plan } : {}) })}`)
     return res.ok ? res.text() : ''
   },
-  fileUrl: (repo: string, id: string, file: string, side: 'before' | 'after') => `${API_PREFIX}/file?${query({ repo, id, file, side })}`,
-  cost: async (repo: string): Promise<ApiResult<PlanCost>> => readJson(await fetch(`${API_PREFIX}/cost?${query({ repo })}`)),
-  runSteps: async (repo: string, runs: string[]): Promise<ApiResult<Record<string, RunStepSummary>>> => readJson(await fetch(`${API_PREFIX}/run-steps?${query({ repo, runs: runs.join(',') })}`)),
-  taskReview: async (repo: string, task: string): Promise<ApiResult<TaskReviewDetail>> => readJson(await fetch(`${API_PREFIX}/task-review?${query({ repo, task })}`)),
-  trace: async (repo: string, id: string, run?: string, page?: { cursor?: string; seek?: string }): Promise<ApiResult<Trajectory>> =>
-    readJson(await fetch(`${API_PREFIX}/trace?${query({ repo, id, ...(run ? { run } : {}), ...page })}`)),
+  fileUrl: (repo: string, id: string, file: string, side: 'before' | 'after', plan?: string) => `${API_PREFIX}/file?${query({ repo, id, file, side, ...(plan ? { plan } : {}) })}`,
+  cost: async (repo: string, plan?: string): Promise<ApiResult<PlanCost>> => readJson(await fetch(`${API_PREFIX}/cost?${query({ repo, ...(plan ? { plan } : {}) })}`)),
+  runSteps: async (repo: string, runs: string[], plan?: string): Promise<ApiResult<Record<string, RunStepSummary>>> => readJson(await fetch(`${API_PREFIX}/run-steps?${query({ repo, runs: runs.join(','), ...(plan ? { plan } : {}) })}`)),
+  taskReview: async (repo: string, task: string, plan?: string): Promise<ApiResult<TaskReviewDetail>> => readJson(await fetch(`${API_PREFIX}/task-review?${query({ repo, task, ...(plan ? { plan } : {}) })}`)),
+  trace: async (repo: string, id: string, run?: string, page?: { cursor?: string; seek?: string }, plan?: string): Promise<ApiResult<Trajectory>> =>
+    readJson(await fetch(`${API_PREFIX}/trace?${query({ repo, id, ...(run ? { run } : {}), ...page, ...(plan ? { plan } : {}) })}`)),
   /** No agent: the host runs the task's own worker; with none set, the first enabled worker of the task's class (orch workers). */
   /** `dirtyCopy` — the person's answer when the copy holds uncommitted changes (fo1): continue with them, or reset it. */
-  run: (repo: string, task: string, agent?: string, dirtyCopy?: 'keep' | 'reset', base?: string) =>
-    post<{ runId: string; agent: string; worktree?: { path: string; branch: string }; baseNotice?: { checkedOut: string; base: string } }>('run', { repo, task, ...(agent ? { agent } : {}), ...(dirtyCopy ? { dirtyCopy } : {}), ...(base ? { base } : {}) }),
+  run: (repo: string, task: string, agent?: string, dirtyCopy?: 'keep' | 'reset', base?: string, plan?: string) =>
+    post<{ runId: string; agent: string; worktree?: { path: string; branch: string }; baseNotice?: { checkedOut: string; base: string } }>('run', { repo, task, ...(agent ? { agent } : {}), ...(dirtyCopy ? { dirtyCopy } : {}), ...(base ? { base } : {}), ...(plan ? { plan } : {}) }),
   workers: async (repo: string): Promise<ApiResult<WorkersInfo>> => readJson(await fetch(`${API_PREFIX}/workers?${query({ repo })}`)),
   saveWorkers: (repo: string, routing: Routing) => post<null>('workers-save', { repo, routing }),
   /** A new run in the same worktree, carrying the previous run's context (host route `POST /relaunch`). */
-  relaunch: (repo: string, task: string, opts: { agent?: string; note?: string; fromStep?: string }) => post<{ runId: string }>('relaunch', { repo, task, ...opts }),
+  relaunch: (repo: string, task: string, opts: { agent?: string; note?: string; fromStep?: string }, plan?: string) => post<{ runId: string }>('relaunch', { repo, task, ...opts, ...(plan ? { plan } : {}) }),
   /** «Continue» a run that ended unfinished: a relaunch with the direction to finish and report (host route `POST /continue`). */
-  continueRun: (repo: string, task: string) => post<{ runId: string }>('continue', { repo, task }),
+  continueRun: (repo: string, task: string, plan?: string) => post<{ runId: string }>('continue', { repo, task, ...(plan ? { plan } : {}) }),
   /** «Run checks here» (ck1): the contract's <checks> run in the task's copy; the answer is the refreshed detail. */
-  runChecks: (repo: string, task: string) => post<TaskDetail>('run-checks', { repo, task }),
-  steer: (repo: string, task: string, message: string) => post('steer', { repo, task, message }),
-  stop: (repo: string, task: string) => post('stop', { repo, task }),
-  accept: (repo: string, task: string) => post<AcceptResult>('accept', { repo, task }),
+  runChecks: (repo: string, task: string, plan?: string) => post<TaskDetail>('run-checks', { repo, task, ...(plan ? { plan } : {}) }),
+  steer: (repo: string, task: string, message: string, plan?: string) => post('steer', { repo, task, message, ...(plan ? { plan } : {}) }),
+  stop: (repo: string, task: string, plan?: string) => post('stop', { repo, task, ...(plan ? { plan } : {}) }),
+  accept: (repo: string, task: string, plan?: string) => post<AcceptResult>('accept', { repo, task, ...(plan ? { plan } : {}) }),
   /** mg1: the person's Merge — the host checks, asks natively, merges and cleans the copy. */
-  merge: (repo: string, task: string, strategy: 'no-ff' | 'squash') => post<{ task: string; into: string; strategy: 'no-ff' | 'squash'; commit: string; copy: 'removed' | 'kept_recent' | 'kept' | 'gone'; keptBecause?: string }>('merge', { repo, task, strategy }),
+  merge: (repo: string, task: string, strategy: 'no-ff' | 'squash', plan?: string) => post<{ task: string; into: string; strategy: 'no-ff' | 'squash'; commit: string; copy: 'removed' | 'kept_recent' | 'kept' | 'gone'; keptBecause?: string }>('merge', { repo, task, strategy, ...(plan ? { plan } : {}) }),
   /** mk1: the person's Mark as merged… — the host asks natively and records the reason. */
-  markMerged: (repo: string, task: string, reason: string) => post<{ task: string; into: string }>('mark-merged', { repo, task, reason }),
-  taskAdd: (repo: string, title: string, result: string) => post<{ id: string }>('task-add', { repo, title, result }),
-  taskUpsert: (repo: string, input: { id: string; parent: string; title: string; class?: string; lane?: string; depends: boolean; note: string; replace: boolean }) => post<{ id: string }>('task-upsert', { repo, ...input }),
-  taskStatus: (repo: string, task: string, status: 'backlog' | 'ready') => post('task-status', { repo, task, status }),
-  worktreeOpen: (repo: string, task: string, reveal: boolean) => post('worktree-open', { repo, task, reveal }),
+  markMerged: (repo: string, task: string, reason: string, plan?: string) => post<{ task: string; into: string }>('mark-merged', { repo, task, reason, ...(plan ? { plan } : {}) }),
+  taskAdd: (repo: string, title: string, result: string, plan?: string) => post<{ id: string }>('task-add', { repo, title, result, ...(plan ? { plan } : {}) }),
+  taskUpsert: (repo: string, input: { id: string; parent: string; title: string; class?: string; lane?: string; depends: boolean; note: string; replace: boolean }, plan?: string) => post<{ id: string }>('task-upsert', { repo, ...input, ...(plan ? { plan } : {}) }),
+  taskStatus: (repo: string, task: string, status: 'backlog' | 'ready', plan?: string) => post('task-status', { repo, task, status, ...(plan ? { plan } : {}) }),
+  worktreeOpen: (repo: string, task: string, reveal: boolean, plan?: string) => post('worktree-open', { repo, task, reveal, ...(plan ? { plan } : {}) }),
   worktrees: async (repo: string): Promise<ApiResult<WorktreesInfo>> => readJson(await fetch(`${API_PREFIX}/worktrees?${query({ repo })}`)),
   worktreeGc: (repo: string, tasks: string[]) => post<WorktreeGcResult>('worktree-gc', { repo, tasks }),
   worktreePolicy: (repo: string, policy: WorktreePolicy) => post<WorktreePolicyResult>('worktree-policy', { repo, policy }),
-  acceptBatch: (repo: string, tasks: string[]) => post<{ accepted: string[] }>('accept-batch', { repo, tasks }),
+  acceptBatch: (repo: string, tasks: string[], plan?: string) => post<{ accepted: string[] }>('accept-batch', { repo, tasks, ...(plan ? { plan } : {}) }),
   /** wk1: `rerun` sends back and starts the next run at once — the previous worker unless `agent` names another. */
-  reject: (repo: string, task: string, reason: string, rerun?: { rerun: true; agent?: string }) => post<{ task: string; status: 'rejected'; run?: { runId: string; agent: string } }>('reject', { repo, task, reason, ...(rerun ?? {}) }),
-  drop: (repo: string, task: string, reason: string) => post('drop', { repo, task, reason }),
+  reject: (repo: string, task: string, reason: string, rerun?: { rerun: true; agent?: string }, plan?: string) => post<{ task: string; status: 'rejected'; run?: { runId: string; agent: string } }>('reject', { repo, task, reason, ...(rerun ?? {}), ...(plan ? { plan } : {}) }),
+  drop: (repo: string, task: string, reason: string, plan?: string) => post('drop', { repo, task, reason, ...(plan ? { plan } : {}) }),
   positions: (repo: string, planId: string, expectedRev: number, positions: Array<{ task: string; pos: { x: number; y: number } | null }>) =>
     post<null>('pos', { repo, planId, expectedRev, positions }),
   /** “Start a plan” in a workspace without one — the same init `orch init` does; the answer is the fresh repo snapshot. */
@@ -184,10 +190,10 @@ export function forgetAll(): void {
   entries.clear()
 }
 
-/** The version of a task's detail: the plan revision and what the snapshot says moved the task. */
-export function taskVersion(repo: Pick<SharedRepoSnapshot, 'rev' | 'tasks'>, taskId: string): string {
+/** The version of a task's detail: the plan it belongs to, the plan revision and what the snapshot says moved the task. */
+export function taskVersion(repo: Pick<SharedRepoSnapshot, 'rev' | 'tasks'>, taskId: string, planId = ''): string {
   const task = repo.tasks.find((item) => item.id === taskId)
-  return `${repo.rev}:${task?.status ?? ''}:${task?.runs ?? 0}:${task?.lastRunId ?? ''}`
+  return `${planId}:${repo.rev}:${task?.status ?? ''}:${task?.runs ?? 0}:${task?.lastRunId ?? ''}`
 }
 
 /**
@@ -200,9 +206,21 @@ export const SHARED_MAX_AGE_MS = 3000
 export const shared = {
   /** The whole snapshot: the store's first read and the review centre's poll at boot are one request; an answer is never reused. */
   state: () => loadOnce('state', '', undefined, () => api.state(), 0),
-  task: (repo: string, id: string, version: string | undefined) => loadOnce(`task:${repo}:${id}`, repo, version, () => api.task(repo, id), SHARED_MAX_AGE_MS),
+  /**
+   * A task detail, keyed by plan as well as repository and task: the same task id in two plans is two resources.
+   * `plan` omitted is the legacy current plan (key segment empty).
+   */
+  task: (repo: string, id: string, version: string | undefined, plan?: string) => loadOnce(`task:${repo}:${plan ?? ''}:${id}`, repo, version, () => api.task(repo, id, plan), SHARED_MAX_AGE_MS),
   /** A live feed's tick: always asks, and the newer answer serves the next reader of the same version. */
-  taskReload: (repo: string, id: string, version: string | undefined) => reload(`task:${repo}:${id}`, repo, version, () => api.task(repo, id)),
+  taskReload: (repo: string, id: string, version: string | undefined, plan?: string) => reload(`task:${repo}:${plan ?? ''}:${id}`, repo, version, () => api.task(repo, id, plan)),
+  /**
+   * A full, read-only plan snapshot on demand. `version` should be the repository `generation` plus the plan `rev`
+   * (`${repo.generation ?? repo.rev}:${plan.rev}`): a plan revision alone does not move for runtime-only changes
+   * (evidence, receipts, run logs, Git), so it is never trusted indefinitely. Even at a matching version the answer
+   * is reused at most `SHARED_MAX_AGE_MS`; without a version it is reused only that briefly. The host also invalidates
+   * its own copy on every refresh, so this cache never outlives the service's.
+   */
+  planState: (repo: string, plan: string, version: string | undefined) => loadOnce(`plan-state:${repo}:${plan}`, repo, version, () => api.planState(repo, plan), SHARED_MAX_AGE_MS),
   planDrafts: (repo: string, version: string | undefined) => loadOnce(`drafts:${repo}`, repo, version, () => api.planDrafts(repo)),
   planDraftJobs: (repo: string, version: string | undefined) => loadOnce(`draft-jobs:${repo}`, repo, version, () => api.planDraftJobs(repo)),
   presets: (repo: string) => loadOnce(`presets:${repo}`, repo, undefined, () => api.presets(repo), SHARED_MAX_AGE_MS),

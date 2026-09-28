@@ -76,7 +76,7 @@ function InspectorActions({
   const relaunch = () =>
     action
       .call(async () => {
-        const result = await api.relaunch(repo.root, target.taskId, { agent: worker, fromStep: anchor, ...(note.trim() ? { note: note.trim() } : {}) })
+        const result = await api.relaunch(repo.root, target.taskId, { agent: worker, fromStep: anchor, ...(note.trim() ? { note: note.trim() } : {}) }, repo.planId)
         if (result.ok) setStarted(result.value.runId)
         return result
       })
@@ -236,7 +236,7 @@ export function TraceScreen({
     setError(null)
     let timer: ReturnType<typeof setTimeout> | undefined
     const refresh = () => { void api
-      .trace(repo.root, target.taskId, target.run.runId)
+      .trace(repo.root, target.taskId, target.run.runId, undefined, repo.planId)
       .then((r) => {
         if (!alive) return
         if (r.ok) {
@@ -254,13 +254,13 @@ export function TraceScreen({
       alive = false
       clearTimeout(timer)
     }
-  }, [repo.root, target.taskId, target.run.runId, given])
+  }, [repo.root, repo.planId, target.taskId, target.run.runId, given])
 
   // The task's run list determines whether comparison is available.
   useEffect(() => {
     let alive = true
     api
-      .task(repo.root, target.taskId)
+      .task(repo.root, target.taskId, repo.planId)
       .then((r) => {
         if (alive) setDetail(r.ok ? r.value : null)
       })
@@ -268,7 +268,7 @@ export function TraceScreen({
     return () => {
       alive = false
     }
-  }, [repo.root, target.taskId])
+  }, [repo.root, repo.planId, target.taskId])
 
   const runs = detail?.runs ?? []
   const canCompare = runs.length >= 2

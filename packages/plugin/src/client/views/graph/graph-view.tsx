@@ -20,6 +20,7 @@ import { laneAt, laneTree, liveLaneOrder } from '../../lane-tree.js'
 import { lensIds, lensTasks } from '../../lens.js'
 import { identityLabel, runFact, taskIdentity } from '../../provider.js'
 import { taskTone } from '../../styles.js'
+import { planMemoryOf, rememberPlan } from '../../store.js'
 import { isChecking } from '../../../../../core/src/plan/graph.js'
 import { checkMark, checkText, verdictMark, verdictText, verdictTone } from '../../review-signals.js'
 import { isHandPicked } from '../../workers.js'
@@ -122,7 +123,7 @@ export function liveTask(tasks: readonly TaskSnapshot[]): string | undefined {
   return live[0]?.id
 }
 
-function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDensity, lens = null, setLens, walk, lensStep, lane = null, onLaneInView, camera: given }: ViewProps & { camera?: Camera }) {
+function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDensity, lens = null, setLens, walk, focus = null, lensStep, lane = null, onLaneInView, camera: given }: ViewProps & { camera?: Camera }) {
   const lang = useLang()
   const shown = useBurst(repo)
   const reduced = useReducedMotion()
@@ -226,12 +227,25 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
     revealingLane.current = laneName
   }
   const seenSelection = useRef<string | null>(null)
+  // The first selection of a freshly mounted plan is remembered metadata (a project return or a restored
+  // route), not a new focus request: the camera memory decides the viewport. An explicit walk is the exception.
+  const selectionSettled = useRef(false)
+  const walkTarget = useRef(walk)
+  walkTarget.current = walk
+  const focusTarget = useRef(focus)
+  focusTarget.current = focus
   // biome-ignore lint/correctness/useExhaustiveDependencies: Only a new selection reveals; a later fold by hand must not undo itself.
   useEffect(() => {
-    if (selectedId === seenSelection.current) return
+    if (selectedId === seenSelection.current) { selectionSettled.current = true; return }
     const own = ownPick.current === selectedId
     ownPick.current = undefined
-    if (selectedId === null) { seenSelection.current = null; revealing.current = null; return }
+    if (selectedId === null) { seenSelection.current = null; revealing.current = null; selectionSettled.current = true; return }
+    const first = !selectionSettled.current
+    selectionSettled.current = true
+    // A remembered selection must not count as a focus request: it is adopted, not revealed. An explicit walk
+    // or store focus (a row/link jump) is the exception.
+    const explicit = walkTarget.current?.id === selectedId || focusTarget.current?.task === selectedId
+    if (first && !explicit) { seenSelection.current = selectedId; return }
     // A task the snapshot does not hold yet (a link into a plan still loading) is revealed once it comes.
     if (revealTask(selectedId, !own)) seenSelection.current = selectedId
   }, [selectedId, byId])
@@ -355,9 +369,19 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
         setNodes(next)
         if (!arrived.current && next.size > 0) {
           arrived.current = true
-          // A plan opened on a lane goes to that lane, not to the live work.
+          const remembered = planMemoryOf(shown.root, shown.planId).camera
+          const explicitLane = laneRef.current?.explicit === true
+          // A plain return to a plan restores the camera pose the reader had claimed. A remembered selected
+          // task or lane is metadata and must not pull the camera away from it; an explicit lane pick or an
+          // explicit task walk does win over the memory.
+          if (remembered?.touched && !explicitLane && !revealing.current) {
+            if (laneRef.current) laneServed.current = laneRef.current.seq
+            requestAnimationFrame(() => camera.restore(remembered, reducedRef.current, 0))
+            return
+          }
+          // A plan opened on an explicit lane goes to that lane, not to the live work.
           if (laneRef.current && laneServed.current !== laneRef.current.seq) return
-          // A plan opened on a task (a link, a remembered selection) goes to that task.
+          // A plan opened on a task (an explicit walk) goes to that task.
           if (revealing.current) return
           const live = liveTask(tasksRef.current)
           const spot = live ? next.get(live) : undefined
@@ -371,6 +395,11 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
       alive = false
     }
   }, [shapeKey, shown.root, shown.planId, fitNonce, precise, camera, decision.folded, laneKey])
+
+  // The camera pose is remembered per physical root + plan, and written when the reader leaves that plan (or
+  // the screen): it is restored on a return only. Nothing here is persisted to storage.
+  const cameraMemoryKey = `${shown.root}\n${shown.planId ?? ''}`
+  useEffect(() => () => { rememberPlan(shown.root, shown.planId, { camera: camera.pose() }) }, [cameraMemoryKey, camera])
 
   const bands = useMemo(() => decision.folded.size ? foldBands : laneBands(nodes), [nodes, foldBands, decision.folded])
   const box = useMemo(() => {
@@ -1020,7 +1049,7 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
     if ((key === 'r' || key === 'R' || key === '\u043a' || key === '\u041a') && task?.status === 'ready') {
       event.preventDefault()
       setNote(t('graph.startingTask', { task: task.title }))
-      void api.run(shown.root, task.id).then((r) => setNote(r.ok ? null : t('graph.startTaskFailed')))
+      void api.run(shown.root, task.id, undefined, undefined, undefined, shown.planId).then((r) => setNote(r.ok ? null : t('graph.startTaskFailed')))
       return
     }
     if ((key === 's' || key === 'S' || key === '\u044b' || key === '\u042b') && task?.status === 'running') {
@@ -1286,7 +1315,7 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
                     disabled={accept.pending}
                     onClick={() => {
                       pickHere(task.id)
-                      void accept.call(() => api.accept(repo.root, task.id))
+                      void accept.call(() => api.accept(repo.root, task.id, repo.planId))
                     }}
                   >
                     ◐ {t('graph.acceptMore')}

@@ -17,6 +17,7 @@ export const HISTORY_SHOWN = 12
 
 const COUNT_MARKS: ReadonlyArray<readonly [keyof LaneCounts, string]> = [
   ['running', '●'],
+  ['checking', '◌'],
   ['review', '◐'],
   ['ready', '○'],
   ['queued', '·'],

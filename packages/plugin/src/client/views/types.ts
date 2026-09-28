@@ -14,9 +14,11 @@ export type ViewProps = {
   setLens?(lens: Lens | null): void
   /** A lens walk (`n` / «›»): the seq bumps on every step so the same id can be walked to twice. */
   walk?: { id: string; seq: number } | null
+  /** The store's explicit task focus (a row/link jump); a restored remembered selection is never this. */
+  focus?: { task: string; seq: number } | null
   lensStep?(dir: 1 | -1): void
   /** The lane the plan is focused on (sidebar tree, `?lane=`): the graph flies to it, Work and Review filter to it. */
-  lane?: { lane: string; seq: number } | null
+  lane?: { lane: string; seq: number; explicit?: boolean } | null
   /** Clears (null) or changes the lane focus — Work's «×» on its lane chip. */
   setLane?(lane: string | null): void
   /** The graph reports the lane its camera looks at, for the sidebar tree's highlight. */

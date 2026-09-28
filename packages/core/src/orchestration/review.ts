@@ -169,7 +169,7 @@ export async function dropTask(root: string, taskId: string, reason: string, now
 }
 
 /** Human-only: one plan write for the whole batch; an unknown id aborts the batch before anything changes. */
-export async function acceptTasks(root: string, taskIds: string[], now: Date, verdicts: Record<string, Verdict | undefined> = {}, shownEvidence: Record<string, string | undefined> = {}): Promise<string[]> {
+export async function acceptTasks(root: string, taskIds: string[], now: Date, verdicts: Record<string, Verdict | undefined> = {}, shownEvidence: Record<string, string | undefined> = {}, planId?: string): Promise<string[]> {
   const ids = [...new Set(taskIds)]
   if (ids.length === 0) throw new RangeError('no tasks to accept')
   await updatePlan(root, (plan) => {
@@ -187,6 +187,6 @@ export async function acceptTasks(root: string, taskIds: string[], now: Date, ve
       recordAcceptance(task, now, verdicts[task.id], shownEvidence[task.id])
     }
     return plan
-  })
+  }, 5, planId)
   return ids
 }

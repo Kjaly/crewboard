@@ -53,7 +53,7 @@ it('serves preview renderers as separate assets', async () => {
 
 it('serves each lazy screen asset and rejects missing assets', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'orch-screen-assets-'))
-  for (const name of ['review', 'welcome', 'settings', 'draft', 'ledger', 'trace', 'task']) {
+  for (const name of ['review', 'welcome', 'settings', 'draft', 'ledger', 'trace', 'task', 'now']) {
     const path = `/crewboard/assets/screen-${name}.js`
     const route = assetRoutes(dir).find((item) => item.path === path)!
     await writeFile(join(dir, `screen-${name}.js`), `screen:${name}`)

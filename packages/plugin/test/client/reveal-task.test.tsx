@@ -79,7 +79,8 @@ it('going to a task in a folded lane unfolds the lane, remembers it, selects and
 
 it('a task on the History shelf is brought out of it the same way', async () => {
   const repo = makeRepo(plan())
-  render(<GraphView repo={repo} selectedId="Tiny-0" onSelect={() => {}} density="overview" />)
+  // A direct focus request (a row jump) is explicit; a merely restored selection would be adopted instead.
+  render(<GraphView repo={repo} selectedId="Tiny-0" focus={{ task: 'Tiny-0', seq: 1 }} onSelect={() => {}} density="overview" />)
   const node = await screen.findByRole('button', { name: /^Tiny 0/ }, { timeout: 10_000 })
   expect(node.getAttribute('aria-pressed')).toBe('true')
   expect(screen.queryByRole('button', { name: 'Expand lane Tiny' })).toBeNull()

@@ -135,6 +135,8 @@ import {
   newPlanId,
   nodeExec,
   planPath,
+  planIds,
+  PLAN_ID,
   profileStorePath,
   rejectTask,
   sendBackAndRerun,
@@ -188,7 +190,7 @@ import {
   subscriptionEntries,
   type WorkerPreset,
 } from '@crewboard/core'
-import { API_PREFIX, PROFILE_ALIASES, type PlanCost, type PlanRunCost, type WorkerInfo } from '../shared/types.js'
+import { API_PREFIX, PROFILE_ALIASES, type OrchestraRepoSnapshot, type PlanCost, type PlanRunCost, type WorkerInfo } from '../shared/types.js'
 import { reviewCoverage } from '../shared/review-coverage.js'
 import { ChatBindingError, type ChatDeps, bindChat, openChat, readChats, setWake, unbindChat } from './chat.js'
 import type { Route, SessionControllerFace } from './dsh.js'
@@ -318,9 +320,48 @@ async function readBody(req: IncomingMessage, limit = MAX_BODY_BYTES): Promise<B
 /** POST routes that take no served `repo`: they add a folder to the list or remove one from it. */
 const LIST_ROUTES = new Set(['repo-add', 'repo-remove'])
 
+/**
+ * POST routes whose example/read-only guard applies: the writes that change the plan or start/steer/close work.
+ * The guard is checked against the request's own plan scope.
+ */
+const MUTATION_ROUTES = new Set(['run', 'run-checks', 'relaunch', 'continue', 'steer', 'stop', 'accept', 'accept-batch', 'merge', 'mark-merged', 'reject', 'drop', 'pos', 'task-upsert', 'task-add', 'task-status'])
+
+/**
+ * Routes that accept an explicit plan selection (`plan` on the body for POST, `plan` in the query for GET; the
+ * legacy `planId` body field is honored on `pos`). Every task-scoped read and mutation is here. A route not in
+ * this set has no plan dimension, so a stray `plan` is ignored rather than silently applied to another resource.
+ */
+const PLAN_SCOPED = new Set([
+  'task', 'task-review', 'trace', 'diff', 'file', 'run-steps', 'cost', 'worktree-open',
+  'run', 'run-checks', 'relaunch', 'continue', 'steer', 'stop', 'accept', 'accept-batch', 'merge', 'mark-merged', 'reject', 'drop',
+  'pos', 'task-upsert', 'task-add', 'task-status',
+])
+
 const text = (v: unknown, field: string): string => {
   if (typeof v !== 'string' || !v.trim()) throw new HttpError(400, 'bad_request', `${field} is required`)
   return v
+}
+
+/**
+ * The explicit plan a request names, validated against the repository before anything runs.
+ *
+ * Omitted (the field absent) keeps the legacy current-plan behavior. A field that is present but empty,
+ * whitespace or malformed fails closed: it never silently selects `current`. When both `plan` and `planId`
+ * are provided they must name the same plan; a disagreement is refused rather than silently preferring one.
+ */
+const planOf = async (root: string, candidates: Array<{ present: boolean; value: unknown; name: string }>): Promise<string | undefined> => {
+  const present = candidates.filter((candidate) => candidate.present)
+  if (present.length === 0) return undefined
+  const values = present.map((candidate) => {
+    if (typeof candidate.value !== 'string' || !candidate.value.trim()) throw new HttpError(400, 'bad_plan', `${candidate.name} must be a non-empty plan id`)
+    const id = candidate.value.trim()
+    if (!PLAN_ID.test(id)) throw new HttpError(400, 'bad_plan', `${candidate.name} is invalid: ${id}`)
+    return id
+  })
+  if (new Set(values).size > 1) throw new HttpError(400, 'bad_plan', 'plan and planId disagree')
+  const id = values[0] as string
+  if (!(await planIds(root)).includes(id)) throw new HttpError(404, 'bad_plan', `No plan ${id}`)
+  return id
 }
 
 /** The provider mark of a worker, by the transport it runs on (wo1) — a dsh model of another provider is not DeepSeek's. */
@@ -563,7 +604,7 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
     return repairDraftJob({ root, id, backends: deps.backendsFor(root), now: deps.now(), exec, choose: async () => (await draftWorker(root)).agent, ...(chosen ? { agent: chosen } : {}) })
   }
 
-  const post = (name: string, fn: (body: Body, root: string) => Promise<unknown>): Route => ({
+  const post = (name: string, fn: (body: Body, root: string, plan?: string) => Promise<unknown>): Route => ({
     kind: 'exact',
     path: `${API_PREFIX}/${name}`,
     handler: async (req, res) => {
@@ -572,8 +613,13 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
         const body = await readBody(req, name === 'spec-upload' ? MAX_SPEC_BODY_BYTES : MAX_BODY_BYTES)
         // The repository list routes act on the list itself: the path they name is not (yet, or any more) a served repository.
         const root = LIST_ROUTES.has(name) ? '' : repoOf(body.repo)
-        if (new Set(['run', 'run-checks', 'relaunch', 'continue', 'steer', 'stop', 'accept', 'accept-batch', 'merge', 'mark-merged', 'reject', 'drop', 'pos', 'task-upsert', 'task-status']).has(name) && (await loadPlan(root)).example) throw new ExamplePlanError()
-        const value = await fn(body, root)
+        // The scope is captured once, for this request: the present `plan` (or the legacy `planId`) else current.
+        const hasOwn = (key: string) => Object.prototype.hasOwnProperty.call(body, key)
+        const plan = PLAN_SCOPED.has(name)
+          ? await planOf(root, [{ present: hasOwn('plan'), value: body.plan, name: 'plan' }, { present: hasOwn('planId'), value: body.planId, name: 'planId' }])
+          : undefined
+        if (MUTATION_ROUTES.has(name) && (await loadPlan(root, plan)).example) throw new ExamplePlanError()
+        const value = await fn(body, root, plan)
         await deps.service.refresh(root || undefined)
         send(res, 200, { ok: true, value: value ?? null })
       } catch (err) {
@@ -584,7 +630,7 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
 
   // Query routes are registered as prefixes (the request path carries a query string) and then
   // matched exactly on the pathname.
-  const get = (name: string, fn: (q: URLSearchParams, root: string, res: ServerResponse) => Promise<unknown>): Route => ({
+  const get = (name: string, fn: (q: URLSearchParams, root: string, res: ServerResponse, plan?: string) => Promise<unknown>): Route => ({
     kind: 'prefix',
     path: `${API_PREFIX}/${name}`,
     handler: async (req, res) => {
@@ -593,7 +639,9 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       if (req.method !== 'GET') return send(res, 405, { ok: false, error: 'method_not_allowed' })
       try {
         const root = repoOf(url.searchParams.get('repo'))
-        const value = await fn(url.searchParams, root, res)
+        // Absent `plan` is legacy; a present empty `plan` fails closed (see `planOf`).
+        const plan = PLAN_SCOPED.has(name) ? await planOf(root, [{ present: url.searchParams.has('plan'), value: url.searchParams.get('plan'), name: 'plan' }]) : undefined
+        const value = await fn(url.searchParams, root, res, plan)
         if (value !== undefined) send(res, 200, { ok: true, value })
       } catch (err) {
         fail(res, err)
@@ -746,18 +794,18 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
     }),
     post('example-create', async (body, root) => { await ensureGitExclude(root, exec); const plan = await createExamplePlan(root, deps.now(), body.lang === 'ru' || body.lang === 'en' ? body.lang : deps.lang?.() === 'ru' ? 'ru' : 'en'); return { plan: plan.goal } }),
     post('example-remove', async (_b, root) => { await removeExample(root); return null }),
-    get('task', (q, root) => getTaskDetail(root, text(q.get('id'), 'id'), deps.backendsFor(root), exec)),
-    get('diff', async (q, root, res) => {
-      const diff = await getTaskDiff(root, text(q.get('id'), 'id'), text(q.get('file'), 'file'), exec)
+    get('task', (q, root, _res, plan) => getTaskDetail(root, text(q.get('id'), 'id'), deps.backendsFor(root), exec, plan)),
+    get('diff', async (q, root, res, plan) => {
+      const diff = await getTaskDiff(root, text(q.get('id'), 'id'), text(q.get('file'), 'file'), exec, plan)
       res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
       res.end(diff)
       return undefined
     }),
-    get('file', async (q, root, res) => {
+    get('file', async (q, root, res, plan) => {
       const file = text(q.get('file'), 'file')
       const side = q.get('side')
       if (side !== 'before' && side !== 'after') throw new HttpError(400, 'bad_request', 'side must be before or after')
-      const bytes = await getTaskFile(root, text(q.get('id'), 'id'), file, side, exec)
+      const bytes = await getTaskFile(root, text(q.get('id'), 'id'), file, side, exec, plan)
       const ext = file.split('.').at(-1)?.toLowerCase() ?? ''
       const mime: Record<string, string> = {
         png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', svg: 'image/svg+xml',
@@ -784,8 +832,9 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       return undefined
     }),
     // Plan summary: run accounting per run, task summaries and review intervals; the full trace stays lazy in GET trace.
-    get('cost', async (_q, root): Promise<PlanCost> => {
-      const plan = await loadPlan(root)
+    get('cost', async (_q, root, _res, scope): Promise<PlanCost> => {
+      const shownPlanId = scope ?? currentPlanId(root)
+      const plan = await loadPlan(root, shownPlanId)
       // The example is served from its synthetic store and marked, so it never mixes into real accounting.
       const backends = backendsForPlan(plan, root, deps.backendsFor(root))
       const runs: PlanRunCost[] = []
@@ -837,15 +886,15 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
         return { taskId: task.id, title: task.title, ...(task.class ? { taskClass: task.class } : { currentClassFallback: true }), state: taskRuns.some((run) => !run.finishedAt) ? 'running' : task.status, runIds: sorted.map(r=>r.runId), attemptIndexes: sorted.map((r,i)=>r.attemptIndex ?? i+1), ...(sorted.length ? { elapsedSec: Math.max(0, (Date.parse(legacyAccept?.at ?? deps.now().toISOString())-Date.parse(sorted[0]!.startedAt))/1000) } : {}), workerSec, reviewWaitMs: unionReviewIntervals(reviewIntervals, deps.now().toISOString()), reviewIntervals, executionOutcomes: taskRuns.map(r=>({runId:r.runId,outcome:r.executionOutcome ?? 'unknown'})), decisions, accounting }
       })
       const historyCompleteness = plan.tasks.every(t=>!!t.reviewIntervals || !t.runs.length) ? 'complete' as const : 'partial' as const
-      const planId = currentPlanId(root)
+      const planId = shownPlanId
       const binding = (await readChats(root))[planId]
       const orchestrator = await orchestratorUsage(binding ? { [planId]: binding } : {}, dshBillRecordsPath(deps.env, deps.home))
       return { schemaVersion: 2, ...(plan.example ? { synthetic: true as const } : {}), planId, rev: plan.rev, historyCompleteness, generatedAt: deps.now().toISOString(), runs, totals: summarizeCosts(runs), accepted, tasks, coverage: reviewCoverage(runs, historyCompleteness), orchestrator }
     }),
     // Step strips for the run rows on screen. Kept out of GET cost so the plan summary never reads raw events.
-    get('run-steps', async (q, root): Promise<Record<string, RunStepSummary>> => {
+    get('run-steps', async (q, root, _res, planId): Promise<Record<string, RunStepSummary>> => {
       const wanted = new Set(text(q.get('runs'), 'runs').split(',').filter(Boolean).slice(0, RUN_STEPS_LIMIT))
-      const plan = await loadPlan(root)
+      const plan = await loadPlan(root, planId)
       const out: Record<string, RunStepSummary> = {}
       for (const task of plan.tasks) for (const run of task.runs) {
         if (!wanted.has(run.runId)) continue
@@ -867,9 +916,9 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       }
       return out
     }),
-    get('task-review', async (q, root) => {
+    get('task-review', async (q, root, _res, planId) => {
       const id = text(q.get('task'), 'task')
-      const plan = await loadPlan(root)
+      const plan = await loadPlan(root, planId)
       const task = plan.tasks.find((item) => item.id === id)
       if (!task) throw new HttpError(404, 'unknown_task', `Task not found: ${id}`)
       // Reuse the lightweight plan summary and return only the requested task's attempt ledger.
@@ -891,9 +940,9 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       const summary = { taskId: id, title: task.title, ...(task.class ? { taskClass: task.class } : {}), state: attempts.some((run) => !run.finishedAt) ? 'running' : task.status, runIds: ordered.map((run) => run.runId), attemptIndexes: ordered.map((run, index) => run.attemptIndex ?? index + 1), workerSec: attempts.reduce((sum, run) => sum + (run.durationSec ?? Math.max(0, (deps.now().getTime() - Date.parse(run.startedAt)) / 1000)), 0), reviewWaitMs: unionReviewIntervals(reviewIntervals, deps.now().toISOString()), reviewIntervals, executionOutcomes: attempts.map((run) => ({ runId: run.runId, outcome: run.executionOutcome ?? 'unknown' })), decisions, accounting: { ...(cashKnown.length ? { cashUsd: cashKnown.reduce((sum, run) => sum + run.cashUsd!.value, 0) } : {}), ...(equivalentKnown.length ? { apiEquivalentUsd: equivalentKnown.reduce((sum, run) => sum + run.apiEquivalentUsd!.value, 0) } : {}), quotaMeasurements: attempts.reduce((sum, run) => sum + (run.quotaMeasurements?.length ?? 0), 0), knownRuns: cashKnown.length, cashEligibleRuns: attempts.filter((run) => run.availability?.cash !== 'notApplicable').length, equivalentKnownRuns: equivalentKnown.length, pendingRuns: attempts.filter((run) => run.pending).length, unavailableRuns: attempts.filter((run) => !run.cashUsd && !run.pending && run.availability?.cash !== 'notApplicable').length } }
       return { taskId: id, attempts, summary, decisions: task.notes.flatMap((note, index) => note.type === 'accept' || note.type === 'reject' ? [{ ...note, id: `decision:${task.id}:${index}` }] : []), reviewIntervals: intervals.map((interval) => ({ ...interval, ...(interval.decidedAt ? { decisionId: decisions.find((decision) => decision.at === interval.decidedAt)?.id } : {}) })), cumulative: summarizeCosts(attempts), ...(plan.example ? { synthetic: true as const } : {}), generatedAt: deps.now().toISOString() }
     }),
-    get('trace', async (q, root) => {
+    get('trace', async (q, root, _res, planId) => {
       const id = text(q.get('id'), 'id')
-      const plan = await loadPlan(root)
+      const plan = await loadPlan(root, planId)
       const task = plan.tasks.find((t) => t.id === id)
       if (!task) throw new HttpError(404, 'unknown_task', `Task not found: ${id}`)
       const wanted = q.get('run')
@@ -1016,15 +1065,15 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       await deps.service.refresh()
       return result
     }),
-    post('task-upsert', async (b, root) => {
+    post('task-upsert', async (b, root, planId) => {
       const title = text(b.title, 'title').trim()
       const parent = text(b.parent, 'parent')
       const id = text(b.id, 'id')
       if (!/^[a-z0-9][a-z0-9-]{0,40}$/.test(id)) throw new HttpError(400, 'bad_id', 'Invalid task id')
       const replace = b.replace === true
       const depends = !replace && b.depends !== false
-      const detail = await getTaskDetail(root, parent, deps.backendsFor(root), exec)
-      const plan = await loadPlan(root)
+      const detail = await getTaskDetail(root, parent, deps.backendsFor(root), exec, planId)
+      const plan = await loadPlan(root, planId)
       const source = plan.tasks.find((task) => task.id === parent)
       if (!source) throw new HttpError(404, 'unknown_task', parent)
       if (plan.tasks.some((task) => task.id === id)) throw new HttpError(409, 'duplicate_task', id)
@@ -1032,7 +1081,7 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       const lane = typeof b.lane === 'string' ? b.lane.trim() : source.lane
       const note = typeof b.note === 'string' ? b.note.trim().slice(0, 8000) : ''
       const findings = (detail.verdict?.facts ?? []).map((fact) => fact.text ?? fact.code)
-      const contract = contractPathFor(currentPlanId(root), id)
+      const contract = contractPathFor(planId ?? currentPlanId(root), id)
       // The one contract template (ct1): the parent's report, verdict and findings are the context, the note is
       // the result, and the parent's checks carry over — the same work is checked the same way.
       const parentChecks = detail.contract ? requiredChecks(detail.contract.text) : []
@@ -1056,7 +1105,7 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
           current.tasks.push(created)
           if (replace) original.status = 'superseded'
           return current
-        })
+        }, 5, planId)
       } catch (error) {
         await import('node:fs/promises').then(({ rm }) => rm(join(root, contract), { force: true }))
         throw error
@@ -1065,29 +1114,29 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
     }),
     // nb1: the first task of an empty plan, from the screen. The id comes from the title; the contract is the one
     // template (ct1) with the title as the goal and the person's line as the result, checks left for the person.
-    post('task-add', async (b, root) => {
+    post('task-add', async (b, root, planId) => {
       const title = text(b.title, 'title').trim().slice(0, 200)
       const result = typeof b.result === 'string' ? b.result.trim().slice(0, 8000) : ''
-      const plan = await loadPlan(root)
+      const plan = await loadPlan(root, planId)
       const base = title.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32).replace(/-+$/g, '') || 'task'
       const taken = new Set(plan.tasks.map((task) => task.id))
       let id = base
       for (let n = 2; taken.has(id); n++) id = `${base}-${n}`
-      const contract = contractPathFor(currentPlanId(root), id)
+      const contract = contractPathFor(planId ?? currentPlanId(root), id)
       await writeNewContract(root, contract, contractTemplate({ goal: title, result: result || title, lang: deps.lang?.() ?? 'en' }))
       try {
         await updatePlan(root, (current) => {
           if (current.tasks.some((task) => task.id === id)) throw new HttpError(409, 'duplicate_task', id)
           current.tasks.push(newTask({ id, title, contract, status: 'ready' }))
           return current
-        })
+        }, 5, planId)
       } catch (error) {
         await import('node:fs/promises').then(({ rm }) => rm(join(root, contract), { force: true }))
         throw error
       }
       return { id }
     }),
-    post('task-status', async (b, root) => {
+    post('task-status', async (b, root, planId) => {
       const id = text(b.task, 'task')
       if (b.status !== 'ready' && b.status !== 'backlog') throw new HttpError(400, 'bad_status', 'Invalid task status')
       await updatePlan(root, (plan) => {
@@ -1096,11 +1145,11 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
         if (task.status !== 'ready' && task.status !== 'backlog') throw new HttpError(409, 'bad_status', 'Task cannot be moved')
         task.status = b.status as 'ready' | 'backlog'
         return plan
-      })
+      }, 5, planId)
       return { id }
     }),
-    post('worktree-open', async (b, root) => {
-      const detail = await getTaskDetail(root, text(b.task, 'task'), deps.backendsFor(root), exec)
+    post('worktree-open', async (b, root, planId) => {
+      const detail = await getTaskDetail(root, text(b.task, 'task'), deps.backendsFor(root), exec, planId)
       const path = detail.worktree?.path
       if (!path || !(await stat(path).catch(() => null))?.isDirectory()) throw new HttpError(404, 'no_worktree', 'Worktree is unavailable')
       let result = b.reveal === true ? await exec('open', ['-R', path]) : await exec('open', ['-a', 'WebStorm', path])
@@ -1109,15 +1158,16 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       return { path }
     }),
     // «Run checks here» (ck1): Crewboard runs the contract's <checks> in the copy and answers with the task's detail.
-    post('run-checks', async (b, root) => {
+    post('run-checks', async (b, root, planId) => {
       const task = text(b.task, 'task')
-      await runContractChecks({ root, taskId: task, by: 'person', exec, env: deps.env, now: () => deps.now(), lang: deps.lang?.() })
-      return getTaskDetail(root, task, deps.backendsFor(root), exec)
+      await runContractChecks({ root, taskId: task, ...(planId ? { planId } : {}), by: 'person', exec, env: deps.env, now: () => deps.now(), lang: deps.lang?.() })
+      return getTaskDetail(root, task, deps.backendsFor(root), exec, planId)
     }),
-    post('run', (b, root) =>
+    post('run', (b, root, planId) =>
       launchTask({
         root,
         taskId: text(b.task, 'task'),
+        ...(planId ? { planId } : {}),
         ...(typeof b.agent === 'string' && b.agent.trim() ? { agent: b.agent } : {}),
         // A dsh screen action is a person (the client header gates every POST): any worker may be picked.
         caller: callerOf({ kind: 'ui' }),
@@ -1133,10 +1183,11 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
         lang: deps.lang?.(),
       }),
     ),
-    post('relaunch', (b, root) =>
+    post('relaunch', (b, root, planId) =>
       relaunchTask({
         root,
         taskId: text(b.task, 'task'),
+        ...(planId ? { planId } : {}),
         ...(typeof b.agent === 'string' && b.agent.trim() ? { agent: b.agent } : {}),
         // A dsh screen action is a person (the client header gates every POST): any worker may be picked.
         caller: callerOf({ kind: 'ui' }),
@@ -1151,10 +1202,11 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       }),
     ),
     // «Continue» on a run that ended unfinished (bg1): a relaunch in the same worktree with the direction to finish and report.
-    post('continue', (b, root) =>
+    post('continue', (b, root, planId) =>
       continueTask({
         root,
         taskId: text(b.task, 'task'),
+        ...(planId ? { planId } : {}),
         caller: callerOf({ kind: 'ui' }),
         backends: deps.backendsFor(root),
         exec,
@@ -1164,14 +1216,14 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
         lang: deps.lang?.(),
       }),
     ),
-    post('steer', async (b, root) => {
-      const result = await steerTask(root, text(b.task, 'task'), { message: text(b.message, 'message') }, deps.backendsFor(root), deps.now())
+    post('steer', async (b, root, planId) => {
+      const result = await steerTask(root, text(b.task, 'task'), { message: text(b.message, 'message') }, deps.backendsFor(root), deps.now(), planId)
       return { ...result, notice: hostT(deps.lang?.() ?? 'en', `steer.${result.delivery}`, { ...result, state: result.state ?? '' }) }
     }),
-    post('stop', (b, root) => stopTask(root, text(b.task, 'task'), deps.backendsFor(root))),
-    post('accept', async (b, root) => {
+    post('stop', (b, root, planId) => stopTask(root, text(b.task, 'task'), deps.backendsFor(root), planId)),
+    post('accept', async (b, root, planId) => {
       const task = text(b.task, 'task')
-      const detail = await getTaskDetail(root, task, deps.backendsFor(root), exec)
+      const detail = await getTaskDetail(root, task, deps.backendsFor(root), exec, planId)
       const verdict = detail.verdict
       // A decision has no run and no diff, so the question must not claim that changes were reviewed.
       const lang = deps.lang?.() ?? 'en'
@@ -1186,48 +1238,52 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
             : verdict.caution ? hostT(lang, 'actions.accept.caution', { task }) : hostT(lang, 'actions.accept.normal', { task })
       // One line on the orchestrator's check (vc1): checked, not checked yet — accept anyway, or no check for this
       // plan and why. The orchestrator's own work and decisions (rt1): accepting before its «done» is said out loud.
-      const plan = await loadPlan(root)
+      const plan = await loadPlan(root, planId)
       const view = deriveViews(plan).find((v) => v.task.id === task)
-      const check = view ? reviewCheckOf({ status: view.status, kind: view.task.kind, check: view.check }, await resolveOrchestratorCheck(root, undefined, plan)) : undefined
+      const check = view ? reviewCheckOf({ status: view.status, kind: view.task.kind, check: view.check }, await resolveOrchestratorCheck(root, planId, plan)) : undefined
       const unchecked = check ? acceptCheckLine(lang, check, task, view?.task.check?.note) : view && ownWorkUnchecked(view.task.kind, view.check) ? hostT(lang, 'actions.accept.ownUnchecked', { task }) : ''
       // Work the copy holds without a commit is not on the task branch: merging it would not bring it (w1d).
       const count = detail.worktree ? await uncommittedCount(detail.worktree.path, exec) : undefined
       const loose = count ? hostT(lang, 'actions.accept.uncommitted', { task, count }) : ''
       if (!(await deps.native.confirm('crewboard', unchecked + loose + question, hostT(lang, 'actions.ok.accept'), hostT(lang, 'actions.ok.cancel')))) throw declined()
-      await acceptTask(root, task, deps.now(), verdict, detail.runs.at(-1)?.evidence)
+      await acceptTask(root, task, deps.now(), verdict, detail.runs.at(-1)?.evidence, planId)
       // Acceptance cleans only that task's copy; the feed note is written by gcAfterAccept, not silently.
-      const cleanup = await gcAfterAccept(root, [task], { exec, now: deps.now, policyPath: worktreeConfigPath(deps.env, deps.home) })
+      const cleanup = await gcAfterAccept(root, [task], { exec, now: deps.now, policyPath: worktreeConfigPath(deps.env, deps.home), ...(planId ? { planId } : {}) })
       return { task, status: 'accepted', verdict, worktreeRemoved: cleanup.removed.includes(task) }
     }),
     // mg1: the screen's Merge — the same checks and refusals as `crewboard merge`, then the person's native yes.
     // Not an agent tool: dsh tools (tools.ts) never reach this route.
-    post('merge', async (b, root) => {
+    post('merge', async (b, root, planId) => {
       const task = text(b.task, 'task')
       if (b.strategy !== undefined && b.strategy !== 'no-ff' && b.strategy !== 'squash') throw new HttpError(400, 'bad_request', 'strategy must be no-ff or squash')
       const strategy = b.strategy === 'squash' ? 'squash' as const : 'no-ff' as const
       const lang = deps.lang?.() ?? 'en'
-      const ready = await checkMerge(root, task, { exec, now: deps.now() })
+      const ready = await checkMerge(root, task, { exec, now: deps.now(), ...(planId ? { planId } : {}) })
       const question = hostT(lang, 'actions.merge', { task, branch: ready.branch, into: ready.into, root, how: hostT(lang, `actions.merge.${strategy}`) })
       if (!(await deps.native.confirm('crewboard', question, hostT(lang, 'actions.ok.merge'), hostT(lang, 'actions.ok.cancel')))) throw declined()
-      const result = await mergeTask(root, task, { exec, now: deps.now, strategy, policyPath: worktreeConfigPath(deps.env, deps.home) })
+      const result = await mergeTask(root, task, { exec, now: deps.now, strategy, policyPath: worktreeConfigPath(deps.env, deps.home), ...(planId ? { planId } : {}) })
       return { task, into: result.into, strategy, commit: result.commit, copy: result.copy, ...(result.keptBecause ? { keptBecause: result.keptBecause } : {}) }
     }),
     // mk1: the screen's Mark as merged… — work that reached the base in a way Crewboard cannot see. The person's
     // native yes and a reason; git is not touched, a detached HEAD is fine. Not an agent tool, like Merge.
-    post('mark-merged', async (b, root) => {
+    post('mark-merged', async (b, root, planId) => {
       const task = text(b.task, 'task')
       const reason = text(b.reason, 'reason')
       const lang = deps.lang?.() ?? 'en'
-      const ready = await checkMarkMerged(root, task, { exec })
+      const ready = await checkMarkMerged(root, task, { exec, ...(planId ? { planId } : {}) })
       const question = hostT(lang, 'actions.markMerged', { task, branch: ready.branch, into: ready.into, root, reason })
       if (!(await deps.native.confirm('crewboard', question, hostT(lang, 'actions.ok.markMerged'), hostT(lang, 'actions.ok.cancel')))) throw declined()
-      await markMerged(root, task, reason, { exec, now: deps.now() })
+      await markMerged(root, task, reason, { exec, now: deps.now(), ...(planId ? { planId } : {}) })
       return { task, into: ready.into }
     }),
-    post('accept-batch', async (b, root) => {
+    post('accept-batch', async (b, root, planId) => {
       const ids = batchIds(b.tasks)
+      // The selected plan is read on demand; the legacy path reads the served current snapshot. Both refresh
+      // first: a batch accept must not decide from a cached «awaiting review» state (explicit plan included).
       await deps.service.refresh(root)
-      const repo = deps.service.snapshot().repos.find((r) => r.root === root)
+      let repo: OrchestraRepoSnapshot | undefined
+      if (planId) repo = await deps.service.planState(root, planId)
+      else repo = deps.service.snapshot().repos.find((r) => r.root === root)
       const byId = new Map((repo?.tasks ?? []).map((t) => [t.id, t]))
       const bad = ids.filter((id) => {
         const t = byId.get(id)
@@ -1240,13 +1296,13 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       if (decisions.length > 0) throw new HttpError(409, 'decision_batch', `Decisions are confirmed one by one, not in a batch: ${decisions.join(', ')}`)
       const lines = ids.slice(0, MAX_LISTED).map((id) => `• ${id} — ${byId.get(id)?.title ?? ''}`)
       if (ids.length > MAX_LISTED) lines.push(`… and ${ids.length - MAX_LISTED} more`)
-      const details = await Promise.all(ids.map(async (id) => [id, await getTaskDetail(root, id, deps.backendsFor(root), exec)] as const))
+      const details = await Promise.all(ids.map(async (id) => [id, await getTaskDetail(root, id, deps.backendsFor(root), exec, planId)] as const))
       const lang = deps.lang?.() ?? 'en'
       const riskLines = details.flatMap(([id, detail]) => !detail.verdict || (detail.verdict.kind === 'result' && !detail.verdict.caution) ? [] : [
         `• ${id} — ${detail.verdict.kind === 'result' ? hostT(lang, 'actions.accept.riskCaution') : hostT(lang, detail.verdict.kind === 'negative' ? 'actions.accept.riskNegative' : 'actions.accept.riskDisputed', { reason: verdictReason(lang, detail.verdict) })}`,
       ])
       // The orchestrator's check in the single dialog's words (vc1), grouped: checked, not checked yet, no check and why.
-      const setting = repo?.orchestratorCheck
+      const setting = repo?.orchestratorCheck ?? (planId ? await resolveOrchestratorCheck(root, planId) : undefined)
       const checkGroups = new Map<string, string[]>()
       for (const id of ids) {
         const t = byId.get(id)
@@ -1274,20 +1330,20 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       if (!(await deps.native.confirm('crewboard', question, `${hostT(lang, 'actions.ok.accept')} ${ids.length}`, hostT(lang, 'actions.ok.cancel')))) throw declined()
       const verdicts = Object.fromEntries(details.map(([id, detail]) => [id, detail.verdict]))
       const evidence = Object.fromEntries(details.map(([id, detail]) => [id, detail.runs.at(-1)?.evidence]))
-      const accepted = await acceptTasks(root, ids, deps.now(), verdicts, evidence)
-      const cleanup = await gcAfterAccept(root, accepted, { exec, now: deps.now, policyPath: worktreeConfigPath(deps.env, deps.home) })
+      const accepted = await acceptTasks(root, ids, deps.now(), verdicts, evidence, planId)
+      const cleanup = await gcAfterAccept(root, accepted, { exec, now: deps.now, policyPath: worktreeConfigPath(deps.env, deps.home), ...(planId ? { planId } : {}) })
       return { accepted, removed: cleanup.removed }
     }),
     // wk1 (B29): `rerun` sends back and starts the next run at once — the previous run's worker unless the person
     // picked another; the reason reaches that run's prompt. Refusals come before anything is sent back.
-    post('reject', async (b, root) => {
+    post('reject', async (b, root, planId) => {
       const task = text(b.task, 'task')
       const reason = text(b.reason, 'reason')
       const lang = deps.lang?.() ?? 'en'
       const agent = typeof b.agent === 'string' && b.agent.trim() ? b.agent.trim() : undefined
       if (b.rerun !== true) {
         if (!(await deps.native.confirm('crewboard', hostT(lang, 'actions.reject', { task, reason }), hostT(lang, 'actions.ok.sendBack'), hostT(lang, 'actions.ok.cancel')))) throw declined()
-        await rejectTask(root, task, reason, deps.now())
+        await rejectTask(root, task, reason, deps.now(), planId)
         return { task, status: 'rejected' }
       }
       const question = hostT(lang, 'actions.rejectRerun', { task, reason, worker: agent ?? hostT(lang, 'actions.rerunSameWorker') })
@@ -1296,6 +1352,7 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
         root,
         taskId: task,
         reason,
+        ...(planId ? { planId } : {}),
         ...(agent ? { agent } : {}),
         caller: callerOf({ kind: 'ui' }),
         backends: deps.backendsFor(root),
@@ -1308,16 +1365,17 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       return { task, status: 'rejected', run }
     }),
     // w1f: human-only like reject — the native dialog is the person's confirmation; no agent tool reaches it.
-    post('drop', async (b, root) => {
+    post('drop', async (b, root, planId) => {
       const task = text(b.task, 'task')
       const reason = text(b.reason, 'reason')
       const lang = deps.lang?.() ?? 'en'
       if (!(await deps.native.confirm('crewboard', hostT(lang, 'actions.drop', { task, reason }), hostT(lang, 'actions.ok.drop'), hostT(lang, 'actions.ok.cancel')))) throw declined()
-      await dropTask(root, task, reason, deps.now(), undefined, lang)
+      await dropTask(root, task, reason, deps.now(), planId, lang)
       return { task, status: 'dropped' }
     }),
-    post('pos', async (b, root) => {
-      const planId = text(b.planId, 'planId')
+    post('pos', async (b, root, planId) => {
+      // `pos` writes one explicitly named plan; without one nothing can say which plan moved.
+      if (!planId) throw new HttpError(400, 'bad_plan', 'planId is required')
       if (typeof b.expectedRev !== 'number' || !Number.isInteger(b.expectedRev) || !Array.isArray(b.positions)) throw new HttpError(400, 'bad_request', 'expectedRev and positions are required')
       const positions = b.positions.map((entry: unknown) => {
         if (!entry || typeof entry !== 'object') throw new HttpError(400, 'bad_request', 'invalid position entry')

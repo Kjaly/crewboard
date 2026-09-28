@@ -25,6 +25,7 @@ export function ActivityComposer({
   onRelaunch,
   focusSignal,
   readOnly,
+  unconfirmed,
 }: {
   value: string
   onChange(text: string): void
@@ -36,6 +37,8 @@ export function ActivityComposer({
   onRelaunch(): void
   focusSignal: number
   readOnly?: boolean
+  /** A restored in-flight request that outlived its window: unknown, not failed — the draft is kept. */
+  unconfirmed?: boolean
 }) {
   useLang()
   const field = useRef<HTMLTextAreaElement>(null)
@@ -115,6 +118,7 @@ export function ActivityComposer({
           <button type="button" className="orc-btn" disabled={pending} onClick={onRelaunch}>{t('panel.task.relaunchWithCorrection')}</button>
         </div>
       ) : null}
+      {unconfirmed ? <p role="status" className="orc-hint">{t('panel.activity.receiptUnconfirmed')}</p> : null}
       {!failed && !abandoned && !refused && state ? (
         <p role="status" className="orc-hint" title={result?.steerId}>
           {t(`panel.task.steerState.${state}`)}{record ? '' : ` · ${t('panel.activity.receiptInitial')}`}

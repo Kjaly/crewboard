@@ -31,12 +31,25 @@ it('splits lanes into Now and History and orders Now: waiting, running, then the
   expect(tree.history.every((row) => row.finished && row.tone === 'idle')).toBe(true)
 })
 
-it('counts running, awaiting the person, ready, queued and accepted per lane', () => {
+it('counts running, checking, awaiting the person, ready, queued and accepted per lane', () => {
   const rows = new Map([...laneTree(snapshot()).now, ...laneTree(snapshot()).history].map((row) => [row.lane, row.counts]))
-  expect(rows.get('Analysis')).toEqual({ running: 0, review: 1, ready: 0, queued: 0, accepted: 1 })
-  expect(rows.get('Reliability')).toEqual({ running: 1, review: 0, ready: 0, queued: 0, accepted: 1 })
-  expect(rows.get('Queue')).toEqual({ running: 0, review: 0, ready: 1, queued: 1, accepted: 0 })
-  expect(rows.get('Plan 1c')).toEqual({ running: 0, review: 0, ready: 0, queued: 0, accepted: 1 })
+  expect(rows.get('Analysis')).toEqual({ running: 0, checking: 0, review: 1, ready: 0, queued: 0, accepted: 1 })
+  expect(rows.get('Reliability')).toEqual({ running: 1, checking: 0, review: 0, ready: 0, queued: 0, accepted: 1 })
+  expect(rows.get('Queue')).toEqual({ running: 0, checking: 0, review: 0, ready: 1, queued: 1, accepted: 0 })
+  expect(rows.get('Plan 1c')).toEqual({ running: 0, checking: 0, review: 0, ready: 0, queued: 0, accepted: 1 })
+})
+
+it('counts an orchestrator check apart from a worker run, and keeps accepted-unmerged out of History', () => {
+  const tree = laneTree(makeRepo([
+    makeTask({ id: 'c', lane: 'Check', status: 'in_review', check: 'checking' }),
+    makeTask({ id: 'm', lane: 'Merge', status: 'accepted', unmerged: true }),
+  ]))
+  const now = new Map(tree.now.map((row) => [row.lane, row]))
+  expect(now.get('Check')?.counts).toEqual({ running: 0, checking: 1, review: 0, ready: 0, queued: 0, accepted: 0 })
+  // Accepted work that is not merged still waits for the person: it is not history.
+  expect(tree.history.map((row) => row.lane)).not.toContain('Merge')
+  expect(now.get('Merge')?.counts.accepted).toBe(1)
+  expect(now.get('Merge')?.finished).toBe(false)
 })
 
 it('an open decision waits for the person; one the orchestrator is still checking runs', () => {

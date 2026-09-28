@@ -89,6 +89,8 @@ export function LiveActivity({
   scrollRef,
   attention,
   onOpenReport,
+  position,
+  onPosition,
 }: {
   detail: TaskDetail
   task: TaskSnapshot
@@ -96,6 +98,10 @@ export function LiveActivity({
   scrollRef: RefObject<HTMLElement | null>
   attention?: readonly Attention[]
   onOpenReport?(): void
+  /** The session-remembered reading position of this task's feed (window memory only). */
+  position?: { anchor?: string; anchorOffset?: number; offset?: number; follow?: boolean }
+  /** Reports the feed's reading position back to that memory. */
+  onPosition?(pos: { anchor?: string; anchorOffset?: number; offset: number; follow: boolean }): void
 }) {
   useLang()
   const events = detail.events ?? []
@@ -110,6 +116,45 @@ export function LiveActivity({
   const [freshFrom, setFreshFrom] = useState<number | undefined>(undefined)
   // The pulse is decoration: pause it whenever the page is hidden, live run or not.
   const [paused, setPaused] = useState(false)
+  // The feed's reading position (a turn anchor, the viewport's offset within it, a fallback offset and the
+  // follow state) is written back to the task's window-session memory. The geometry is captured synchronously
+  // on every scroll; only the notification is throttled, so an unmount inside the throttle window still flushes
+  // the real last position instead of reading a scroll container React has already detached.
+  const writeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const lastWritten = useRef('')
+  const latest = useRef<{ anchor?: string; anchorOffset?: number; offset: number; follow: boolean } | null>(null)
+  const capturePosition = (element = scrollRef.current) => {
+    if (!element || !onPosition) return
+    // Everything is measured by rects against the scroll viewport: `offsetTop` can use a different offsetParent.
+    const fold = element.getBoundingClientRect?.().top ?? 0
+    let anchor: string | undefined
+    let anchorOffset: number | undefined
+    for (const node of element.querySelectorAll<HTMLElement>('[data-event-anchor]')) {
+      const rect = node.getBoundingClientRect?.()
+      // The topmost turn that still reaches below the fold is the line the reader is looking at.
+      if (rect && rect.bottom > fold) {
+        anchor = node.dataset.eventAnchor
+        // How far the turn's top sits above the viewport top: the alignment inside a tall message.
+        anchorOffset = rect.top - fold
+        break
+      }
+    }
+    latest.current = { ...(anchor ? { anchor } : {}), ...(anchorOffset !== undefined ? { anchorOffset } : {}), offset: element.scrollTop, follow: atBottom.current }
+  }
+  const flushPosition = () => {
+    const snapshot = latest.current
+    if (!snapshot || !onPosition) return
+    const signature = `${snapshot.anchor ?? ''}|${snapshot.anchorOffset ?? ''}|${snapshot.follow}|${Math.round(snapshot.offset / 40)}`
+    if (signature === lastWritten.current) return
+    lastWritten.current = signature
+    onPosition(snapshot)
+  }
+  const schedulePosition = () => {
+    if (writeTimer.current) return
+    writeTimer.current = setTimeout(() => { writeTimer.current = undefined; flushPosition() }, 120)
+  }
+  // Leaving the panel inside the throttle window still persists the captured snapshot — never detached DOM.
+  useEffect(() => () => { if (writeTimer.current) clearTimeout(writeTimer.current); flushPosition() }, [])
   useEffect(() => {
     if (typeof document === 'undefined') return
     const sync = () => setPaused(document.visibilityState === 'hidden')
@@ -136,14 +181,14 @@ export function LiveActivity({
       if (grew) {
         const element = scrollRef.current
         if (atBottom.current) {
-          if (element) element.scrollTop = element.scrollHeight
+          if (element) { element.scrollTop = element.scrollHeight; capturePosition(element) }
         } else setNewCount((count) => Math.max(count, 1))
       }
       return
     }
     const element = scrollRef.current
     if (atBottom.current) {
-      if (element) element.scrollTop = element.scrollHeight
+      if (element) { element.scrollTop = element.scrollHeight; capturePosition(element) }
       setNewCount(0)
     } else {
       setNewCount((count) => count + added)
@@ -157,6 +202,9 @@ export function LiveActivity({
       const bottom = element.scrollHeight - element.scrollTop - element.clientHeight <= BOTTOM_THRESHOLD_PX
       atBottom.current = bottom
       if (bottom) setNewCount(0)
+      // Capture on every scroll (synchronously); only the write-back is throttled.
+      capturePosition(element)
+      schedulePosition()
     }
     measure()
     element.addEventListener('scroll', measure, { passive: true })
@@ -164,20 +212,53 @@ export function LiveActivity({
   }, [scrollRef])
 
   // Start a live feed at its latest activity, once. It is a mount decision, not a completion one: a run
-  // that finishes while the person is reading above keeps their place.
+  // that finishes while the person is reading above keeps their place. The component is keyed by root+plan+
+  // task+run, so `position` is already the position of *this* run; a new run gets its own mount and a fresh start.
   const started = useRef(false)
   useEffect(() => {
     if (started.current) return
     started.current = true
-    if (!live) return
     const element = scrollRef.current
-    if (element) element.scrollTop = element.scrollHeight
-    atBottom.current = true
+    if (!element) return
+    // Restore the remembered reading position: by the exact turn anchor when it is still in the bounded history,
+    // at the same alignment inside it; else by the saved offset; else start a live feed at its latest activity.
+    if (position?.anchor) {
+      const target = element.querySelector<HTMLElement>(`[data-event-anchor="${position.anchor}"]`)
+      if (target) {
+        atBottom.current = position.follow ?? false
+        if (atBottom.current) { element.scrollTop = element.scrollHeight; return }
+        if (position.anchorOffset !== undefined) {
+          const rect = target.getBoundingClientRect?.()
+          const fold = element.getBoundingClientRect?.().top ?? 0
+          if (rect) {
+            const max = Math.max(0, element.scrollHeight - element.clientHeight)
+            // Re-apply the saved alignment: move by how far the anchor's top drifts from where it was saved.
+            const next = element.scrollTop + (rect.top - fold) - position.anchorOffset
+            element.scrollTop = max > 0 ? Math.min(max, Math.max(0, next)) : Math.max(0, next)
+            return
+          }
+        }
+        element.scrollTop = target.offsetTop
+        return
+      }
+    }
+    if (position?.offset !== undefined) {
+      atBottom.current = position.follow ?? false
+      // The anchor expired: a bounded raw offset is the honest fallback.
+      element.scrollTop = position.follow ? element.scrollHeight : Math.min(Math.max(0, position.offset), element.scrollHeight)
+      return
+    }
+    if (live) { element.scrollTop = element.scrollHeight; atBottom.current = true }
   }, [live, scrollRef])
+
+  // After the one-time restore, snapshot what is on screen: an unmount before any scroll still flushes the
+  // restored position (and its run) rather than an empty one.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the mount snapshot reads the restored DOM once.
+  useEffect(() => { capturePosition() }, [])
 
   const catchUp = () => {
     const element = scrollRef.current
-    if (element) element.scrollTop = element.scrollHeight
+    if (element) { element.scrollTop = element.scrollHeight; capturePosition(element) }
     atBottom.current = true
     setNewCount(0)
   }

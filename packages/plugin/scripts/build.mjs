@@ -156,7 +156,7 @@ await buildAtomically('lib', async (lib) => {
       })
     },
   }
-  for (const name of ['review', 'welcome', 'settings', 'draft', 'ledger', 'trace', 'task']) {
+  for (const name of ['review', 'welcome', 'settings', 'draft', 'ledger', 'trace', 'task', 'now']) {
     const outfile = `${lib}/screen-${name}.cjs`
     await build({
       entryPoints: [`src/client/screen-${name}-entry.ts`],

@@ -22,11 +22,13 @@ const FILES_SHOWN = 8
  */
 function QueueRow({
   root,
+  plan,
   task,
   wait,
   onOpenTask,
 }: {
   root: string
+  plan?: string
   task: TaskSnapshot
   wait?: string
   onOpenTask(id: string, changes?: boolean): void
@@ -44,7 +46,7 @@ function QueueRow({
   useEffect(() => {
     let alive = true
     api
-      .task(root, task.id)
+      .task(root, task.id, plan)
       .then((r) => {
         if (alive) setDetail(r.ok ? r.value : null)
       })
@@ -52,7 +54,7 @@ function QueueRow({
     return () => {
       alive = false
     }
-  }, [root, task.id, task.runs, task.lastRunId])
+  }, [root, plan, task.id, task.runs, task.lastRunId])
 
   const files = detail?.changedFiles
   const report = detail?.report?.text.trim() ? reportLine(detail.report.text) : undefined
@@ -110,7 +112,7 @@ function QueueRow({
             <button type="button" className="orc-btn orc-btn--ghost" onClick={() => onOpenTask(task.id, true)}>
               {t('queue.changes')}
             </button>
-            <button type="button" className="orc-btn" disabled={action.pending} onClick={() => action.call(() => api.accept(root, task.id))}>
+            <button type="button" className="orc-btn" disabled={action.pending} onClick={() => action.call(() => api.accept(root, task.id, plan))}>
               {t('queue.accept')}
             </button>
           </>
@@ -138,7 +140,7 @@ function QueueRow({
               className="orc-btn"
               disabled={action.pending || !reason.trim()}
               onClick={() =>
-                action.call(() => api.reject(root, task.id, reason.trim())).then((ok) => {
+                action.call(() => api.reject(root, task.id, reason.trim(), undefined, plan)).then((ok) => {
                   if (ok) {
                     setRejecting(false)
                     setReason('')
@@ -202,7 +204,7 @@ export function ReviewQueue({ repo, onOpenTask, onClose }: { repo: RepoSnapshot;
   const work = useMemo(() => tasks.filter((t) => t.kind !== 'decision'), [tasks])
   const others = useMemo(() => backgroundReview(repo), [repo])
   const otherCount = others.reduce((n, p) => n + p.waitingHuman, 0)
-  const { cost } = usePlanCost(repo.root, repo.rev)
+  const { cost } = usePlanCost(repo.root, repo.rev, false, repo.planId ?? '')
   // biome-ignore lint/correctness/useExhaustiveDependencies: Locale changes intentionally refresh the translated result.
   const waits = useMemo(() => waitLabels(cost, new Date()), [cost, lang])
 
@@ -237,13 +239,13 @@ export function ReviewQueue({ repo, onOpenTask, onClose }: { repo: RepoSnapshot;
             <>
               <li className="orc-queue__section">{t('queue.decisions')}</li>
               {decisions.map((task) => (
-                <QueueRow key={task.id} root={repo.root} task={task} wait={waits.get(task.id)} onOpenTask={onOpenTask} />
+                <QueueRow key={task.id} root={repo.root} plan={repo.planId} task={task} wait={waits.get(task.id)} onOpenTask={onOpenTask} />
               ))}
               {work.length > 0 ? <li className="orc-queue__section">{t('queue.work')}</li> : null}
             </>
           ) : null}
           {work.map((task) => (
-            <QueueRow key={task.id} root={repo.root} task={task} wait={waits.get(task.id)} onOpenTask={onOpenTask} />
+            <QueueRow key={task.id} root={repo.root} plan={repo.planId} task={task} wait={waits.get(task.id)} onOpenTask={onOpenTask} />
           ))}
         </ul>
 

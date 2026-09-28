@@ -151,7 +151,13 @@ On the first visit:
 
 ![Sidebar with two repositories; one shows a Needs you badge](../assets/sidebar-needs-you.png)
 
-*The sidebar lists repositories and plans. **Needs you** collects work waiting for a person across all of them.*
+*The sidebar lists repositories and plans. **Now** separates ongoing work, human decisions and run alerts across projects.*
+
+- **Now** (the ◉ button in the rail, or `#orchestra/now`) shows current work across every served plan in three blocks: **Needs you** (a presented decision or an explicit contract human review), **Work in progress** (a running worker, awaiting check, checking, or checked and awaiting the next move) and **Work alerts** (failed or stalled runs). Accepted work that is not merged stays in Now; a checked task or a bound chat is never read as «merging now», and a plan that could not be read is shown as unknown coverage, not as empty.
+- The compact **Projects** strip above the content leads with the active, pinned and current families and offers their worktree copies; the rest stay in the tree and in ⌘K. A background family stays folded and shows the same stage mark — an orchestrator check is not counted as a running worker — and a folder that is gone is collected under **Missing**. It is the one project picker and stays above **Now** too, whose header reads **All projects / Now** and leaves out the plan's view tabs, progress strip and preset picker until you return to a plan.
+- The repository tree keeps the plan you selected in the foreground even when it is genuinely finished or archived: the row stays selected and says **finished** or **archived**, while the other finished plans remain under their folded rows. Nothing is listed or counted twice.
+- Opening an existing plan is read-only and does not change the CLI's current plan. Task actions carry the selected physical folder and plan explicitly. While a plan loads or cannot be read, you can switch projects, open Now or retry; unrelated task actions stay hidden.
+- Returning to a project restores its last copy, view, task, tab, run, graph position and Activity reading position. Explicit task or lane links take priority. Work filters are remembered too. Unsent messages and delivery receipts stay in the window's memory, separate for each task and run; private text is not saved to browser storage and does not survive a page reload. If an Activity anchor has left the bounded history, reading falls back to a safe saved offset.
 
 ![Graph view: tasks, dependencies, and the critical path of one plan](../assets/hero-graph.png)
 

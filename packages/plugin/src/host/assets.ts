@@ -34,7 +34,7 @@ export function assetRoutes(libDir: string = HOST_LIB_DIR, vendorDir: string = V
         res.end(body)
       },
     })),
-    ...(['review', 'welcome', 'settings', 'draft', 'ledger', 'trace', 'task'] as const).map((name): Route => ({
+    ...(['review', 'welcome', 'settings', 'draft', 'ledger', 'trace', 'task', 'now'] as const).map((name): Route => ({
       kind: 'exact', path: `/crewboard/assets/screen-${name}.js`,
       handler: async (req, res) => {
         if (req.method !== 'GET') { res.writeHead(405).end(); return }

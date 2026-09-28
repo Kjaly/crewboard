@@ -88,3 +88,29 @@ it('browsing an archived plan on the screen leaves .orchestration/current unchan
     await setCurrentPlan(root, 'sprint2')
   }
 })
+
+it('an agent plan answer drops UI-only projection fields but keeps the coverage and every task fact', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'orch-projection-'))
+  await initPlan(root, 'Plan A', NOW)
+  // Live work so the plan's progress projection carries item arrays in the served snapshot.
+  await updatePlan(root, (p) => { p.tasks.push({ ...newTask({ id: 'live', title: 'Live' }), runs: [{ runId: 'run_a', agent: 'dsh', startedAt: NOW.toISOString() }] }); return p })
+  const service = new OrchestraService({ config: { repos: [root], refreshMs: 60_000 }, backendsFor: () => backends, now: () => NOW })
+  const tools = orchestraTools({ service, repos: [root], backendsFor: () => backends, env: {}, home: root, now: () => NOW })
+  const planTool = tools.find((t) => t.name === 'orchestra_plan') as (typeof tools)[number]
+  await service.refresh(root)
+  const served = service.snapshot().repos[0]!
+  expect(served.generation).toBeTypeOf('number')
+  expect(served.plans?.[0]?.progress?.items.length).toBeGreaterThan(0)
+
+  const answer = (await planTool.execute({})) as Record<string, unknown>
+  // The client cache token and the per-plan item arrays are not part of an agent answer…
+  expect(answer).not.toHaveProperty('generation')
+  for (const plan of (answer.plans ?? []) as Array<{ progress?: { coverage?: string; items?: unknown[] } }>) {
+    expect(plan.progress).not.toHaveProperty('items')
+    if (plan.progress) expect(plan.progress.coverage).toBe('known')
+  }
+  // …but the task facts stay, and the richer served snapshot is not mutated by the projection.
+  expect(answer.tasks).toMatchObject([{ id: 'live' }])
+  expect(served.plans?.[0]?.progress?.items.length).toBeGreaterThan(0)
+  expect(served.generation).toBeTypeOf('number')
+})

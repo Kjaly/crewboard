@@ -4,7 +4,7 @@ import type { TaskDetail } from '../../shared/types.js'
 import { MarkdownInline } from './report.js'
 import { clock, eventText } from '../summary.js'
 import { t, useLang } from '../i18n.js'
-import { stabilizeGroupKeys, type KeyedGroup } from './feed-window.js'
+import { stabilizeGroupKeys, turnAnchors, type KeyedGroup } from './feed-window.js'
 
 type Event = TaskDetail['events'][number]
 
@@ -108,16 +108,19 @@ export function Conversation({ events, freshFrom, finished }: { events: readonly
   useLang()
   const turns = useMemo(() => conversationTurns(events), [events])
   const keys = useStableKeys(turns)
+  // The reading-position identity per turn, independent of the React key (which resets on a remount).
+  const anchors = useMemo(() => turnAnchors(turns), [turns])
   if (events.length === 0) return <p className="orc-meta">{t(finished ? 'panel.tabs.noEventsFinished' : 'panel.tabs.noEvents')}</p>
   const fresh = (index: number) => freshFrom !== undefined && index >= freshFrom
   return (
     <ol className="orc-conv">
       {turns.map((turn, index) => {
         const key = keys[index] ?? `${turn.ts}-${index}`
+        const anchor = anchors[index] ?? ''
         if (turn.kind === 'technical') {
           const freshTurn = freshFrom !== undefined && turn.end > freshFrom
           return (
-            <li key={key} className="orc-conv__item orc-conv__item--technical">
+            <li key={key} data-event-ts={turn.ts} data-event-anchor={anchor} className="orc-conv__item orc-conv__item--technical">
               <details className={`orc-tech${freshTurn ? ' orc-ev--enter' : ''}`}>
                 <summary className="orc-tech__summary">
                   <span className="orc-tech__count">{t('panel.activity.steps', { count: turn.events.length })}</span>
@@ -143,7 +146,7 @@ export function Conversation({ events, freshFrom, finished }: { events: readonly
         // A streaming message keeps its identity time but is stamped with the time of its last real chunk.
         const said = turn.event.updatedAt ?? turn.ts
         return (
-          <li key={key} className={`orc-conv__item orc-conv__item--${turn.kind}`}>
+          <li key={key} data-event-ts={turn.ts} data-event-anchor={anchor} className={`orc-conv__item orc-conv__item--${turn.kind}`}>
             <article className={`orc-turn orc-turn--${turn.kind}${fresh(turn.start) ? ' orc-ev--enter' : ''}`}>
               <header className="orc-turn__meta">
                 <span className={`orc-turn__actor orc-turn__actor--${turn.kind}`}>{t(ACTOR[turn.kind])}</span>

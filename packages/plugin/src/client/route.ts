@@ -1,5 +1,5 @@
 /** Browser hash route for the orchestration screen. This module has no dsh runtime dependency. */
-export type RouteView = 'graph' | 'work' | 'review' | 'settings'
+export type RouteView = 'graph' | 'work' | 'review' | 'settings' | 'now'
 export type OrchestraRoute = {
   repo: string
   plan: string
@@ -15,14 +15,19 @@ export type OrchestraRoute = {
 }
 
 const PREFIX = '#orchestra/'
-const VIEWS = new Set<RouteView>(['graph', 'work', 'review', 'settings'])
+const VIEWS = new Set<RouteView>(['graph', 'work', 'review', 'settings', 'now'])
 const decode = (part: string): string | undefined => {
   try { return decodeURIComponent(part) } catch { return undefined }
 }
 
+/** The repo/plan placeholders of the global «Now» route: `#orchestra/now`. */
+export const NOW_ROUTE: OrchestraRoute = { repo: '_', plan: '_', view: 'now' }
+
 export function parseRoute(hash: string): OrchestraRoute | null {
   if (!hash.startsWith(PREFIX)) return null
   const [path, query = ''] = hash.slice(PREFIX.length).split('?', 2)
+  // The global «Now» screen is not tied to a repository or plan; its own hash keeps Back and reload working.
+  if (path === 'now') return { ...NOW_ROUTE }
   const parts = path.split('/').map(decode)
   if (parts.length < 3 || parts.some((part) => part === undefined || part.length === 0)) return null
   const [repo, plan, view, task, tab] = parts as string[]
@@ -40,6 +45,7 @@ export function parseRoute(hash: string): OrchestraRoute | null {
 }
 
 export function formatRoute(route: OrchestraRoute): string {
+  if (route.view === 'now') return `${PREFIX}now`
   const encode = (value: string) => encodeURIComponent(value)
   const path = [route.repo, route.plan, route.view, ...(route.task ? [route.task] : []), ...(route.task && route.tab ? [route.tab] : [])].map(encode).join('/')
   const query = new URLSearchParams()

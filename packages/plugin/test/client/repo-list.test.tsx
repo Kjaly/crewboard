@@ -105,9 +105,13 @@ describe('the repository row menu', () => {
   })
 
   it('marks a folder that is gone as missing and keeps it in view', async () => {
+    const user = userEvent.setup()
     const gone = listed({ root: '/gone', hasPlan: false, missing: true, tasks: [], plans: [], goal: '' })
     mount(listed(), () => jsonOk(null), gone)
-    expect(screen.getByText(/· missing/)).toBeTruthy()
+    // A gone folder is folded into the Missing section, out of the live list.
+    expect(screen.queryByText(/· missing/)).toBeNull()
+    await user.click(screen.getByRole('treeitem', { name: /Missing · 1/ }))
+    expect(await screen.findByText(/· missing/)).toBeTruthy()
     expect(sidebarTree(makeSnapshot(gone)).quiet).toHaveLength(0)
   })
 

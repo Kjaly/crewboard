@@ -22,7 +22,7 @@ function axisTicks(start: number, end: number): Array<{ at: number; label: strin
 
 export function TimelineView({ repo, selectedId, onSelect, density, onTrace, cost: given, now = new Date() }: TimelineProps) {
   const lang = useLang()
-  const fetched = usePlanCost(repo.root, given ? -1 : repo.rev)
+  const fetched = usePlanCost(repo.root, given ? -1 : repo.rev, false, repo.planId ?? '')
   const cost = given ?? fetched.cost
   // biome-ignore lint/correctness/useExhaustiveDependencies: Locale changes intentionally refresh the translated result.
   const model = useMemo(() => (cost ? planTimeline(repo, cost, now) : null), [repo, cost, now.getTime(), lang])

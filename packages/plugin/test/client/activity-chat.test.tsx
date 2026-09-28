@@ -253,4 +253,90 @@ describe('composer against the real steer API', () => {
     expect(screen.getByText(/Поправка не доставлена/)).toBeTruthy()
     expect(screen.getByTitle('steer-2')).toBeTruthy()
   })
+
+  it('keeps a refused steer\u2019s text and relaunches with it, never an empty note', async () => {
+    const user = userEvent.setup()
+    const calls = installFetch((url) => {
+      if (url.includes('/api/task')) return jsonOk(makeDetail({ id: 'a', status: 'running', runs: [RUN] }))
+      if (url.includes('/api/steer')) return jsonOk({ kind: 'steer', delivery: 'refused', state: 'refused', runId: 'r1', runState: 'running', steerId: 'steer-r', message: 'правка' })
+      if (url.includes('/api/relaunch')) return jsonOk({ runId: 'r2' })
+      return jsonOk(null)
+    })
+    const task = running()
+    render(<TaskPanel repo={makeRepo([task])} task={task} attention={[]} onSelect={() => {}} density="overview" />)
+    const field = await screen.findByRole('textbox', { name: 'Сообщение агенту' })
+    await user.type(field, 'правка')
+    await user.click(screen.getByRole('button', { name: 'Отправить' }))
+    await waitFor(() => expect(screen.getByText(/Поправка отклонена/)).toBeTruthy())
+    // A refused request keeps the submitted text so it can be corrected and retried.
+    expect((field as HTMLTextAreaElement).value).toBe('правка')
+    await user.click(screen.getByRole('button', { name: 'Перезапустить с этой поправкой' }))
+    await waitFor(() => expect(calls.filter((call: FetchCall) => call.url.includes('/api/relaunch'))).toHaveLength(1))
+    expect(calls.find((call: FetchCall) => call.url.includes('/api/relaunch'))?.body).toMatchObject({ repo: '/repo', task: 'a', note: 'правка' })
+  })
+
+  it('relaunches an abandoned queued steer from the captured text after its draft was cleared', async () => {
+    const user = userEvent.setup()
+    let steers: unknown[] = []
+    const calls = installFetch((url) => {
+      if (url.includes('/api/task')) return jsonOk(makeDetail({ id: 'a', status: 'running', runs: [RUN], steers: steers as never }))
+      if (url.includes('/api/steer')) return jsonOk({ kind: 'steer', delivery: 'delivered', state: 'queued', runId: 'r1', steerId: 'steer-q', message: 'очередь' })
+      if (url.includes('/api/relaunch')) return jsonOk({ runId: 'r2' })
+      return jsonOk(null)
+    })
+    const task = running()
+    const repo = makeRepo([task])
+    const { rerender } = render(<TaskPanel repo={repo} task={task} attention={[]} onSelect={() => {}} density="overview" />)
+    const field = await screen.findByRole('textbox', { name: 'Сообщение агенту' })
+    await user.type(field, 'очередь')
+    await user.click(screen.getByRole('button', { name: 'Отправить' }))
+    // An accepted queued write clears only the exact submitted revision.
+    await waitFor(() => expect((field as HTMLTextAreaElement).value).toBe(''))
+    expect(calls.filter((call: FetchCall) => call.url.includes('/api/relaunch'))).toHaveLength(0)
+    // The queued steer is abandoned later: the detail carries the record.
+    steers = [{ id: 'steer-q', createdAt: at(1), mode: 'auto', preview: 'очередь', text: 'очередь', file: '/f', state: 'abandoned', timestamps: { queued: at(1), abandoned: at(2) }, reason: 'run_finished' }]
+    const ended = makeTask({ id: 'a', status: 'in_review', runs: 1 })
+    rerender(<TaskPanel repo={makeRepo([ended])} task={ended} attention={[]} onSelect={() => {}} density="overview" />)
+    await waitFor(() => expect(screen.getByTitle('steer-q')).toBeTruthy())
+    rerender(<TaskPanel repo={repo} task={task} attention={[]} onSelect={() => {}} density="overview" />)
+    const relaunch = await screen.findByRole('button', { name: 'Перезапустить с этой поправкой' })
+    await user.click(relaunch)
+    await waitFor(() => expect(calls.filter((call: FetchCall) => call.url.includes('/api/relaunch'))).toHaveLength(1))
+    // The captured delivery text is the note; the cleared draft never yields an empty relaunch.
+    expect(calls.find((call: FetchCall) => call.url.includes('/api/relaunch'))?.body).toMatchObject({ note: 'очередь' })
+  })
+
+  it('keeps A\u2019s in-flight steer across B and back, and never shows it on B', async () => {
+    const user = userEvent.setup()
+    let resolve!: (value: unknown) => void
+    installFetch((url) => {
+      if (url.includes('/api/task')) return jsonOk(makeDetail({ id: url.includes('id=b') ? 'b' : 'a', status: 'running', runs: [RUN] }))
+      if (url.includes('/api/steer')) return new Promise((done) => { resolve = done })
+      return jsonOk(null)
+    })
+    const a = running()
+    const b = makeTask({ id: 'b', status: 'running', runs: 1 })
+    const repo = makeRepo([a, b])
+    const { rerender } = render(<TaskPanel repo={repo} task={a} attention={[]} onSelect={() => {}} density="overview" />)
+    const field = await screen.findByRole('textbox', { name: 'Сообщение агенту' })
+    await user.type(field, 'для A')
+    await user.click(screen.getByRole('button', { name: 'Отправить' }))
+    // B is visited while A is still in flight: it never inherits A's text or in-flight state.
+    rerender(<TaskPanel repo={repo} task={b} attention={[]} onSelect={() => {}} density="overview" />)
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Задача b' })).toBeTruthy())
+    expect((await screen.findByRole('textbox', { name: 'Сообщение агенту' }) as HTMLTextAreaElement).value).toBe('')
+    // Back to A before the answer, with a newer draft typed on top.
+    rerender(<TaskPanel repo={repo} task={a} attention={[]} onSelect={() => {}} density="overview" />)
+    const back = await screen.findByRole('textbox', { name: 'Сообщение агенту' })
+    expect((back as HTMLTextAreaElement).value).toBe('для A')
+    await user.type(back, ' A2')
+    resolve({ ok: true, status: 200, json: async () => ({ ok: true, value: { kind: 'steer', delivery: 'delivered', state: 'queued', steerId: 'steer-A', message: 'для A' } }) })
+    await waitFor(() => expect(screen.getByText(/В очереди/)).toBeTruthy())
+    // The older answer neither overwrites the newer draft nor leaks into B.
+    expect((screen.getByRole('textbox', { name: 'Сообщение агенту' }) as HTMLTextAreaElement).value).toBe('для A A2')
+    rerender(<TaskPanel repo={repo} task={b} attention={[]} onSelect={() => {}} density="overview" />)
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Задача b' })).toBeTruthy())
+    expect((screen.getByRole('textbox', { name: 'Сообщение агенту' }) as HTMLTextAreaElement).value).toBe('')
+    expect(screen.queryByText(/В очереди/)).toBeNull()
+  })
 })

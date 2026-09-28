@@ -10,7 +10,7 @@ import { PartBoundary } from './boundary.js'
 import { BUILD_ID } from '../shared/build.js'
 import { LensChip } from './lens-chips.js'
 import { RepoSidebar } from './sidebar.js'
-import { OrchestraSettings, Welcome, Tour, DraftReview, DraftJobView, ReviewView, ReviewDrilldown, TraceScreen, TaskPanel, TaskMenu, GraphView } from './lazy-views.js'
+import { OrchestraSettings, Welcome, Tour, DraftReview, DraftJobView, ReviewView, ReviewDrilldown, TraceScreen, TaskPanel, TaskMenu, GraphView, NowView } from './lazy-views.js'
 import { markTourSeen, TOUR_STEPS, tourSeen } from './tour.js'
 import { api, type DraftJobSummary, type DraftSummary, shared, taskVersion } from './api.js'
 import { ReviewQueue } from './queue.js'
@@ -18,7 +18,7 @@ import { repoName } from './review.js'
 import { reasonsText, scopeText, waitingOf } from './waiting.js'
 import { repoError } from './summary.js'
 import { ensureStyles } from './styles.js'
-import { orchestraStore, type ViewKind, useOrchestra } from './store.js'
+import { orchestraStore, shownRepo, type ViewKind, useOrchestra } from './store.js'
 import { lensTasks } from './lens.js'
 import { WorkView } from './views/work.js'
 import type { ReviewDetail } from './views/review-detail.js'
@@ -27,6 +27,7 @@ import type { MenuRequest } from './task-menu.js'
 import { formatRoute, parseRoute } from './route.js'
 import { WorkerSettingsBanner } from './worker-settings-banner.js'
 import { ProcessStatus, processStripEligible } from './process-status.js'
+import { ProjectSwitcher } from './project-switcher.js'
 
 const VIEWS: Array<{ key: ViewKind; label: string }> = [
   { key: 'graph', label: 'panel.app.graph' },
@@ -59,7 +60,11 @@ function readPlansOpen(): boolean {
 export function App() {
   useLang()
   ensureStyles()
-  const { snapshot, connection, repo, selectedId, select, view, setView, density, toggleDensity, lens, setLens, queueOpen, setQueueOpen, routeRequest, stalled, resetScreenState, lane, focusLane, laneInView, setLaneInView } = useOrchestra()
+  const { snapshot, connection, repo, selectedId, select, view, setView, density, toggleDensity, lens, setLens, queueOpen, setQueueOpen, routeRequest, stalled, resetScreenState, lane, focusLane, laneInView, setLaneInView, nowOpen, openNow, closeNow, openRemembered, browseLoading, browseError, browseRoot, retryBrowse, focus: focusRequest } = useOrchestra()
+  // The global «Now» screen is not a plan: its chrome names «All projects / Now» and hides the plan-scoped
+  // view tabs, progress strip and preset picker. The rail and the project switcher stay, so a return to the
+  // remembered plan (and its exact copy/task/tab) is one click away.
+  const global = nowOpen
   const [walk, setWalk] = useState<{ id: string; seq: number } | null>(null)
   const [menu, setMenu] = useState<MenuRequest | null>(null)
   const [multiIds, setMultiIds] = useState<string[]>([])
@@ -104,6 +109,10 @@ export function App() {
   // request for a fresh deep link.
   // biome-ignore lint/correctness/useExhaustiveDependencies: The repo/plan identity intentionally retires the request.
   useEffect(() => { setPanelTab(null) }, [repo?.root, repo?.planId])
+  // A transient task menu belongs to one root+plan: a scope change closes it, so an old P1 action cannot
+  // rebind to a same-id task in P2.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: The scope identity intentionally closes the menu.
+  useEffect(() => { setMenu(null) }, [repo?.root, repo?.planId])
   // biome-ignore lint/correctness/useExhaustiveDependencies: The selected identity and request keys intentionally control this hook’s refresh cadence.
   useEffect(() => {
     if (!routeRequest || !repo || routeRequest.route.repo !== repo.root || routeRequest.route.plan !== (repo.planId ?? '_')) return
@@ -124,7 +133,7 @@ export function App() {
     if (route.task && route.tab) setPanelTab((old) => ({ tab: route.tab as TabKey, taskId: route.task!, repoRoot: repo.root, planId: repo.planId ?? '', seq: (old?.seq ?? 0) + 1 }))
     if (!route.run || !route.task) return
     let live = true
-    void shared.task(repo.root, route.task, taskVersion(repo, route.task)).then((result) => {
+    void shared.task(repo.root, route.task, taskVersion(repo, route.task, repo.planId), repo.planId).then((result) => {
       if (!live || !result.ok) return
       const run = result.value.runs.find((item) => item.runId === route.run)
       if (!run) { orchestraStore.navigate({ run: undefined }, 'replace'); return }
@@ -174,7 +183,9 @@ export function App() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: The listed key intentionally triggers a refresh when its underlying data changes.
   useEffect(() => { setRunTrace(null) }, [repo?.root, repo?.planId])
   // biome-ignore lint/correctness/useExhaustiveDependencies: The listed key intentionally triggers a refresh when its underlying data changes.
-  useEffect(() => { setReviewStack((stack) => stack.filter((frame) => repo?.tasks.some((task) => task.id === frame.detail.taskId))) }, [repo?.root, repo?.planId])
+  // A review frame is scoped by root+plan+task: changing the scope clears the stack instead of carrying a
+  // same-id task's P1 frame into P2 (the route effect rebuilds it for the new scope when the route says so).
+  useEffect(() => { setReviewStack([]); reviewShown.current = null }, [repo?.root, repo?.planId])
   useEffect(() => {
     const onPop = () => {
       const route = parseRoute(window.location.hash)
@@ -210,6 +221,11 @@ export function App() {
       }
       return next
     }), [])
+  /** The one way into the global search: the project strip's overflow and ⌘K both land in the rail input. */
+  const openSearch = useCallback(() => {
+    if (!plansOpen) togglePlans()
+    requestAnimationFrame(() => document.querySelector<HTMLInputElement>('.orc-side__search')?.focus())
+  }, [plansOpen, togglePlans])
 
   // The lens's walking order is decided once for the whole screen: n, N and the chip's «›» all
   // follow it, and the board/console scroll to the same first match the graph flies to.
@@ -235,8 +251,7 @@ export function App() {
       // ⌘K / Ctrl+K is the global search in the sidebar — across repositories, plans and tasks.
       if ((event.metaKey || event.ctrlKey) && !event.altKey && ['k', 'K', '\u043b', '\u041b'].includes(event.key)) {
         event.preventDefault()
-        if (!plansOpen) togglePlans()
-        requestAnimationFrame(() => document.querySelector<HTMLInputElement>('.orc-side__search')?.focus())
+        openSearch()
         return
       }
       if (event.metaKey || event.ctrlKey || event.altKey) return
@@ -266,7 +281,7 @@ export function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [select, toggleDensity, trace, queueOpen, setQueueOpen, lens, setLens, setView, view, plansOpen, togglePlans])
+  }, [select, toggleDensity, trace, queueOpen, setQueueOpen, lens, setLens, setView, view, openSearch])
 
   const closeTour = () => { if (tourStep === TOUR_STEPS - 1) setWelcomeAfterTour(true); markTourSeen(); setTourStep(null) }
   // biome-ignore lint/correctness/useExhaustiveDependencies: Any move to another plan, view or task leaves the post-tour welcome.
@@ -296,10 +311,64 @@ export function App() {
   }
   if (!snapshot) return <div className="orc-root"><p className="orc-empty">{t('panel.app.loading')}</p></div>
   if (!repo) {
+    // An explicitly selected plan is read read-only; while it loads (or after a failed read) the served current
+    // plan is not shown in its place. The navigation chrome stays so the person can switch to another project
+    // or open Now, and recover without the browser Back button. No placeholder task data or run actions appear.
+    if (!browseLoading && !browseError) {
+      return (
+        <div className="orc-root">
+          <WorkerSettingsBanner issue={snapshot.workerSettings} onOpenSettings={() => setSettingsOpen(true)} />
+          <Welcome onPreset={() => {}} onExample={() => {}} onDraft={() => {}} onWorkers={() => setSettingsOpen(true)} onRepoAdded={(root) => orchestraStore.openFirstWaiting(root)} />
+        </div>
+      )
+    }
+    const targetRoot = browseRoot ?? orchestraStore.getState().repoRoot ?? ''
+    const servedForTarget = snapshot.repos.find((item) => item.root === targetRoot)
     return (
       <div className="orc-root">
-        <WorkerSettingsBanner issue={snapshot.workerSettings} onOpenSettings={() => setSettingsOpen(true)} />
-        <Welcome onPreset={() => {}} onExample={() => {}} onDraft={() => {}} onWorkers={() => setSettingsOpen(true)} onRepoAdded={(root) => orchestraStore.openFirstWaiting(root)} />
+        <div className="orc-main">
+          <WorkerSettingsBanner issue={snapshot.workerSettings} onOpenSettings={() => setSettingsOpen(true)} />
+          <header className="orc-top">
+            <span className="orc-crumb">
+              {global ? (
+                <>
+                  <span className="orc-crumb__all">{t('now.allProjects')}</span>
+                  <span className="orc-crumb__sep" aria-hidden="true">/</span>
+                  <span className="orc-crumb__scope">{t('now.title')}</span>
+                </>
+              ) : (
+                <span className="orc-crumb__repo" title={targetRoot}>{targetRoot ? repoName(targetRoot) : ''}</span>
+              )}
+            </span>
+            <span className="orc-top__spacer" />
+            <button type="button" className={`orc-chip${nowOpen ? ' orc-chip--review' : ''}`} aria-pressed={nowOpen} onClick={() => (nowOpen ? closeNow() : openNow())}>
+              <span aria-hidden="true">◉</span> {t('now.title')}
+            </button>
+          </header>
+          <ProjectSwitcher snapshot={snapshot} currentRoot={targetRoot} onOpen={(copy) => openRemembered(copy.root)} />
+          <div className="orc-body">
+            <main className="orc-view">
+              {nowOpen ? (
+                <NowView
+                  snapshot={snapshot}
+                  onOpenRow={(row) => orchestraStore.openWaiting({ root: row.root, planId: row.planId, taskId: row.taskId })}
+                  onClose={closeNow}
+                />
+              ) : browseError ? (
+                <div className="orc-broken" role="alert">
+                  <p>{t('panel.browse.failed')}</p>
+                  <div className="orc-actions">
+                    <button type="button" className="orc-chip" onClick={retryBrowse}>{t('panel.browse.retry')}</button>
+                    {servedForTarget ? <button type="button" className="orc-chip" onClick={() => orchestraStore.openPlan(targetRoot, servedForTarget.planId ?? '_')}>{t('panel.browse.showCurrent')}</button> : null}
+                    <button type="button" className="orc-chip" onClick={openNow}>{t('now.title')}</button>
+                  </div>
+                </div>
+              ) : (
+                <p className="orc-empty">{t('panel.browse.loading')}</p>
+              )}
+            </main>
+          </div>
+        </div>
       </div>
     )
   }
@@ -332,7 +401,7 @@ export function App() {
     setQueueOpen(false)
     if (changes) { setPanelTab((old) => ({ tab: 'changes', taskId: id, repoRoot: repo.root, planId: repo.planId ?? '', seq: (old?.seq ?? 0) + 1 })); orchestraStore.navigate({ task: id, tab: 'changes' }, 'replace') }
   }
-  const viewProps: ViewProps = { repo, workers: snapshot.workers, selectedId, onSelect: pick, density, lens, setLens, walk, lensStep: stepLens, toggleDensity, lane, setLane: focusLane, onLaneInView: setLaneInView }
+  const viewProps: ViewProps = { repo, workers: snapshot.workers, selectedId, onSelect: pick, density, lens, setLens, walk, focus: focusRequest, lensStep: stepLens, toggleDensity, lane, setLane: focusLane, onLaneInView: setLaneInView }
   const showTaskMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
     const origin = (event.target as HTMLElement).closest<HTMLElement>('[data-task-id]')
     const taskId = origin?.dataset.taskId
@@ -390,62 +459,82 @@ export function App() {
   return (
     /* biome-ignore lint/a11y/noStaticElementInteractions: The root delegates context menu and keyboard events to its child controls. */
     <div className={`orc-root${plansOpen ? ' orc-root--rail-open' : ' orc-root--rail-shut'}`} onContextMenu={showTaskMenu} onClickCapture={multiSelect} onKeyDown={showKeyboardMenu}>
-      <RepoSidebar snapshot={snapshot} repo={repo} open={plansOpen} onToggle={togglePlans} lanes={{ highlight: view === 'graph' ? laneInView : lane?.lane ?? null, selected: selectedId, onPick: focusLane, link: orchestraStore.laneLink }} drafts={drafts} draftJobs={draftJobs} selectedDraft={draftId} onDraft={(id) => { setDraftId(id); select(null); setQueueOpen(false); setTrace(null); orchestraStore.navigate({ draft: id, task: undefined, tab: undefined, run: undefined }) }} onPlan={() => { setDraftId(null); orchestraStore.navigate({ draft: undefined }) }} />
+      <RepoSidebar snapshot={snapshot} repo={repo} open={plansOpen} onToggle={togglePlans} onNow={openNow} nowOpen={nowOpen} lanes={{ highlight: view === 'graph' ? laneInView : lane?.lane ?? null, selected: selectedId, onPick: focusLane, link: orchestraStore.laneLink }} drafts={drafts} draftJobs={draftJobs} selectedDraft={draftId} onDraft={(id) => { setDraftId(id); select(null); setQueueOpen(false); setTrace(null); orchestraStore.navigate({ draft: id, task: undefined, tab: undefined, run: undefined }) }} onPlan={() => { setDraftId(null); orchestraStore.navigate({ draft: undefined }) }} />
       <div className="orc-main">
         <WorkerSettingsBanner issue={snapshot.workerSettings} onOpenSettings={() => { setSettingsOpen(true); orchestraStore.navigate({ view: 'settings' }) }} />
         <header className="orc-top">
-          {/* The breadcrumb replaces the repository <select>: where you are, repo / plan. */}
+          {/* The breadcrumb replaces the repository <select>: where you are, repo / plan — or «All projects / Now». */}
           <span className="orc-crumb">
-            <button type="button" className="orc-crumb__repo" title={repo.root} onClick={() => { if (!plansOpen) togglePlans() }}>
-              {repoName(repo.root)}
-            </button>
-            {repo.hasPlan !== false ? (
+            {global ? (
               <>
+                <span className="orc-crumb__all">{t('now.allProjects')}</span>
                 <span className="orc-crumb__sep" aria-hidden="true">/</span>
-                <span className="orc-goal" title={repo.goal || repo.root}>
-                  {repo.goal || repo.root}
-                </span>
+                <span className="orc-crumb__scope">{t('now.title')}</span>
               </>
-            ) : null}
+            ) : (
+              <>
+                <button type="button" className="orc-crumb__repo" title={repo.root} onClick={() => { if (!plansOpen) togglePlans() }}>
+                  {repoName(repo.root)}
+                </button>
+                {repo.hasPlan !== false ? (
+                  <>
+                    <span className="orc-crumb__sep" aria-hidden="true">/</span>
+                    <span className="orc-goal" title={repo.goal || repo.root}>
+                      {repo.goal || repo.root}
+                    </span>
+                  </>
+                ) : null}
+              </>
+            )}
           </span>
-          {repo.hasPlan !== false && repo.degraded && repo.error ? <span className="orc-conn" role="status">⚠ {repoError(repo)}</span> : null}
+          {!global && repo.hasPlan !== false && repo.degraded && repo.error ? <span className="orc-conn" role="status">⚠ {repoError(repo)}</span> : null}
 
-          <div className="orc-seg" role="radiogroup" aria-label={t('panel.app.view')}>
-            {VIEWS.map(({ key, label }) => (
-              /* biome-ignore lint/a11y/useSemanticElements: This segmented control uses styled buttons with radio state. */
-              <button key={key} type="button" role="radio" className="orc-seg__item" aria-checked={view === key} onClick={() => setView(key)}>
-                {t(label)}
-              </button>
-            ))}
-          </div>
+          {/* A global screen has no per-plan view, so its tabs and density switch stay out of the header. */}
+          {!global ? (
+            <>
+              <div className="orc-seg" role="radiogroup" aria-label={t('panel.app.view')}>
+                {VIEWS.map(({ key, label }) => (
+                  /* biome-ignore lint/a11y/useSemanticElements: This segmented control uses styled buttons with radio state. */
+                  <button key={key} type="button" role="radio" className="orc-seg__item" aria-checked={view === key} onClick={() => setView(key)}>
+                    {t(label)}
+                  </button>
+                ))}
+              </div>
 
-          <label className="orc-view-menu">
-            <span className="orc-sr-only">{t('panel.app.view')}</span>
-            <select className="orc-select" aria-label={t('panel.app.view')} value={view} onChange={(e) => setView(e.target.value as ViewKind)}>
-              {VIEWS.map(({ key, label }) => <option key={key} value={key}>{t(label)}</option>)}
-            </select>
-          </label>
+              <label className="orc-view-menu">
+                <span className="orc-sr-only">{t('panel.app.view')}</span>
+                <select className="orc-select" aria-label={t('panel.app.view')} value={view} onChange={(e) => setView(e.target.value as ViewKind)}>
+                  {VIEWS.map(({ key, label }) => <option key={key} value={key}>{t(label)}</option>)}
+                </select>
+              </label>
+            </>
+          ) : null}
 
           <span className="orc-top__spacer" />
-          {/* Status chips list what they count; a non-zero alarm never folds into a menu. */}
-          <LensChip kind="attention" count={attentionCount} repo={repo} active={lens === 'attention'} onLens={setLens} onPick={pickFromChip} />
-          {/* One running element per screen: where the process strip is eligible its Running stage
-              is the lens chip; in example/archived/partial repos the header keeps it. */}
-          {processStripEligible(repo) ? null : <LensChip kind="running" count={runningCount} repo={repo} active={lens === 'running'} onLens={setLens} onPick={pickFromChip} />}
-          <LensChip kind="ready" count={readyCount} repo={repo} active={lens === 'ready'} onLens={setLens} onPick={pickFromChip} />
+          {/* Status chips list what they count; a non-zero alarm never folds into a menu. They are
+              plan-scoped, so the global screen keeps only the connection and staleness statuses. */}
+          {!global ? (
+            <>
+              <LensChip kind="attention" count={attentionCount} repo={repo} active={lens === 'attention'} onLens={setLens} onPick={pickFromChip} />
+              {/* One running element per screen: where the process strip is eligible its Running stage
+                  is the lens chip; in example/archived/partial repos the header keeps it. */}
+              {processStripEligible(repo) ? null : <LensChip kind="running" count={runningCount} repo={repo} active={lens === 'running'} onLens={setLens} onPick={pickFromChip} />}
+              <LensChip kind="ready" count={readyCount} repo={repo} active={lens === 'ready'} onLens={setLens} onPick={pickFromChip} />
 
-          <button
-            type="button"
-            className={`orc-chip${queueCount > 0 ? ' orc-chip--review' : ' orc-chip--idle'}`}
-            aria-pressed={queueOpen}
-            title={[t('panel.app.queueTitle'), reasonsText(waiting.reasons)].filter(Boolean).join('\n')}
-            onClick={() => setQueueOpen(!queueOpen)}
-          >
-            <span aria-hidden="true">◐</span> {queueCount > 0 ? t('panel.app.queueCount', { count: scopeText(waiting) }) : t('panel.app.queueEmpty')}
-          </button>
+              <button
+                type="button"
+                className={`orc-chip${queueCount > 0 ? ' orc-chip--review' : ' orc-chip--idle'}`}
+                aria-pressed={queueOpen}
+                title={[t('panel.app.queueTitle'), reasonsText(waiting.reasons)].filter(Boolean).join('\n')}
+                onClick={() => setQueueOpen(!queueOpen)}
+              >
+                <span aria-hidden="true">◐</span> {queueCount > 0 ? t('panel.app.queueCount', { count: scopeText(waiting) }) : t('panel.app.queueEmpty')}
+              </button>
 
-          {repo.example ? null : <OutsidePresetChip tasks={repo.tasks} onPick={pickFromChip} />}
-          <PresetPickers repo={repo.root} planId={repo.planId} planTitle={repo.goal} effective={snapshot.repos.find((item) => item.root === repo.root)?.effectiveRouting} check={repo.orchestratorCheck} defaultBase={repo.defaultBase} workers={snapshot.workers} openRequest={presetOpen} onOpenSettings={() => setSettingsOpen(true)} />
+              {repo.example ? null : <OutsidePresetChip tasks={repo.tasks} onPick={pickFromChip} />}
+              <PresetPickers repo={repo.root} planId={repo.planId} planTitle={repo.goal} effective={snapshot.repos.find((item) => item.root === repo.root)?.effectiveRouting} check={repo.orchestratorCheck} defaultBase={repo.defaultBase} workers={snapshot.workers} openRequest={presetOpen} onOpenSettings={() => setSettingsOpen(true)} />
+            </>
+          ) : null}
 
           {snapshot.build && BUILD_ID !== 'dev' && snapshot.build !== BUILD_ID ? (
             <span className="orc-conn orc-conn--stale" role="status" title={t('panel.app.hostStaleHint')}>{t('panel.app.hostStale')}</span>
@@ -457,13 +546,21 @@ export function App() {
           ) : null}
         </header>
 
-        <ProcessStatus repo={repo} lens={lens} onLens={setLens} onPick={pickFromChip} />
+        {/* One canonical project switcher above the content — the same compact strip in «Now» and in a plan. */}
+        <ProjectSwitcher snapshot={snapshot} currentRoot={repo.root} onOpen={(copy) => openRemembered(copy.root)} onMore={openSearch} />
+        {!global ? <ProcessStatus repo={repo} lens={lens} onLens={setLens} onPick={pickFromChip} /> : null}
         <div className="orc-body">
-          <main ref={reviewMain} className={`orc-view${view === 'graph' && !trace && !draftId && !settingsOpen && !welcomeMode ? ' orc-view--bleed' : ''}`}>
+          <main ref={reviewMain} className={`orc-view${view === 'graph' && !trace && !draftId && !settingsOpen && !welcomeMode && !nowOpen ? ' orc-view--bleed' : ''}`}>
             <PartBoundary area={t('panel.app.areaMain')}>
-            {settingsOpen ? <SettingsScreen onClose={() => { setSettingsOpen(false); orchestraStore.navigate({ view: 'graph' }) }} /> : !draftId && !trace && welcomeMode ? <Welcome repo={repo} mode={welcomeMode} onTaskAdded={(id) => select(id)} onPreset={() => setPresetOpen((n) => n + 1)} onExample={() => { void api.exampleCreate(repo.root, getLang()).then((r) => { if (r.ok) { setTourStep(0); setView('graph') } }) }} onDraft={(id) => { setDraftId(id); orchestraStore.navigate({ draft: id }) }} onWorkers={() => { setSettingsOpen(true); orchestraStore.navigate({ view: 'settings' }) }} /> : draftId && selectedJob ? <DraftJobView key={`${repo.root}:${draftId}`} repo={repo.root} job={selectedJob} onDraft={openDraft} onClose={() => { setDraftId(null); orchestraStore.navigate({ draft: undefined }) }} onDiscarded={() => { setDraftId(null); setDraftRefresh((n) => n + 1); orchestraStore.navigate({ draft: undefined }) }} /> : draftId?.startsWith('dj-') ? null : draftId ? <DraftReview key={`${repo.root}:${draftId}`} repo={repo.root} id={draftId} onClose={() => { setDraftId(null); orchestraStore.navigate({ draft: undefined }) }} onDiscarded={() => { setDraftId(null); setDraftRefresh((n) => n + 1); orchestraStore.navigate({ draft: undefined }) }} onApproved={() => { setDraftId(null); setDraftRefresh((n) => n + 1); orchestraStore.navigate({ draft: undefined }) }} /> : trace ? (
+            {nowOpen ? (
+              <NowView
+                snapshot={snapshot}
+                onOpenRow={(row) => orchestraStore.openWaiting({ root: row.root, planId: row.planId, taskId: row.taskId })}
+                onClose={closeNow}
+              />
+            ) : settingsOpen ? <SettingsScreen onClose={() => { setSettingsOpen(false); orchestraStore.navigate({ view: 'graph' }) }} /> : !draftId && !trace && welcomeMode ? <Welcome repo={repo} mode={welcomeMode} onTaskAdded={(id) => select(id)} onPreset={() => setPresetOpen((n) => n + 1)} onExample={() => { void api.exampleCreate(repo.root, getLang()).then((r) => { if (r.ok) { setTourStep(0); setView('graph') } }) }} onDraft={(id) => { setDraftId(id); orchestraStore.navigate({ draft: id }) }} onWorkers={() => { setSettingsOpen(true); orchestraStore.navigate({ view: 'settings' }) }} /> : draftId && selectedJob ? <DraftJobView key={`${repo.root}:${draftId}`} repo={repo.root} job={selectedJob} onDraft={openDraft} onClose={() => { setDraftId(null); orchestraStore.navigate({ draft: undefined }) }} onDiscarded={() => { setDraftId(null); setDraftRefresh((n) => n + 1); orchestraStore.navigate({ draft: undefined }) }} /> : draftId?.startsWith('dj-') ? null : draftId ? <DraftReview key={`${repo.root}:${draftId}`} repo={repo.root} id={draftId} onClose={() => { setDraftId(null); orchestraStore.navigate({ draft: undefined }) }} onDiscarded={() => { setDraftId(null); setDraftRefresh((n) => n + 1); orchestraStore.navigate({ draft: undefined }) }} onApproved={() => { setDraftId(null); setDraftRefresh((n) => n + 1); orchestraStore.navigate({ draft: undefined }) }} /> : trace ? (
               <TraceScreen
-                repo={snapshot.repos.find((item) => item.root === repo.root) ?? repo}
+                repo={repo}
                 workers={snapshot.workers}
                 target={trace}
                 density={density}
@@ -475,7 +572,7 @@ export function App() {
               />
             ) : (
               <>
-                {view === 'graph' ? <GraphView {...viewProps} /> : null}
+                {view === 'graph' ? <GraphView key={`${repo.root}\n${repo.planId ?? ''}`} {...viewProps} /> : null}
                 {view === 'work' ? <WorkView {...viewProps} onOpenQueue={() => setQueueOpen(true)} /> : null}
                 {view === 'review' ? <><div style={{ display: currentReview && !reviewBeside ? 'none' : undefined }}><ReviewView {...viewProps} waiting={waiting} selectedRunId={reviewBeside && currentReview?.detail.kind === 'run' ? currentReview.detail.runId : undefined} detail={reviewBeside ? reviewDrilldown : undefined} onTrace={(target) => { setTrace(target); orchestraStore.navigate({ task: target.taskId, run: target.run.runId }) }} onReviewRun={(run, summary) => { document.querySelectorAll('[data-review-origin]').forEach((node) => { node.removeAttribute('data-review-origin') }); document.querySelector(`[data-review-run="${CSS.escape(run.runId)}"]`)?.setAttribute('data-review-origin', 'true'); const replace = !!reviewBeside && reviewStackRef.current.length === 1; if (!replace) pick(run.taskId); pushReview({ detail: { kind: 'run', taskId: run.taskId, runId: run.runId, expanded: false }, run, summary }, replace) }} onReviewTask={(taskId, summary) => { document.querySelectorAll('[data-review-origin]').forEach((node) => { node.removeAttribute('data-review-origin') }); document.querySelector(`[data-review-task="${CSS.escape(taskId)}"]`)?.setAttribute('data-review-origin', 'true'); pick(taskId); pushReview({ detail: { kind: 'task', taskId }, summary }) }} /></div>{currentReview && !reviewBeside ? reviewDrilldown : null}</> : null}
               </>
@@ -483,11 +580,11 @@ export function App() {
           </PartBoundary>
           </main>
           <PartBoundary area={t('panel.app.areaSide')}>
-          {queueOpen ? (
+          {nowOpen ? null : queueOpen ? (
             <ReviewQueue repo={repo} onOpenTask={openTask} onClose={() => setQueueOpen(false)} />
           ) : selected && !currentReview && tourStep !== 3 ? (
             <TaskPanel
-              repo={snapshot.repos.find((item) => item.root === repo.root) ?? repo}
+              repo={repo}
               workers={snapshot.workers}
               task={selected}
               attention={repo.attention.filter((a) => a.taskId === selected.id)}
@@ -504,7 +601,7 @@ export function App() {
         </div>
       </div>
       {tourStep !== null && repo.example ? <Tour step={tourStep} onStep={moveTour} onClose={closeTour} /> : null}
-      {menu && !repo.example ? <TaskMenu key={`${menu.taskId}:${menu.x}:${menu.y}`} request={menu} repo={repo} workers={snapshot.workers} onClose={() => setMenu(null)} onSelect={pick} onTab={(tab) => setPanelTab((old) => ({ tab, taskId: menu.taskId, repoRoot: repo.root, planId: repo.planId ?? '', seq: (old?.seq ?? 0) + 1 }))} onTrace={(known?: TaskDetail) => { const show = (detail: TaskDetail) => { const run = detail.runs.at(-1); if (run) setTrace({ taskId: detail.id, taskTitle: detail.title, run: { runId: run.runId, agent: run.agent, startedAt: run.startedAt, active: !run.finishedAt } }) }; if (known) show(known); else void shared.task(repo.root, menu.taskId, taskVersion(repo, menu.taskId)).then((result) => { if (result.ok) show(result.value) }) }} onGraph={() => { setView('graph'); pick(menu.taskId); setWalk((old) => ({ id: menu.taskId, seq: (old?.seq ?? 0) + 1 })) }} /> : null}
+      {menu && !repo.example ? <TaskMenu key={`${repo.root}:${repo.planId ?? ''}:${menu.taskId}:${menu.x}:${menu.y}`} request={menu} repo={repo} workers={snapshot.workers} onClose={() => setMenu(null)} onSelect={pick} onTab={(tab) => setPanelTab((old) => ({ tab, taskId: menu.taskId, repoRoot: repo.root, planId: repo.planId ?? '', seq: (old?.seq ?? 0) + 1 }))} onTrace={(known?: TaskDetail) => { const show = (detail: TaskDetail) => { const run = detail.runs.at(-1); if (run) setTrace({ taskId: detail.id, taskTitle: detail.title, run: { runId: run.runId, agent: run.agent, startedAt: run.startedAt, active: !run.finishedAt } }) }; if (known) show(known); else { const capturedRoot = repo.root; const capturedPlan = repo.planId ?? ''; const capturedIntent = orchestraStore.getState().routeRequest?.seq; void shared.task(repo.root, menu.taskId, taskVersion(repo, menu.taskId, repo.planId), repo.planId).then((result) => { const state = orchestraStore.getState(); const active = shownRepo(state); if (result.ok && !state.nowOpen && state.routeRequest?.seq === capturedIntent && active && active.root === capturedRoot && (active.planId ?? '') === capturedPlan && active.tasks.some((task) => task.id === menu.taskId)) show(result.value) }) } }} onGraph={() => { setView('graph'); pick(menu.taskId); setWalk((old) => ({ id: menu.taskId, seq: (old?.seq ?? 0) + 1 })) }} /> : null}
     </div>
   )
 }

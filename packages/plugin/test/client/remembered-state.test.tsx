@@ -4,12 +4,11 @@
 // stale, corrupted or throwing — the snapshot must reach the screen and a plan must show.
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api } from '../../src/client/api.js'
 import { App } from '../../src/client/app.js'
 import { setLang, t } from '../../src/client/i18n.js'
 import { formatRoute } from '../../src/client/route.js'
 import { STALL_MS, orchestraStore, resetOrchestraStore, useOrchestra } from '../../src/client/store.js'
-import { FakeEventSource, ROOT, installEventSource, installFetch, jsonOk, makeRepo, makeSnapshot, makeTask } from './helpers.js'
+import { FakeEventSource, ROOT, installEventSource, installFetch, jsonFail, jsonOk, makeRepo, makeSnapshot, makeTask } from './helpers.js'
 
 const repo = makeRepo([makeTask({ id: 'a' }), makeTask({ id: 'b' })], [], { planId: 'p' })
 const snapshot = makeSnapshot(repo)
@@ -46,7 +45,7 @@ describe('stale and corrupted remembered values on a bare route', () => {
     ['a repository spelled another way (rg1)', { 'crewboard:repo': '/private/repo' }, 'цель плана|-|graph|overview|-'],
     ['a route that is not a route', { 'crewboard:repo': ROOT, [`crewboard:route:${ROOT}`]: 'not a route' }, 'цель плана|-|graph|overview|-'],
     ['a route with broken encoding', { 'crewboard:repo': ROOT, [`crewboard:route:${ROOT}`]: '#orchestra/%E0%A4%A/p/graph' }, 'цель плана|-|graph|overview|-'],
-    ['a route to a removed plan and task', { 'crewboard:repo': ROOT, [`crewboard:route:${ROOT}`]: formatRoute({ repo: ROOT, plan: 'gone', view: 'work', task: 'zzz' }) }, 'цель плана|-|work|overview|-'],
+    ['a route to a removed plan and task', { 'crewboard:repo': ROOT, [`crewboard:route:${ROOT}`]: formatRoute({ repo: ROOT, plan: 'gone', view: 'work', task: 'zzz' }) }, 'нет плана|-|graph|overview|-'],
     ['a route with unknown view, tab and lens', { 'crewboard:repo': ROOT, [`crewboard:route:${ROOT}`]: '#orchestra/%2Frepo/p/banana/a/nope?lens=nope' }, 'цель плана|a|graph|overview|-'],
     ['a removed task selection', { [`crewboard:task:${scope}`]: 'zzz' }, 'цель плана|-|graph|overview|-'],
     ['unknown view, density and lens', { [`crewboard:view:${scope}`]: 'banana', [`crewboard:density:${scope}`]: 'huge', [`crewboard:lens:${scope}`]: 'nope' }, 'цель плана|-|graph|overview|-'],
@@ -57,9 +56,8 @@ describe('stale and corrupted remembered values on a bare route', () => {
     expect(probe()).toBe(expected)
   })
 
-  it('a route whose restore throws is forgotten and told once; the snapshot is still shown', async () => {
-    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
-    vi.spyOn(api, 'planUse').mockImplementation(() => { throw new Error('boom') })
+  it('a failed selected-plan read is shown and the current plan is not silently shown', async () => {
+    const calls = installFetch((url) => (url.includes('/plan-state') ? jsonFail('bad_plan', 400) : jsonOk(snapshot)))
     const withPlans = makeSnapshot({ ...repo, plans: [{ id: 'p', current: true }, { id: 'p2' }] as never })
     localStorage.setItem('crewboard:repo', ROOT)
     localStorage.setItem(`crewboard:route:${ROOT}`, formatRoute({ repo: ROOT, plan: 'p2', view: 'work', task: 'a' }))
@@ -70,13 +68,14 @@ describe('stale and corrupted remembered values on a bare route', () => {
       await act(async () => { FakeEventSource.last?.emit('snapshot', withPlans) })
       await act(async () => {})
     }
-    expect(probe()).toBe('цель плана|-|graph|overview|-')
-    expect(localStorage.getItem(`crewboard:route:${ROOT}`)).toBeNull()
-    expect(errors).toHaveBeenCalledTimes(1)
-    expect(String(errors.mock.calls[0]?.[0])).toContain(`crewboard:route:${ROOT}`)
+    // The selected plan failed to read: the served current plan is not shown in its place, and no pointer move was asked.
+    expect(probe()).toBe('нет плана|-|graph|overview|-')
+    expect(orchestraStore.getState().browse?.error).toBe('bad_plan')
+    expect(orchestraStore.getState().repoRoot).toBe(ROOT)
+    expect(calls.some((call) => call.url.endsWith('/plan-use'))).toBe(false)
   })
 
-  it('a remembered route to another plan asks the host to switch after the first snapshot', async () => {
+  it('a remembered route to another plan reads it read-only and never calls plan-use', async () => {
     const calls = installFetch(() => jsonOk(snapshot))
     const withPlans = makeSnapshot({ ...repo, plans: [{ id: 'p', current: true }, { id: 'p2' }] as never })
     localStorage.setItem('crewboard:repo', ROOT)
@@ -86,11 +85,14 @@ describe('stale and corrupted remembered values on a bare route', () => {
     render(<Probe />)
     await act(async () => { FakeEventSource.last?.emit('snapshot', withPlans) })
     await act(async () => {})
-    expect(calls.filter((call) => call.url.endsWith('/plan-use')).map((call) => call.body)).toEqual([{ repo: ROOT, plan: 'p2' }])
-    // Further frames on the old plan wait for the switch instead of asking again.
+    expect(calls.some((call) => call.url.endsWith('/plan-use'))).toBe(false)
+    const reads = calls.filter((call) => call.url.includes('/plan-state'))
+    expect(reads).toHaveLength(1)
+    expect(reads[0]?.url).toContain('plan=p2')
+    // Further frames at the same generation do not re-ask: one selected plan on demand, never all plans.
     await act(async () => { FakeEventSource.last?.emit('snapshot', withPlans) })
     await act(async () => {})
-    expect(calls.filter((call) => call.url.endsWith('/plan-use'))).toHaveLength(1)
+    expect(calls.filter((call) => call.url.includes('/plan-state'))).toHaveLength(1)
   })
 })
 

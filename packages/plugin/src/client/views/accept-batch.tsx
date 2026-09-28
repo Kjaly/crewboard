@@ -108,7 +108,7 @@ function Sheet({
   const box = useRef<HTMLDivElement>(null)
   const prefix = useId()
   const action = useAction()
-  const { cost } = usePlanCost(repo.root, repo.rev)
+  const { cost } = usePlanCost(repo.root, repo.rev, false, repo.planId ?? '')
   // biome-ignore lint/correctness/useExhaustiveDependencies: Locale changes intentionally refresh the translated result.
   const waits = useMemo(() => waitLabels(cost, new Date()), [cost, lang])
   const loaded = tasks.every((task) => task.id in verdicts)
@@ -124,12 +124,12 @@ function Sheet({
     let live = true
     setVerdicts({})
     void Promise.all(tasks.map(async (task) => {
-      const result = await api.task(repo.root, task.id).catch(() => null)
+      const result = await api.task(repo.root, task.id, repo.planId).catch(() => null)
       // A decision has no verdict (B05); for other work a failed read is «unknown», which is at risk.
       return [task.id, result?.ok ? result.value.verdict : null] as const
     })).then((entries) => { if (live) setVerdicts(Object.fromEntries(entries)) })
     return () => { live = false }
-  }, [repo.root, repo.rev, tasks])
+  }, [repo.root, repo.planId, repo.rev, tasks])
 
   useLayoutEffect(() => {
     if (anchor.current) setPlacement(place(anchor.current))
@@ -166,7 +166,7 @@ function Sheet({
   const setAll = (on: boolean) => setFlipped(new Set(tasks.filter((task) => clean(task) !== on).map((task) => task.id)))
 
   const send = async () => {
-    if ((await action.call(() => api.acceptBatch(repo.root, chosen.map((task) => task.id)))) === true) onClose()
+    if ((await action.call(() => api.acceptBatch(repo.root, chosen.map((task) => task.id), repo.planId))) === true) onClose()
   }
 
   const riskOf = (task: TaskSnapshot): string | null => {

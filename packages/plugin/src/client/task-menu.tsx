@@ -49,9 +49,9 @@ export function TaskMenu({ request, repo, workers, onClose, onSelect, onTab, onT
   // biome-ignore lint/correctness/useExhaustiveDependencies: The listed key intentionally triggers a refresh when its underlying data changes.
   useEffect(() => {
     let alive = true
-    void shared.task(repo.root, request.taskId, taskVersion(repo, request.taskId)).then((result) => { if (alive && result.ok) setDetail(result.value) })
+    void shared.task(repo.root, request.taskId, taskVersion(repo, request.taskId, repo.planId), repo.planId).then((result) => { if (alive && result.ok) setDetail(result.value) })
     return () => { alive = false }
-  }, [repo.root, request.taskId, repo.rev])
+  }, [repo.root, repo.planId, request.taskId, repo.rev])
   // biome-ignore lint/correctness/useExhaustiveDependencies: The listed key intentionally triggers a refresh when its underlying data changes.
   useLayoutEffect(() => {
     const rect = box.current?.getBoundingClientRect()
@@ -83,25 +83,25 @@ export function TaskMenu({ request, repo, workers, onClose, onSelect, onTab, onT
     const selected = request.selectedIds.map((id) => repo.tasks.find((item) => item.id === id)).filter((item): item is TaskSnapshot => !!item)
     const batch: Item[] = []
     // dc1: a decision never closes in a batch — it is confirmed one by one in its panel.
-    if (selected.length > 1 && selected.every((item) => waitsForHuman(item) && item.kind !== 'decision')) batch.push({ label: t('menu.acceptSelected'), action: () => act(() => api.acceptBatch(repo.root, selected.map((item) => item.id))) })
+    if (selected.length > 1 && selected.every((item) => waitsForHuman(item) && item.kind !== 'decision')) batch.push({ label: t('menu.acceptSelected'), action: () => act(() => api.acceptBatch(repo.root, selected.map((item) => item.id), repo.planId)) })
     batch.push({ label: t('menu.highlight'), action: () => { onGraph(); close() } })
     groups.push(batch)
   } else {
   const main: Item[] = []
   // A decision the orchestrator still prepares is not the person's to close yet (rt1).
   if (task.status === 'in_review' || (task.kind === 'decision' && task.needsHuman && !task.preparing)) {
-    main.push({ label: t('menu.accept'), action: () => act(() => api.accept(repo.root, task.id)) }, { label: t('menu.return'), action: () => setForm('return') })
+    main.push({ label: t('menu.accept'), action: () => act(() => api.accept(repo.root, task.id, repo.planId)) }, { label: t('menu.return'), action: () => setForm('return') })
   }
   if (task.lastRunId && task.lastOutcome) main.push({ label: t('menu.report'), action: () => openTab('overview') })
   // No worker is launched for a decision or the orchestrator's own work (rt1).
   if ((task.status === 'ready' || task.returned) && !isOwnWork(task.kind)) {
-    main.push({ label: t('menu.launch'), action: () => act(() => api.run(repo.root, task.id)) })
+    main.push({ label: t('menu.launch'), action: () => act(() => api.run(repo.root, task.id, undefined, undefined, undefined, repo.planId)) })
     main.push({ label: t('menu.launchWorker'), action: () => setSubmenu(true), children: [
-      { label: t('panel.task.auto'), action: () => act(() => api.run(repo.root, task.id)) },
-      ...(repo.effectiveRouting?.routing[classOfTask(task)] ?? workerOptions(task.worker ?? 'dsh', workers)).map((worker) => ({ label: identityLabel(workerIdentity(worker, workers)), action: () => act(() => api.run(repo.root, task.id, worker)) })),
+      { label: t('panel.task.auto'), action: () => act(() => api.run(repo.root, task.id, undefined, undefined, undefined, repo.planId)) },
+      ...(repo.effectiveRouting?.routing[classOfTask(task)] ?? workerOptions(task.worker ?? 'dsh', workers)).map((worker) => ({ label: identityLabel(workerIdentity(worker, workers)), action: () => act(() => api.run(repo.root, task.id, worker, undefined, undefined, repo.planId)) })),
     ] })
   }
-  if (task.status === 'running' && !task.byOrchestrator) main.push({ label: t('menu.direction'), action: () => setForm('steer') }, { label: t('panel.task.stop'), action: () => act(() => api.stop(repo.root, task.id)) })
+  if (task.status === 'running' && !task.byOrchestrator) main.push({ label: t('menu.direction'), action: () => setForm('steer') }, { label: t('panel.task.stop'), action: () => act(() => api.stop(repo.root, task.id, repo.planId)) })
   if ((task.lastOutcome === 'failed' || task.lastOutcome === 'incomplete' || task.returned) && !isOwnWork(task.kind)) main.push({ label: t('menu.relaunch'), action: () => setForm('relaunch') })
   if (main.length) groups.push(main)
   const look: Item[] = []
@@ -116,8 +116,8 @@ export function TaskMenu({ request, repo, workers, onClose, onSelect, onTab, onT
     { label: t('menu.askAgent'), action: async () => { const prompt = `${t('menu.chatPrompt')}\n${t('menu.chatTask')}: ${task.id} — ${task.title}\n${t('menu.chatVerdict')}: ${detail?.verdict?.kind ?? t('menu.chatUnknown')}\n${t('menu.chatReport')}: ${detail?.report?.text.slice(0, 900) ?? t('menu.chatNoReport')}\n${t('menu.chatFindings')}: ${detail?.verdict?.facts.map((fact) => fact.text ?? fact.code).join('; ') || t('menu.chatNone')}\n${t('menu.chatTool')}`; await act(async () => { const result = await api.chatOpen(repo.root, repo.planId, prompt); if (result.ok) await openSession(result.value.sessionId); return result }) } },
   ])
   if (detail?.worktree) groups.push([
-    { label: t('menu.openEditor'), action: () => act(() => api.worktreeOpen(repo.root, task.id, false)) },
-    { label: t('menu.revealFinder'), action: () => act(() => api.worktreeOpen(repo.root, task.id, true)) },
+    { label: t('menu.openEditor'), action: () => act(() => api.worktreeOpen(repo.root, task.id, false, repo.planId)) },
+    { label: t('menu.revealFinder'), action: () => act(() => api.worktreeOpen(repo.root, task.id, true, repo.planId)) },
   ])
   const copy: Item[] = [
     { label: t('menu.copyLink'), action: () => { void navigator.clipboard.writeText(orchestraStore.taskLink(task.id)); close() } },
@@ -126,8 +126,8 @@ export function TaskMenu({ request, repo, workers, onClose, onSelect, onTab, onT
   ]
   groups.push(copy)
   const plan: Item[] = []
-  if (task.status === 'ready') plan.push({ label: t('menu.backlog'), action: () => act(() => api.taskStatus(repo.root, task.id, 'backlog')) })
-  if (task.status === 'backlog') plan.push({ label: t('menu.ready'), action: () => act(() => api.taskStatus(repo.root, task.id, 'ready')) })
+  if (task.status === 'ready') plan.push({ label: t('menu.backlog'), action: () => act(() => api.taskStatus(repo.root, task.id, 'backlog', repo.planId)) })
+  if (task.status === 'backlog') plan.push({ label: t('menu.ready'), action: () => act(() => api.taskStatus(repo.root, task.id, 'ready', repo.planId)) })
   if (task.status !== 'superseded' && task.status !== 'dropped' && task.status !== 'running') plan.push({ label: t('menu.supersede'), action: () => { setDepends(false); setForm('replace') } })
   // w1f: a task no longer needed is closed for good; the host asks the person to confirm (human-only, like reject).
   if (task.status !== 'accepted' && task.status !== 'closed' && task.status !== 'superseded' && task.status !== 'dropped' && task.status !== 'running') plan.push({ label: t('menu.drop'), action: () => setForm('drop') })
@@ -147,7 +147,7 @@ export function TaskMenu({ request, repo, workers, onClose, onSelect, onTab, onT
     const id = nextTaskId(title, repo.tasks)
     setBusy(true); setError('')
     try {
-      const result = await api.taskUpsert(repo.root, { id, parent: task.id, title: title.trim(), class: taskClass, lane, depends, note, replace: form === 'replace' })
+      const result = await api.taskUpsert(repo.root, { id, parent: task.id, title: title.trim(), class: taskClass, lane, depends, note, replace: form === 'replace' }, repo.planId)
       if (!result.ok) { setError(result.message ?? result.error); return }
       onSelect(id); close()
     } catch (cause) { setError(String(cause)) }
@@ -165,10 +165,10 @@ export function TaskMenu({ request, repo, workers, onClose, onSelect, onTab, onT
       <textarea aria-label={form === 'drop' ? t('menu.dropReason') : form === 'return' ? t('panel.task.reasonLabel') : form === 'steer' ? t('panel.task.steerLabel') : t('menu.note')} placeholder={form === 'drop' ? t('menu.dropReason') : form === 'return' ? t('panel.task.reasonPlaceholder') : form === 'steer' ? t('panel.task.steerPlaceholder') : t('menu.note')} value={note} onChange={(event) => setNote(event.target.value)} />
       <div className="orc-task-menu__buttons"><button type="button" disabled={busy || ((form === 'follow' || form === 'replace') ? !title.trim() : !note.trim())} onClick={() => {
         if (form === 'follow' || form === 'replace') void create()
-        else if (form === 'steer') void act(() => api.steer(repo.root, task.id, note.trim()))
-        else if (form === 'return') void act(() => api.reject(repo.root, task.id, note.trim()))
-        else if (form === 'drop') void act(() => api.drop(repo.root, task.id, note.trim()))
-        else void act(() => api.relaunch(repo.root, task.id, { note: note.trim() }))
+        else if (form === 'steer') void act(() => api.steer(repo.root, task.id, note.trim(), repo.planId))
+        else if (form === 'return') void act(() => api.reject(repo.root, task.id, note.trim(), undefined, repo.planId))
+        else if (form === 'drop') void act(() => api.drop(repo.root, task.id, note.trim(), repo.planId))
+        else void act(() => api.relaunch(repo.root, task.id, { note: note.trim() }, repo.planId))
       }}>{t(form === 'drop' ? 'menu.dropConfirm' : 'menu.confirm')}</button><button type="button" onClick={close}>{t('panel.task.cancel')}</button></div>
     </div> : submenu ? items.map((item, i) => <button key={item.label} type="button" role="menuitem" tabIndex={i === index ? 0 : -1} onMouseEnter={() => setIndex(i)} onClick={() => void item.action()}>{item.label}</button>) : groups.map((group, gi) => <div key={gi} className="orc-task-menu__group">{group.map((item) => { const i = items.indexOf(item); return <button key={item.label} type="button" role="menuitem" tabIndex={i === index ? 0 : -1} onMouseEnter={() => setIndex(i)} onClick={() => void item.action()}>{item.label}{item.children ? ' ▸' : null}</button> })}</div>)}
     {error ? <p role="alert" className="orc-error">{error}</p> : null}

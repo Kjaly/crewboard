@@ -21,7 +21,8 @@ const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
 // packing is unchanged (exact file sets, no sources/tests/node_modules, classic-zod and tree-shaking guards hold).
 const TARBALL_CEILING_KIB = { cli: 224, plugin: 951 }
 // The always-loaded client bundle: measured 296.0 KiB plus ~5% (2026-09-24, after opt2), as in the plugin build test.
-const CLIENT_CEILING_KIB = 352 // re-measured after wave 2 (2026-09-25): 334.8 KiB; 346.9 KiB on 2026-09-28, still under
+// Navigation stage (2026-09-28): the Now screen is lazy, the compact project switcher is not; measured 369.0 KiB → 388.
+const CLIENT_CEILING_KIB = 388 // re-measured after wave 2 (2026-09-25): 334.8 KiB; 346.9 KiB on 2026-09-28, 369.0 after navigation
 const temp = await mkdtemp(join(tmpdir(), 'crewboard-release-'))
 const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { cwd: root, stdio: 'inherit', ...opts })
 try {
@@ -41,7 +42,7 @@ try {
     if (forbidden.length) throw new Error(`${pkg.name} contains excluded files: ${forbidden.join(', ')}`)
     const expected = dir === 'cli'
       ? ['dist/main.js', 'dist/dict-ru.js', 'dist/runner-main.js', 'dist/cli-runner-main.js', 'README.md', 'LICENSE']
-      : ['lib/index.js', 'lib/runner-main.js', 'lib/cli-runner-main.js', 'lib/client.js', 'lib/elk.js', 'lib/dict-en.js', 'lib/dict-ru.js', 'lib/preview-dxf.js', 'lib/preview-structured.js', 'cordis.patch.yml', 'README.md', 'LICENSE', ...['review','welcome','settings','draft','ledger','trace','task'].map(n => `lib/screen-${n}.js`)]
+      : ['lib/index.js', 'lib/runner-main.js', 'lib/cli-runner-main.js', 'lib/client.js', 'lib/elk.js', 'lib/dict-en.js', 'lib/dict-ru.js', 'lib/preview-dxf.js', 'lib/preview-structured.js', 'cordis.patch.yml', 'README.md', 'LICENSE', ...['review','welcome','settings','draft','ledger','trace','task','now'].map(n => `lib/screen-${n}.js`)]
     for (const name of expected) if (!listing.includes(name)) throw new Error(`${pkg.name} missing required tarball file ${name}`)
     // The CLI ships exactly its bundle and runners: anything else is a stale build leftover.
     if (dir === 'cli') {

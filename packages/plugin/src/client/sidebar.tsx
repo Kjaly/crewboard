@@ -28,12 +28,14 @@ import {
   planRowKey,
   readSideFolds,
   rowState,
+  SEARCH_LIMIT,
   searchSnapshot,
   shiftRow,
+  shortPathHints,
   sidebarTree,
   writeSideFolds,
 } from './sidebar-model.js'
-import { orchestraStore } from './store.js'
+import { familyCopyOf, orchestraStore } from './store.js'
 import { attentionText } from './summary.js'
 import { reasonsText, reasonTag, scopeText } from './waiting.js'
 import { waitingCounts } from '../../../core/src/orchestration/needs-you.js'
@@ -110,6 +112,12 @@ const HiddenGlyph = () => (
     <path d="M3.2 12.9 12.8 3.1" />
   </svg>
 )
+const MissingGlyph = () => (
+  <svg {...GLYPH_PROPS} aria-hidden="true">
+    <path d="M2.7 4.6h4.1l1.1 1.4h5.4v6.6H2.7z" />
+    <path d="M8 7.6v3.1M8 12.1h.01" />
+  </svg>
+)
 const EllipsisGlyph = () => (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
     <circle cx="3.6" cy="8" r="1.25" />
@@ -118,13 +126,15 @@ const EllipsisGlyph = () => (
   </svg>
 )
 
-type StateCounts = { running: number; waiting: number; failed: number }
+type StateCounts = { running: number; waiting: number; failed: number; checking: number; unmerged: number }
 
 /** The counts behind the one status mark, spelled out for the tooltip and the screen reader. */
 const statusLabel = (counts: StateCounts): string =>
   [
     counts.running > 0 ? t('side.badge.running', { count: counts.running }) : '',
+    counts.checking > 0 ? t('side.badge.checking', { count: counts.checking }) : '',
     counts.waiting > 0 ? t('panel.app.repoWaiting', { count: counts.waiting }) : '',
+    counts.unmerged > 0 ? t('side.badge.unmerged', { count: counts.unmerged }) : '',
     counts.failed > 0 ? t('side.badge.failed', { count: counts.failed }) : '',
   ]
     .filter(Boolean)
@@ -384,6 +394,9 @@ export function RepoSidebar(props: {
   selectedDraft?: string | null
   onDraft?(id: string): void
   onPlan?(): void
+  /** Opens the global «Now» screen from the rail; the button shows its active state. */
+  onNow?(): void
+  nowOpen?: boolean
   /** The open plan's lane tree: which lane to highlight, what a click does, the lane's link. */
   lanes?: { highlight: string | null; selected?: string | null; onPick(lane: string): void; link(lane: string): string }
 }) {
@@ -394,6 +407,8 @@ export function RepoSidebar(props: {
   const action = useAction()
   const [query, setQuery] = useState('')
   const [hitIndex, setHitIndex] = useState(0)
+  /** The full match list is always computed; this only reveals the part behind «Show more». */
+  const [hitShowAll, setHitShowAll] = useState(false)
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [renameKey, setRenameKey] = useState<string | null>(null)
   const [composerFor, setComposerFor] = useState<string | null>(null)
@@ -413,6 +428,8 @@ export function RepoSidebar(props: {
   }, [snapshot.order, optimistic])
 
   const tree = useMemo(() => sidebarTree(snapshot, Date.now(), order), [snapshot, order])
+  // Folded Missing rows share labels: the shortest distinguishing path tail tells two «repo» folders apart.
+  const missingHints = useMemo(() => shortPathHints(tree.missing), [tree.missing])
   const inbox = useMemo(() => inboxItems(snapshot, { root: repo.root, planId: repo.planId }), [snapshot, repo.root, repo.planId])
   // The heading names its scope (at2): «in this plan 7 · all 13», the same numbers as the tab, the toasts, the chip and Review.
   const waiting = useMemo(() => waitingCounts(inbox, { root: repo.root, planId: repo.planId }), [inbox, repo.root, repo.planId])
@@ -420,7 +437,9 @@ export function RepoSidebar(props: {
   const inboxRows = useMemo(() => splitInbox(inbox), [inbox])
   const groups = useMemo(() => ({ real: inboxGroups(inboxRows.real), example: inboxGroups(inboxRows.example) }), [inboxRows])
   const [inboxMore, setInboxMore] = useState<Record<string, boolean>>({})
-  const hits = useMemo(() => searchSnapshot(snapshot, query), [snapshot, query])
+  const allHits = useMemo(() => searchSnapshot(snapshot, query), [snapshot, query])
+  // The total is always the full count; «Show more» reveals the rest so no match is unreachable.
+  const hits = hitShowAll ? allHits : allHits.slice(0, SEARCH_LIMIT)
 
   const isOpen = (key: string, fallback: boolean) => folds[key] ?? fallback
   const toggleFold = (key: string, fallback: boolean) =>
@@ -466,10 +485,11 @@ export function RepoSidebar(props: {
       ['sec:pinned', tree.pinned],
       ['sec:repos', tree.repos],
       ['sec:quiet', tree.quiet],
+      ['sec:missing', tree.missing],
       ['sec:hidden', tree.hidden],
     ]
     for (const [id, groups] of sections) map.set(id, groups.map((g) => g.id))
-    for (const group of [...tree.pinned, ...tree.repos, ...tree.quiet, ...tree.hidden]) {
+    for (const group of [...tree.pinned, ...tree.repos, ...tree.quiet, ...tree.missing, ...tree.hidden]) {
       map.set(`${PLAN_LIST}${group.id}`, livePlans(group).map((row) => planRowKey(row.entry.repo.root, row.plan.id)))
     }
     return map
@@ -477,7 +497,7 @@ export function RepoSidebar(props: {
 
   const rowNames = useMemo(() => {
     const map = new Map<string, string>()
-    for (const group of [...tree.pinned, ...tree.repos, ...tree.quiet, ...tree.hidden]) {
+    for (const group of [...tree.pinned, ...tree.repos, ...tree.quiet, ...tree.missing, ...tree.hidden]) {
       map.set(group.id, group.name)
       for (const row of group.plans) map.set(planRowKey(row.entry.repo.root, row.plan.id), row.plan.goal)
     }
@@ -776,8 +796,9 @@ export function RepoSidebar(props: {
 
   const pickGroup = (group: RepoGroup) => {
     props.onPlan?.()
-    const member = group.members.find((m) => m.waiting > 0 || m.attention > 0) ?? group.members.find((m) => m.repo.root === repo.root) ?? group.members[0]
-    if (member) orchestraStore.openFirstWaiting(member.repo.root)
+    const rememberedRoot = familyCopyOf(group.id)
+    const member = group.members.find((m) => m.repo.root === rememberedRoot) ?? group.members.find((m) => m.repo.root === repo.root) ?? group.members[0]
+    if (member) orchestraStore.openRemembered(member.repo.root)
     if (open && narrowRail()) onToggle()
   }
 
@@ -788,7 +809,7 @@ export function RepoSidebar(props: {
 
   const goHit = (hit: SearchHit) => {
     setQuery('')
-    if (hit.kind === 'repo') orchestraStore.openFirstWaiting(hit.root)
+    if (hit.kind === 'repo') orchestraStore.openRemembered(hit.root)
     else if (hit.kind === 'plan' && hit.planId) orchestraStore.openPlan(hit.root, hit.planId)
     else if (hit.taskId) orchestraStore.openWaiting({ root: hit.root, planId: hit.planId, taskId: hit.taskId })
   }
@@ -922,7 +943,7 @@ export function RepoSidebar(props: {
     ]
   }
 
-  const planRow = (entry: RepoEntry, plan: SidePlan, parentKey: string, dragList?: string) => {
+  const planRow = (entry: RepoEntry, plan: SidePlan, parentKey: string, dragList?: string, note?: string) => {
     const key = planRowKey(entry.repo.root, plan.id)
     if (renameKey === key) {
       return (
@@ -931,7 +952,9 @@ export function RepoSidebar(props: {
         </li>
       )
     }
-    const current = plan.current && entry.repo.root === repo.root
+    // The selected plan is the one actually shown (an explicit browse included), not only the CLI's own
+    // current flag: a non-current selected plan must still read as selected in the tree.
+    const current = entry.repo.root === repo.root && (repo.planId !== undefined ? plan.id === repo.planId : plan.current === true)
     // Only the open plan unfolds into its lanes; every other plan stays one row.
     const laneChild = current && props.lanes ? firstLaneGroupKey(repo) : undefined
     const counts = planCounts(plan)
@@ -966,6 +989,7 @@ export function RepoSidebar(props: {
               {plan.goal}
               {plan.example ? <span className="orc-srow__example"> · {t('welcome.exampleLabel')}</span> : null}
               {inWorktree(entry.repo) ? <span className="orc-srow__example"> · {t('side.worktree')}</span> : null}
+              {note ? <span className="orc-srow__note"> · {note}</span> : null}
             </span>
             {plan.taskCount > 0 ? (
               <span className="orc-srow__meta orc-srow__peek">
@@ -990,9 +1014,9 @@ export function RepoSidebar(props: {
     const counts = rows.reduce(
       (acc, row) => {
         const c = planCounts(row.plan)
-        return { running: acc.running + c.running, waiting: acc.waiting + c.waiting, failed: acc.failed + c.failed }
+        return { running: acc.running + c.running, waiting: acc.waiting + c.waiting, failed: acc.failed + c.failed, checking: acc.checking + c.checking, unmerged: acc.unmerged + c.unmerged }
       },
-      { running: 0, waiting: 0, failed: 0 },
+      { running: 0, waiting: 0, failed: 0, checking: 0, unmerged: 0 },
     )
     return (
       <li role="none">
@@ -1022,18 +1046,26 @@ export function RepoSidebar(props: {
     )
   }
 
-  const groupRow = (group: RepoGroup, listId: string, parentKey?: string) => {
+  const groupRow = (group: RepoGroup, listId: string, parentKey?: string, hint?: string) => {
     const key = `grp:${group.id}`
     const rowKey = skey(key)
     const fallback = defaultGroupOpen(group, repo.root)
     const open = isOpen(key, fallback)
     const live = livePlans(group)
+    const selectedRow = group.plans.find((row) => row.entry.repo.root === repo.root && (repo.planId !== undefined ? row.plan.id === repo.planId : row.plan.current === true))
     const finished = group.plans.filter((row) => !row.plan.archived && isFinishedPlan(row.plan))
     const archived = group.plans.filter((row) => row.plan.archived)
+    // A selected plan is never buried in a fold: a genuinely finished or archived selection stays a
+    // foreground, selected row (labelled for what it is) while the remaining finished plans keep folding.
+    // It leaves its fold before the labels count, so nothing is rendered or counted twice.
+    const promoted = selectedRow && !live.includes(selectedRow) ? selectedRow : undefined
+    const foldedFinished = promoted ? finished.filter((row) => row !== promoted) : finished
+    const foldedArchived = promoted ? archived.filter((row) => row !== promoted) : archived
+    const foreground = promoted ? [...live, promoted] : live
     const primary = group.members.find((m) => m.repo.root === repo.root) ?? group.members[0]
     const finKey = `fin:${group.id}`
     const archKey = `arch:${group.id}`
-    const firstChild = live[0] ? skey(`plan:${live[0].entry.repo.root}/${live[0].plan.id}`) : finished[0] ? skey(finKey) : archived[0] ? skey(archKey) : undefined
+    const firstChild = foreground[0] ? skey(`plan:${foreground[0].entry.repo.root}/${foreground[0].plan.id}`) : foldedFinished[0] ? skey(finKey) : foldedArchived[0] ? skey(archKey) : undefined
     const isCurrentGroup = group.members.some((m) => m.repo.root === repo.root)
     const composerHost = composerFor ? group.members.find((m) => m.repo.root === composerFor) : undefined
     const agg = !open || group.plans.length === 0 ? statusLabel(groupCounts(group)) : ''
@@ -1057,6 +1089,7 @@ export function RepoSidebar(props: {
             data-fallback={fallback ? 'open' : 'closed'}
             data-parent={parentKey}
             data-children={open ? firstChild : undefined}
+            data-current={isCurrentGroup ? 'true' : undefined}
             className="orc-srow__main orc-srow__main--repo"
             title={`${group.name}\n${group.id}\n${missing ? t('side.missingHint') : t('side.plans', { count: group.plans.length })}${agg ? `\n${agg}` : ''}`}
             onClick={() => {
@@ -1070,7 +1103,7 @@ export function RepoSidebar(props: {
               }
             }}
           >
-            <span className={`orc-srow__slot orc-srow__glyph${open && isCurrentGroup ? ' orc-srow__glyph--active' : ''}`} aria-hidden="true">
+            <span className={`orc-srow__slot orc-srow__glyph${isCurrentGroup ? ' orc-srow__glyph--active' : ''}`} aria-hidden="true">
               <FolderGlyph open={open} />
             </span>
             <span className="orc-srow__slot orc-srow__chev" aria-hidden="true">
@@ -1078,6 +1111,7 @@ export function RepoSidebar(props: {
             </span>
             <span className="orc-srow__name">
               {group.name}
+              {hint ? <span className="orc-srow__hint"> · {hint}</span> : null}
               {missing ? <span className="orc-srow__example"> · {t('side.missing')}</span> : null}
             </span>
             {/* Collapsed — or planless — the row answers for its plans: one aggregated status mark. */}
@@ -1092,8 +1126,9 @@ export function RepoSidebar(props: {
         {open ? (
           <ul className="orc-srow__kids">
             {live.map((row) => planRow(row.entry, row.plan, rowKey, `${PLAN_LIST}${group.id}`))}
-            {finished.length > 0 ? foldLi(finKey, t('side.finished', { count: finished.length }), rowKey, finished, <DoneGlyph />) : null}
-            {archived.length > 0 ? foldLi(archKey, t('panel.plan.archiveCount', { count: archived.length }), rowKey, archived, <ArchiveGlyph />) : null}
+            {promoted ? planRow(promoted.entry, promoted.plan, rowKey, undefined, promoted.plan.archived ? t('side.archivedNote') : t('side.finishedNote')) : null}
+            {foldedFinished.length > 0 ? foldLi(finKey, t('side.finished', { count: foldedFinished.length }), rowKey, foldedFinished, <DoneGlyph />) : null}
+            {foldedArchived.length > 0 ? foldLi(archKey, t('panel.plan.archiveCount', { count: foldedArchived.length }), rowKey, foldedArchived, <ArchiveGlyph />) : null}
             {isCurrentGroup && drafts.length + draftJobs.length > 0 ? (
               <li role="none">
                 <span className="orc-srow__grouphead">{t('panel.draft.group')}</span>
@@ -1154,7 +1189,7 @@ export function RepoSidebar(props: {
     )
   }
 
-  const bucket = (label: string, key: string, listId: string, groups: RepoGroup[], glyph: ReactNode) =>
+  const bucket = (label: string, key: string, listId: string, groups: RepoGroup[], glyph: ReactNode, hints?: Map<string, string>) =>
     groups.length === 0 ? null : (
       <li role="none">
         <button
@@ -1178,7 +1213,7 @@ export function RepoSidebar(props: {
         </button>
         {isOpen(key, false) ? (
           <ul className="orc-srow__kids">
-            {groups.map((group) => groupRow(group, listId, skey(key)))}
+            {groups.map((group) => groupRow(group, listId, skey(key), hints?.get(group.id)))}
           </ul>
         ) : null}
       </li>
@@ -1195,6 +1230,18 @@ export function RepoSidebar(props: {
         <button type="button" className="orc-plans__railbtn" aria-label={t('panel.plan.expand')} onClick={onToggle}>
           ›
         </button>
+        {props.onNow ? (
+          <button
+            type="button"
+            className={`orc-plans__railbtn${props.nowOpen ? ' orc-plans__railbtn--active' : ''}`}
+            aria-label={t('now.title')}
+            aria-pressed={props.nowOpen}
+            title={t('now.title')}
+            onClick={() => { props.onNow?.(); if (open && narrowRail()) onToggle() }}
+          >
+            ◉
+          </button>
+        ) : null}
         <button
           type="button"
           className="orc-plans__railbtn"
@@ -1240,6 +1287,17 @@ export function RepoSidebar(props: {
       <div className="orc-plans__wide">
         <div className="orc-plans__head">
           <h2 className="orc-plans__title">{t('panel.tab')}</h2>
+          {props.onNow ? (
+            <button
+              type="button"
+              className={`orc-plans__now${props.nowOpen ? ' orc-plans__now--active' : ''}`}
+              aria-pressed={props.nowOpen}
+              title={t('now.hint')}
+              onClick={props.onNow}
+            >
+              ◉ {t('now.title')}
+            </button>
+          ) : null}
           <button type="button" className="orc-plans__hide" aria-label={t('panel.plan.collapse')} onClick={onToggle}>
             ‹
           </button>
@@ -1255,6 +1313,7 @@ export function RepoSidebar(props: {
             onChange={(e) => {
               setQuery(e.target.value)
               setHitIndex(0)
+              setHitShowAll(false)
             }}
             onKeyDown={(e) => {
               if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -1267,6 +1326,7 @@ export function RepoSidebar(props: {
                 if (hit) goHit(hit)
               } else if (e.key === 'Escape' && query) {
                 setQuery('')
+                setHitShowAll(false)
                 e.stopPropagation()
               }
             }}
@@ -1292,6 +1352,12 @@ export function RepoSidebar(props: {
               </div>
             ))}
             {hits.length === 0 ? <div className="orc-side__empty">{t('side.searchEmpty')}</div> : null}
+            {allHits.length > 0 ? <div className="orc-side__total">{t('side.searchTotal', { count: allHits.length })}</div> : null}
+            {!hitShowAll && allHits.length > SEARCH_LIMIT ? (
+              <button type="button" className="orc-side__more" onClick={() => setHitShowAll(true)}>
+                {t('side.searchMore', { count: allHits.length - SEARCH_LIMIT })}
+              </button>
+            ) : null}
           </div>
         ) : null}
 
@@ -1357,6 +1423,7 @@ export function RepoSidebar(props: {
             {tree.pinned.map((group) => groupRow(group, 'sec:pinned'))}
             {tree.repos.map((group) => groupRow(group, 'sec:repos'))}
             {bucket(t('side.quiet', { count: tree.quiet.length }), 'bucket:quiet', 'sec:quiet', tree.quiet, <QuietGlyph />)}
+            {bucket(t('side.missingCount', { count: tree.missing.length }), 'bucket:missing', 'sec:missing', tree.missing, <MissingGlyph />, missingHints)}
             {bucket(t('side.hidden', { count: tree.hidden.length }), 'bucket:hidden', 'sec:hidden', tree.hidden, <HiddenGlyph />)}
           </ul>
         </section>

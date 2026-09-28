@@ -1,3 +1,5 @@
+import { readFile, stat } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { type ReviewCheck, type TaskView, type ViewStatus, criticalPath, deriveViews, readySet, reviewCheckOf, waitsForHuman } from '../plan/graph.js'
 import { type PlanInfo, listPlans, planIds } from '../plan/plans.js'
 import type { CheckState, Plan, Task } from '../plan/schema.js'
@@ -14,7 +16,7 @@ import { type DefaultBaseSetting, resolveDefaultBase } from '../worktree/default
 import { type LastAttempt, lastAttemptOf } from './last-attempt.js'
 import { verdictFromEvidence } from './detail.js'
 import { readEvidence } from '../runs/evidence.js'
-import type { Verdict } from './verdict.js'
+import { contractBlock, type Verdict } from './verdict.js'
 import { type LastDecision, lastDecisionOf } from './decision.js'
 
 export type TaskSnapshot = {
@@ -137,6 +139,58 @@ export type RepoSnapshot = {
   draftsStamp?: string
 }
 
+/**
+ * The factual stage of one task in the lightweight global «Now» projection, derived from the same canonical
+ * view classification the screen uses (`deriveViews`, `checkOf`, `needsHuman`). The stage says what is true of
+ * the work, never who must act next — the plan's own accept/close policy decides that, and the projection must
+ * not be read as a human-eligibility claim:
+ * `worker` — a worker run is active; `awaiting_check` — finished work the orchestrator has not taken yet;
+ * `checking` — the orchestrator is checking it; `checked` — the check is done (what follows — a person's review
+ * or an automatic close — is the policy's decision, not this stage's); `orchestrator` — the orchestrator's own
+ * work or a decision being prepared; `review` — finished work whose check is off or absent, or an open/
+ * prepared decision, so the next step is not determined here; `unmerged` — accepted work not in the base branch;
+ * `alert` — the task holds no other current work but does carry a run alarm.
+ * A run alarm is orthogonal: it rides `PlanProgressRef.alerts` on whichever single row the task already has,
+ * and only creates an `alert` row when there is no other stage (never a duplicate row).
+ */
+export type PlanProgressStage = 'worker' | 'awaiting_check' | 'checking' | 'checked' | 'orchestrator' | 'review' | 'unmerged' | 'alert'
+
+/** One lightweight reference to a task with current work, for the global «Now» projection (no transcript, no model call). */
+export type PlanProgressRef = {
+  /** The physical repository root the plan lives in. */
+  root: string
+  planId: string
+  taskId: string
+  title: string
+  kind: Task['kind']
+  stage: PlanProgressStage
+  /** The assigned worker, else the last attempt's (display only). */
+  worker?: string
+  /** Whole minutes since `since`, when that moment is known — never invented. */
+  ageMin?: number
+  /** The timestamp `ageMin` measures from (run start, check time, acceptance…). */
+  since?: string
+  /** A person's decision task (factual kind), never a claim that a person must confirm it here. */
+  decision?: true
+  /**
+   * The task's own contract explicitly declares `<human_review>` (`true`), was read and does not (`false`), or
+   * could not be classified (`undefined`, absent = unknown). Read with the canonical `contractBlock`, never
+   * inferred from `status`/`check`/`stage`: a contract that is missing, unreadable or unparsed stays neutral, and
+   * the frontend must not read `undefined` as `false`. This is what lets the screen keep a required human review
+   * apart from work the accept/auto-close policy may finish on its own.
+   */
+  humanReview?: boolean
+  /** Run alarms for this task (watch/rules.ts), orthogonal to `stage`; absent means none. */
+  alerts?: Attention['kind'][]
+}
+
+/** The projection of one plan's current work. `unknown` never means «nothing»: a failed read is not an empty plan. */
+export type PlanProgress = {
+  /** `known` when the plan's tasks were read; `unknown` when the read failed. */
+  coverage: 'known' | 'unknown'
+  items: PlanProgressRef[]
+}
+
 export type PlanSummary = PlanInfo & {
   running: number
   inReview: number
@@ -150,14 +204,141 @@ export type PlanSummary = PlanInfo & {
   /** Accepted tasks whose work is not merged into the base branch yet (w1d); counted in `accepted` too. */
   unmerged?: number
   attention: Attention[]
+  /**
+   * Lightweight current-work references for the global «Now» projection, derived from the same pass that
+   * counts this plan. Example and archived plans contribute no items (they are not current work); a plan whose
+   * read failed reports `coverage: 'unknown'` instead of a false empty list. Optional so a hand-built summary
+   * (a fixture, an older host) still satisfies the type; the host always fills it.
+   */
+  progress?: PlanProgress
+}
+
+/** The one stage a task shows in the global projection; undefined — it holds no current work (done, blocked, quiet). */
+export function progressStageOf(v: TaskView): PlanProgressStage | undefined {
+  if (v.unmerged) return 'unmerged'
+  if (v.status === 'in_review') {
+    if (v.check === 'pending') return 'awaiting_check'
+    if (v.check === 'checking') return 'checking'
+  }
+  // The orchestrator's own work and a decision being prepared come before a plain worker run: `byOrchestrator`
+  // is a root task the orchestrator took, not a worker launch.
+  if (v.byOrchestrator || v.preparing) return 'orchestrator'
+  if (v.status === 'running') return 'worker'
+  if (v.status === 'in_review') return v.check === 'checked' ? 'checked' : 'review'
+  // The kind-level needsHuman marker includes backlog/blocked/superseded decisions. Only the canonical
+  // actionable predicate can place an open decision in current review.
+  if (waitsForHuman({ status: v.status, kind: v.task.kind, check: v.check, preparing: v.preparing })) return 'review'
+  return undefined
+}
+
+const lastRunOf = (v: TaskView) => v.task.runs.at(-1)
+
+/** The moment a stage's age is measured from, when the plan already records one. */
+function progressSince(v: TaskView, stage: PlanProgressStage): string | undefined {
+  const last = lastRunOf(v)
+  if (stage === 'worker') return last?.startedAt
+  if (stage === 'awaiting_check' || stage === 'checking' || stage === 'checked') return v.task.check?.at ?? last?.finishedAt ?? last?.startedAt
+  if (stage === 'orchestrator') return v.task.started?.at ?? v.task.check?.at ?? last?.finishedAt
+  if (stage === 'unmerged') return acceptedAtOf(v.task) ?? last?.finishedAt
+  if (stage === 'review') return last?.finishedAt ?? v.task.check?.at
+  // An alert-only row: the last run's end (or start, while it is still live) is what the alarm is about.
+  if (stage === 'alert') return last?.finishedAt ?? last?.startedAt
+  return undefined
+}
+
+const ageMinutes = (now: Date, since: string | undefined): number | undefined => {
+  if (!since) return undefined
+  const at = Date.parse(since)
+  return Number.isFinite(at) ? Math.max(0, Math.floor((now.getTime() - at) / 60_000)) : undefined
+}
+
+/**
+ * Contract files already classified for `<human_review>`, keyed by absolute path and mtime (bounded): a file
+ * unchanged since the last read is not read again. Only that one boolean is kept — never the contract text.
+ */
+const humanReviewCache = new Map<string, { mtimeMs: number; required: boolean }>()
+const HUMAN_REVIEW_LIMIT = 2000
+
+/**
+ * Whether a task's own contract explicitly declares `<human_review>` (`true`), was read and does not (`false`),
+ * or could not be read (`undefined`). The canonical `contractBlock` is the only classifier — the decision is
+ * never inferred from `status`, `check` or `stage`, so an absent or unreadable contract stays unknown/neutral.
+ * The contract is chosen exactly as the acceptance/auto-close gates choose it (`run.contractPath ?? task.contract`,
+ * see `auto-close.ts`): the effective contract of the checked run is authoritative, and a newer `task.contract`
+ * must not hide a requirement the run's contract declared. The file is small and read for the tasks the projection
+ * actually shows, not every task of every plan.
+ */
+async function humanReviewOf(root: string, task: Task): Promise<boolean | undefined> {
+  const rel = task.runs.at(-1)?.contractPath ?? task.contract
+  if (!rel) return undefined
+  const abs = resolve(root, rel)
+  const info = await stat(abs).catch(() => undefined)
+  if (!info?.isFile()) return undefined
+  const known = humanReviewCache.get(abs)
+  if (known && known.mtimeMs === info.mtimeMs) return known.required
+  const text = await readFile(abs, 'utf8').catch(() => undefined)
+  if (text === undefined) return undefined
+  const required = contractBlock(text, 'human_review') !== undefined
+  if (humanReviewCache.size >= HUMAN_REVIEW_LIMIT) humanReviewCache.clear()
+  humanReviewCache.set(abs, { mtimeMs: info.mtimeMs, required })
+  return required
+}
+
+/** The `<human_review>` classification of the tasks a plan's projection shows, by task id; a task left out is unknown. */
+async function humanReviewMapOf(root: string, tasks: Task[]): Promise<Map<string, boolean>> {
+  const out = new Map<string, boolean>()
+  await Promise.all(tasks.map(async (task) => {
+    const required = await humanReviewOf(root, task)
+    if (required !== undefined) out.set(task.id, required)
+  }))
+  return out
+}
+
+/**
+ * The canonical references of a plan's current work, in the plan's own (stable) task order. A task keeps one row:
+ * its factual stage when it has one, else an `alert` row if it only carries run alarms. Alarms always ride
+ * `alerts` on that same row, never a second one. `humanReview` carries the contract's explicit `<human_review>`
+ * when the caller could classify it; absent is unknown, never `false`.
+ */
+export function progressItemsOf(root: string, planId: string, views: TaskView[], attention: Attention[], now: Date, humanReview?: ReadonlyMap<string, boolean>): PlanProgressRef[] {
+  const alertsByTask = new Map<string, Attention['kind'][]>()
+  for (const alert of attention) alertsByTask.set(alert.taskId, [...(alertsByTask.get(alert.taskId) ?? []), alert.kind])
+  const out: PlanProgressRef[] = []
+  for (const v of views) {
+    const alerts = alertsByTask.get(v.task.id)
+    const stage = progressStageOf(v) ?? (alerts?.length ? 'alert' as const : undefined)
+    if (!stage) continue
+    const since = progressSince(v, stage)
+    const age = ageMinutes(now, since)
+    const worker = v.task.worker ?? lastRunOf(v)?.agent
+    const required = humanReview?.get(v.task.id)
+    out.push({
+      root,
+      planId,
+      taskId: v.task.id,
+      title: v.task.title,
+      kind: v.task.kind,
+      stage,
+      ...(worker ? { worker } : {}),
+      ...(v.task.kind === 'decision' ? { decision: true as const } : {}),
+      ...(required !== undefined ? { humanReview: required } : {}),
+      ...(since ? { since } : {}),
+      ...(age !== undefined ? { ageMin: age } : {}),
+      ...(alerts?.length ? { alerts } : {}),
+    })
+  }
+  return out
 }
 
 /** Active background plans are synced too, so their runs finish, raise attention and notify while another plan is open. */
-async function summarizePlans(root: string, backends: Backends, now: Date, current: { id: string; views: TaskView[]; attention: Attention[] }, quick = false): Promise<PlanSummary[]> {
+async function summarizePlans(root: string, backends: Backends, now: Date, current: { id: string; views: TaskView[]; attention: Attention[] }, readOnly = false): Promise<PlanSummary[]> {
   const out: PlanSummary[] = []
-  for (const info of await listPlans(root)) {
+  const infos = await listPlans(root)
+  for (const info of infos) {
     let views: TaskView[] | undefined
     let attention: Attention[] = []
+    // A read that threw is `unknown` coverage, never an empty plan; an archived plan skipped on purpose is not a failure.
+    let readFailed = false
     if (info.example) {
       // Progress only: the example raises no attention, and the sidebar leaves it out of every total.
       try {
@@ -165,6 +346,7 @@ async function summarizePlans(root: string, backends: Backends, now: Date, curre
         views = deriveViews(plan, states)
       } catch {
         views = undefined
+        readFailed = true
       }
       attention = []
     } else if (info.id === current.id) {
@@ -172,16 +354,34 @@ async function summarizePlans(root: string, backends: Backends, now: Date, curre
       attention = current.attention
     } else if (!info.archived) {
       try {
-        const { plan, states } = await syncPlan(root, backends, now, undefined, info.id, { readOnly: quick })
+        const { plan, states } = await syncPlan(root, backends, now, undefined, info.id, { readOnly })
         views = deriveViews(plan, states, { prepareDecisions: (await resolveOrchestratorCheck(root, info.id, plan)).enabled })
         attention = await gatherAttention(plan, states, backends, now).catch(() => [] as Attention[])
       } catch {
         views = undefined
+        readFailed = true
       }
     }
     const count = (s: ViewStatus) => views?.filter((v) => v.status === s).length ?? 0
     const waiting = views?.filter((v) => waitsForHuman({ status: v.status, kind: v.task.kind, check: v.check, preparing: v.preparing })) ?? []
-    out.push({ ...info, running: count('running'), inReview: count('in_review'), waitingHuman: waiting.length, decisions: waiting.filter((v) => v.task.kind === 'decision').length, ready: views ? readySet(views).length : 0, accepted: count('accepted'), closed: count('closed') + count('superseded') + count('dropped'), unmerged: views?.filter((v) => v.unmerged).length ?? 0, attention })
+    // Example and archived plans are not current work: they contribute no Now rows whatever they hold.
+    const excluded = Boolean(info.example || info.archived)
+    // The contract's explicit `<human_review>` is read only for the tasks the projection will show (a stage or an
+    // alarm), and only when the plan itself was read: another plan's unread contract is unknown, not «no review».
+    const alertTasks = new Set(attention.map((alert) => alert.taskId))
+    const shown = excluded ? [] : (views ?? []).filter((v) => progressStageOf(v) !== undefined || alertTasks.has(v.task.id))
+    const humanReview = shown.length ? await humanReviewMapOf(root, shown.map((v) => v.task)) : new Map<string, boolean>()
+    const progress: PlanProgress = excluded
+      ? { coverage: 'known', items: [] }
+      : { coverage: readFailed ? 'unknown' : 'known', items: views ? progressItemsOf(root, info.id, views, attention, now, humanReview) : [] }
+    out.push({ ...info, running: count('running'), inReview: count('in_review'), waitingHuman: waiting.length, decisions: waiting.filter((v) => v.task.kind === 'decision').length, ready: views ? readySet(views).length : 0, accepted: count('accepted'), closed: count('closed') + count('superseded') + count('dropped'), unmerged: views?.filter((v) => v.unmerged).length ?? 0, attention, progress })
+  }
+  // A plan that exists on disk but could not be read is not a plan without work: it is an unknown read. `listPlans`
+  // drops it (its goal cannot be read), so the gap is recovered from the ids and reported as `unknown` coverage.
+  const listed = new Set(infos.map((info) => info.id))
+  for (const id of await planIds(root).catch(() => [] as string[])) {
+    if (listed.has(id)) continue
+    out.push({ id, goal: '', archived: false, current: id === current.id, rev: -1, updatedAt: '', taskCount: 0, running: 0, inReview: 0, waitingHuman: 0, ready: 0, accepted: 0, closed: 0, unmerged: 0, attention: [], progress: { coverage: 'unknown', items: [] } })
   }
   return out
 }
@@ -217,8 +417,18 @@ export type SnapshotProfiler = (phase: string, ms: number) => void
  * `quick` (pf1): the first paint — the plan graph, statuses and attention of every plan, read without git and without
  * writing (see `SyncOptions.readOnly`). Merge detection, verdicts and conflicts are left for the full snapshot that
  * follows; the result says so with `partial`.
+ *
+ * `readOnly`: a full snapshot (verdicts, conflicts, the default base — everything the full pass reads) that writes
+ * nothing to the plan, the `current` pointer or run bookkeeping: no run bookkeeping, no merge detection. The explicit
+ * `plan-state` read of a plan that is not the current one uses it, so browsing never moves `current` and never
+ * reconciles state behind the writer's back. One documented exception: reading a *corrupt* plan still runs the
+ * reader's recovery quarantine (`readPlanFile` writes a `.corrupt-*` copy beside it) — a recovery artifact of a
+ * damaged file, not a change to a healthy plan.
+ *
+ * `skipSummaries`: do not run the all-plan summary/sync pass. The host's on-demand `plan-state` read sets it and
+ * reuses the summaries the SSE traversal already derived, so opening one plan is never an N+1 scan of every plan.
  */
-export type SnapshotOptions = { profile?: SnapshotProfiler; quick?: boolean }
+export type SnapshotOptions = { profile?: SnapshotProfiler; quick?: boolean; readOnly?: boolean; skipSummaries?: boolean }
 
 /**
  * Verdict briefs by the task fields the verdict reads (pf1): evidence files are written once per run, so a task whose
@@ -254,7 +464,9 @@ export async function buildRepoSnapshot(root: string, backends: Backends, now: D
   try {
     const planId = openPlan ?? currentPlanId(root)
     const quick = options.quick === true
-    const { plan, states, degraded } = await syncPlan(root, backends, now, undefined, planId, { readOnly: quick })
+    // A read-only pass never writes: no run bookkeeping, no merge detection — for this plan or any other.
+    const readOnly = quick || options.readOnly === true
+    const { plan, states, degraded } = await syncPlan(root, backends, now, undefined, planId, { readOnly })
     phase('sync')
     const orchestratorCheck = await resolveOrchestratorCheck(root, planId, plan)
     // The quick pass reads no git (pf1): the default base waits for the full snapshot that follows.
@@ -274,7 +486,7 @@ export async function buildRepoSnapshot(root: string, backends: Backends, now: D
       if (terminalDecision && acceptedVerdict === 'result') terminalFiles.set(v.task.id, (await readEvidence(root, v.task.runs.at(-1)?.evidence))?.files.map((file) => file.path) ?? [])
     }
     phase('verdicts')
-    const plans = await summarizePlans(root, backends, now, { id: planId, views, attention }, quick).catch(() => [] as PlanSummary[])
+    const plans = options.skipSummaries ? [] : await summarizePlans(root, backends, now, { id: planId, views, attention }, readOnly).catch(() => [] as PlanSummary[])
     phase('plans')
     const conflicts = plan.example || quick ? new Map<string, TaskConflict[]>() : await reviewConflicts(root, plan, nodeExec).catch(() => new Map<string, TaskConflict[]>())
     phase('conflicts')

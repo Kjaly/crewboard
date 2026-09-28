@@ -227,7 +227,7 @@ export function usePlanCost(
     const load = async () => {
       if (!alive) return
       try {
-        const response = await api.cost(root)
+        const response = await api.cost(root, planId || undefined)
         if (!alive) return
         if (response.ok) {
           setState({ key, cost: response.value, error: null })

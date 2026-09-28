@@ -10,12 +10,13 @@ import { setLang } from '../../src/client/i18n.js'
 import { LensChip } from '../../src/client/lens-chips.js'
 import { snapshotWaiting } from '../../src/client/review.js'
 import { RepoSidebar } from '../../src/client/sidebar.js'
-import { applyOrder, defaultGroupOpen, inboxCount, inboxItems, isFinishedPlan, isQuietRepo, moveRow, QUIET_AFTER_MS, rowState, searchSnapshot, shiftRow, sidebarTree } from '../../src/client/sidebar-model.js'
+import { applyOrder, defaultGroupOpen, inboxCount, inboxItems, isFinishedPlan, isQuietRepo, moveRow, planCounts, QUIET_AFTER_MS, resetSidebarOrder, rowState, searchSnapshot, shiftRow, sidebarTree } from '../../src/client/sidebar-model.js'
 import { installFetch, jsonOk, makeRepo, makeSnapshot, makeTask, ROOT } from './helpers.js'
 
 beforeEach(() => {
   setLang('en')
   localStorage.clear()
+  resetSidebarOrder()
 })
 afterEach(() => cleanup())
 
@@ -210,6 +211,44 @@ describe('rowState', () => {
     expect(rowState({ running: 3, waiting: 0, failed: 0 })).toBe('running')
     expect(rowState({ running: 0, waiting: 0, failed: 0 })).toBe('idle')
   })
+
+  it('distinguishes an orchestrator check from a worker and from accepted-unmerged work', () => {
+    expect(rowState({ running: 0, waiting: 0, failed: 0, checking: 1 })).toBe('checking')
+    expect(rowState({ running: 0, waiting: 0, failed: 0, checking: 0, unmerged: 1 })).toBe('unmerged')
+    // A worker run still outranks a check, but both stay visible in the row's label.
+    expect(rowState({ running: 1, waiting: 0, failed: 0, checking: 1 })).toBe('running')
+  })
+})
+
+describe('plan stage counts', () => {
+  const ref = (taskId: string, stage: string, extra: Record<string, unknown> = {}) => ({ root: '/a', planId: 'main', taskId, title: taskId, kind: 'implement', stage, ...extra })
+  const staged = (items: unknown[], patch: Record<string, unknown> = {}) => plan({ id: 'main', progress: { coverage: 'known', items }, ...patch }) as never
+
+  it('counts a check apart from a worker and keeps moving human facts out of the waiting count', () => {
+    const counts = planCounts(staged([
+      ref('w', 'worker'),
+      ref('c', 'checking'),
+      ref('p', 'awaiting_check'),
+      ref('d', 'review', { kind: 'decision', decision: true }),
+      ref('m', 'unmerged'),
+      ref('done', 'checked'),
+      ref('future', 'worker', { humanReview: true }),
+    ]))
+    expect(counts).toEqual({ running: 2, checking: 2, waiting: 1, unmerged: 1, failed: 0 })
+  })
+
+  it('reads an explicit human review on a finished check as the person’s move', () => {
+    const counts = planCounts(staged([ref('h', 'checked', { humanReview: true }), ref('c', 'checked')]))
+    expect(counts.waiting).toBe(1)
+    expect(counts.checking).toBe(0)
+  })
+
+  it('falls back to the legacy counters and invents no check when progress is not trustworthy', () => {
+    const legacy = planCounts(plan({ id: 'main', running: 2, waitingHuman: 3, attention: [{ kind: 'failed' }] }) as never)
+    expect(legacy).toEqual({ running: 2, waiting: 3, checking: 0, unmerged: 0, failed: 1 })
+    const unread = planCounts(plan({ id: 'main', running: 1, progress: { coverage: 'unknown', items: [] } }) as never)
+    expect(unread).toEqual({ running: 1, waiting: 0, checking: 0, unmerged: 0, failed: 0 })
+  })
 })
 
 describe('sidebarTree', () => {
@@ -233,39 +272,56 @@ describe('sidebarTree', () => {
     expect(groups.some((g) => g.id === '/other' && g.members.length === 1)).toBe(true)
   })
 
-  it('puts pinned first, waiting groups before quiet ones, planless stale repos into Quiet and hidden ones into Hidden', () => {
+  it('puts pinned first, planless stale repos into Quiet, gone folders into Missing and hidden ones into Hidden', () => {
     const stale = repo('/stale', [], [], { hasPlan: false, lastActivityAt: '2026-09-01T00:00:00Z' } as Partial<RepoSnapshot>)
     const freshNoPlan = repo('/fresh', [], [], { hasPlan: false, lastActivityAt: '2026-09-22T00:00:00Z' } as Partial<RepoSnapshot>)
-    const pinnedRepo = repo('/pin', [], [], { pinned: true, lastActivityAt: '2026-09-01T00:00:00Z' } as Partial<RepoSnapshot>)
+    const pinnedRepo = repo('/pin', [], [], { pinned: true, hasPlan: false, lastActivityAt: '2026-09-01T00:00:00Z' } as Partial<RepoSnapshot>)
     const hiddenRepo = repo('/hid', [], [], { hidden: true } as Partial<RepoSnapshot>)
     const waitingRepo = repo('/need', [], [], {
       lastActivityAt: '2026-09-10T00:00:00Z',
       plans: [plan({ id: 'main', waitingHuman: 1 })],
     } as Partial<RepoSnapshot>)
     const idle = repo('/idle', [], [], { lastActivityAt: '2026-09-21T00:00:00Z' } as Partial<RepoSnapshot>)
+    const gone = repo('/gone', [], [], { missing: true } as Partial<RepoSnapshot>)
     const now = Date.parse('2026-09-22T12:00:00Z')
-    const tree = sidebarTree(makeSnapshot(stale, freshNoPlan, pinnedRepo, hiddenRepo, idle, waitingRepo), now)
+    const tree = sidebarTree(makeSnapshot(stale, freshNoPlan, pinnedRepo, hiddenRepo, idle, waitingRepo, gone), now)
     expect(tree.pinned[0]?.members[0]?.repo.root).toBe('/pin')
     expect(tree.quiet.map((g) => g.members[0]?.repo.root)).toEqual(['/stale'])
+    // A pinned folder that has been idle is still pinned, never buried in the Quiet section.
+    expect(tree.quiet.map((g) => g.id)).not.toContain('/pin')
     expect(tree.hidden.map((g) => g.members[0]?.repo.root)).toEqual(['/hid'])
-    // The waiting group outranks the fresher idle one; the fresh planless repo stays visible.
-    expect(tree.repos.map((g) => g.id)).toEqual(['/need', '/idle', '/fresh'])
+    // A folder that is gone is folded into its own Missing section, not interleaved with live projects.
+    expect(tree.missing.map((g) => g.members[0]?.repo.root)).toEqual(['/gone'])
+    // The live section keeps the served (first-seen) order; activity never reorders it.
+    expect(tree.repos.map((g) => g.id)).toEqual(['/fresh', '/idle', '/need'])
     expect(isQuietRepo(stale, now)).toBe(true)
     expect(isQuietRepo(freshNoPlan, now)).toBe(false)
     expect(Date.parse('2026-09-01T00:00:00Z') + QUIET_AFTER_MS < now).toBe(true)
   })
 
-  it('opens by default the group of the current plan and any group with waiting or running work', () => {
+  it('opens only the current and pinned groups; active background groups stay folded', () => {
     const current = repo('/cur')
     const waiting = repo('/wait', [], [], { plans: [plan({ id: 'main', waitingHuman: 1 })] } as Partial<RepoSnapshot>)
     const running = repo('/run', [], [], { plans: [plan({ id: 'main', running: 1 })] } as Partial<RepoSnapshot>)
-    const idle = repo('/idle', [], [], { plans: [plan({ id: 'main' })] } as Partial<RepoSnapshot>)
-    const tree = sidebarTree(makeSnapshot(current, waiting, running, idle))
+    const pinned = repo('/pin', [], [], { pinned: true } as Partial<RepoSnapshot>)
+    const tree = sidebarTree(makeSnapshot(current, waiting, running, pinned))
     const group = (id: string) => [...tree.repos, ...tree.pinned].find((g) => g.id === id)!
     expect(defaultGroupOpen(group('/cur'), '/cur')).toBe(true)
-    expect(defaultGroupOpen(group('/wait'), '/cur')).toBe(true)
-    expect(defaultGroupOpen(group('/run'), '/cur')).toBe(true)
-    expect(defaultGroupOpen(group('/idle'), '/cur')).toBe(false)
+    expect(defaultGroupOpen(group('/pin'), '/cur')).toBe(true)
+    expect(defaultGroupOpen(group('/wait'), '/cur')).toBe(false)
+    expect(defaultGroupOpen(group('/run'), '/cur')).toBe(false)
+  })
+
+  it('does not move rows when a poll changes activity', () => {
+    const a = repo('/a', [], [], { plans: [plan({ id: 'one' })] } as Partial<RepoSnapshot>)
+    const b = repo('/b', [], [], { plans: [plan({ id: 'x' })] } as Partial<RepoSnapshot>)
+    expect(sidebarTree(makeSnapshot(a, b)).repos.map((g) => g.id)).toEqual(['/a', '/b'])
+    // `b` now waits and `a` runs: the first-seen order stands.
+    const a2 = repo('/a', [], [], { plans: [plan({ id: 'one', running: 1 })] } as Partial<RepoSnapshot>)
+    const b2 = repo('/b', [], [], { plans: [plan({ id: 'x', waitingHuman: 1 })] } as Partial<RepoSnapshot>)
+    expect(sidebarTree(makeSnapshot(b2, a2)).repos.map((g) => g.id)).toEqual(['/a', '/b'])
+    // A saved manual order wins over first-seen in both directions.
+    expect(sidebarTree(makeSnapshot(a2, b2), 0, { repos: ['/b', '/a'] }).repos.map((g) => g.id)).toEqual(['/b', '/a'])
   })
 
   it('marks a plan finished only when nothing in it can still move', () => {
@@ -284,6 +340,18 @@ describe('sidebarTree', () => {
       expect(isFinishedPlan(plan({ id: 'x', taskCount: 4, accepted: 4, ...patch }) as never)).toBe(false)
     }
   })
+
+  it('keeps a fully accepted but unmerged plan live, from the summary or the authoritative progress', () => {
+    // Every task is accepted, so the old rule filed it under Finished plans; the merge is still a person's move.
+    expect(isFinishedPlan(plan({ id: 'x', taskCount: 2, accepted: 2, unmerged: 1 }) as never)).toBe(false)
+    expect(isFinishedPlan(plan({ id: 'x', taskCount: 2, accepted: 2, unmerged: 0 }) as never)).toBe(true)
+    const staged = (stage: string) => plan({ id: 'x', taskCount: 2, accepted: 2, unmerged: 1, progress: { coverage: 'known', items: [{ root: '/a', planId: 'x', taskId: 't', title: 't', kind: 'implement', stage }] } })
+    expect(isFinishedPlan(staged('unmerged') as never)).toBe(false)
+    // The progress is authoritative: an unmerged summary with no unmerged ref does not block finishing.
+    expect(isFinishedPlan(staged('checked') as never)).toBe(true)
+    // An archived unmerged plan still keeps its archived classification (never «finished»).
+    expect(isFinishedPlan(plan({ id: 'x', taskCount: 2, accepted: 2, unmerged: 1, archived: true }) as never)).toBe(false)
+  })
 })
 
 describe('searchSnapshot', () => {
@@ -297,6 +365,36 @@ describe('searchSnapshot', () => {
     expect(taskHits.some((h) => h.kind === 'task' && h.taskId === 'fetch' && h.root === '/a')).toBe(true)
     expect(searchSnapshot(makeSnapshot(a, b), 'parser').some((h) => h.kind === 'plan')).toBe(true)
     expect(searchSnapshot(makeSnapshot(a, b), '')).toEqual([])
+  })
+
+  it('matches worktree copy names and factual stages, and returns every match instead of a hard cap', () => {
+    const copy = repo('/r/.worktrees/feat', [makeTask({ id: 't1', title: 'Parser' })], [], {
+      family: { root: '/r/main', name: 'r' },
+      plans: [plan({ id: 'main', current: true, progress: { coverage: 'known', items: [{ root: '/r/.worktrees/feat', planId: 'main', taskId: 't1', title: 'Parser', kind: 'implement', stage: 'checking' }] } })],
+    } as unknown as Partial<RepoSnapshot>)
+    const hits = searchSnapshot(makeSnapshot(copy), 'feat')
+    expect(hits.some((hit) => hit.copy === 'feat')).toBe(true)
+    expect(searchSnapshot(makeSnapshot(copy), 'orchestrator checking').find((hit) => hit.kind === 'task')?.stage).toBe('checking')
+    // The old `.slice(0, 10)` is gone: the caller shows the total and pages the rest.
+    const many = makeSnapshot(...Array.from({ length: 12 }, (_, i) => repo(`/r${i}`, [makeTask({ id: `task${i}`, title: 'common' })])))
+    expect(searchSnapshot(many, 'common')).toHaveLength(12)
+  })
+
+  it('keys stages by plan and task id and finds active work in another plan from its lightweight reference', () => {
+    const shared = {
+      planId: 'main',
+      plans: [
+        plan({ id: 'main', current: true, progress: { coverage: 'known', items: [{ root: '/r', planId: 'main', taskId: 'same', title: 'Main same', kind: 'implement', stage: 'worker' }] } }),
+        plan({ id: 'other', progress: { coverage: 'known', items: [{ root: '/r', planId: 'other', taskId: 'same', title: 'Other same', kind: 'implement', stage: 'checking' }] } }),
+      ],
+    } as unknown as Partial<RepoSnapshot>
+    const snapshot = makeSnapshot(repo('/r', [makeTask({ id: 'same', title: 'Main same' })], [], shared))
+    const other = searchSnapshot(snapshot, 'other same').find((hit) => hit.kind === 'task' && hit.planId === 'other')
+    expect(other?.stage).toBe('checking')
+    expect(other?.active).toBe(true)
+    // The open plan's task with the same id keeps its own stage, not the other plan's.
+    const current = searchSnapshot(snapshot, 'main same').find((hit) => hit.kind === 'task' && hit.planId === 'main')
+    expect(current?.stage).toBe('worker')
   })
 })
 
@@ -327,16 +425,58 @@ describe('sidebar tree rendering', () => {
     expect(screen.getByRole('treeitem', { name: /Alpha plan/ }).getAttribute('title')).toContain('/wt/ap-a')
   })
 
-  it('expands the current and busy groups by default and summarizes the rest', () => {
+  it('expands the current group by default and keeps active background groups folded but marked', async () => {
+    const user = userEvent.setup()
     const current = repo('/cur', [], [], { plans: [plan({ id: 'main', current: true, goal: 'Current plan' })] } as Partial<RepoSnapshot>) as OrchestraRepoSnapshot
     const busy = repo('/busy', [], [], { plans: [plan({ id: 'w', goal: 'Busy plan', running: 1 })] } as Partial<RepoSnapshot>)
     const idle = repo('/idle', [], [], { plans: [plan({ id: 'one' }), plan({ id: 'two' })] } as Partial<RepoSnapshot>)
     mount(makeSnapshot(current, busy, idle), current)
     expect(screen.getByRole('treeitem', { name: /Current plan/ })).toBeTruthy()
-    expect(screen.getByRole('treeitem', { name: /Busy plan/ })).toBeTruthy()
+    // A background group with running work is not pulled open: it shows its summary and stays put.
+    expect(screen.queryByRole('treeitem', { name: /Busy plan/ })).toBeNull()
+    const busyRow = screen.getByRole('treeitem', { name: /busy/ })
+    expect(busyRow.getAttribute('aria-expanded')).toBe('false')
+    expect(busyRow.getAttribute('title')).toContain('1 plan')
+    await user.click(busyRow)
+    expect(await screen.findByRole('treeitem', { name: /Busy plan/ })).toBeTruthy()
     // The idle group stays folded: its plans are not rows, only the count in the tooltip.
     expect(screen.queryByRole('treeitem', { name: /Plan one/ })).toBeNull()
     expect(screen.getByRole('treeitem', { name: /idle/ }).getAttribute('title')).toContain('2 plans')
+  })
+
+  it('names an orchestrator check on a collapsed family row without calling it a running worker', () => {
+    const current = repo('/cur', [], [], { plans: [plan({ id: 'main', current: true })] } as Partial<RepoSnapshot>) as OrchestraRepoSnapshot
+    const checking = repo('/check', [], [], {
+      plans: [plan({ id: 'main', progress: { coverage: 'known', items: [{ root: '/check', planId: 'main', taskId: 'c', title: 'c', kind: 'implement', stage: 'checking' }] } })],
+    } as Partial<RepoSnapshot>)
+    mount(makeSnapshot(current, checking), current)
+    const row = screen.getByRole('treeitem', { name: /check/ })
+    expect(row.getAttribute('aria-expanded')).toBe('false')
+    expect(row.getAttribute('title')).toContain('1 orchestrator checking')
+    expect(row.getAttribute('title')).not.toContain('1 running')
+  })
+
+  it('keeps the current project visibly marked when its group is collapsed', () => {
+    const current = repo('/cur', [], [], { plans: [plan({ id: 'main', current: true, goal: 'Current plan' })] } as Partial<RepoSnapshot>) as OrchestraRepoSnapshot
+    localStorage.setItem('crewboard:side-folds', JSON.stringify({ 'grp:/cur': false }))
+    mount(makeSnapshot(current), current)
+    const row = screen.getByRole('treeitem', { name: /cur/ })
+    expect(row.getAttribute('aria-expanded')).toBe('false')
+    expect(row.getAttribute('data-current')).toBe('true')
+    expect(row.querySelector('.orc-srow__glyph--active')).toBeTruthy()
+  })
+
+  it('folds missing folders into a Missing section with distinguishing path hints', async () => {
+    const user = userEvent.setup()
+    const active = repo('/cur', [], [], { plans: [plan({ id: 'main', current: true })] } as Partial<RepoSnapshot>) as OrchestraRepoSnapshot
+    const goneA = repo('/x/repo', [], [], { missing: true } as Partial<RepoSnapshot>)
+    const goneB = repo('/y/repo', [], [], { missing: true } as Partial<RepoSnapshot>)
+    mount(makeSnapshot(active, goneA, goneB), active)
+    // Missing folders are folded away from the live list and never interleaved with it.
+    expect(screen.queryByRole('treeitem', { name: /\/x\/repo/ })).toBeNull()
+    await user.click(screen.getByRole('treeitem', { name: /Missing · 2/ }))
+    expect(await screen.findByRole('treeitem', { name: /x\/repo/ })).toBeTruthy()
+    expect(screen.getByRole('treeitem', { name: /y\/repo/ })).toBeTruthy()
   })
 
   it('keeps the manual fold choice per viewer', async () => {
@@ -366,6 +506,52 @@ describe('sidebar tree rendering', () => {
     const fold = screen.getByRole('treeitem', { name: '1 finished plan' })
     await user.click(fold)
     expect(screen.getByRole('treeitem', { name: /Finished plan/ })).toBeTruthy()
+  })
+
+  it('keeps a selected finished plan foreground, selected and truthfully labelled while others stay folded', async () => {
+    const user = userEvent.setup()
+    // The selected plan is an explicit browse of a genuinely finished plan and is not the CLI current one.
+    const current = repo('/cur', [], [], {
+      planId: 'done',
+      plans: [
+        plan({ id: 'main', current: true, goal: 'Live plan', ready: 1, taskCount: 2, accepted: 1 }),
+        plan({ id: 'done', goal: 'Selected finished', taskCount: 3, accepted: 3 }),
+        plan({ id: 'done2', goal: 'Other finished', taskCount: 2, accepted: 2 }),
+        plan({ id: 'old', goal: 'Archived plan', archived: true, taskCount: 1, accepted: 1 }),
+      ],
+    } as Partial<RepoSnapshot>) as OrchestraRepoSnapshot
+    mount(makeSnapshot(current), current)
+    // Foreground and selected even though it is finished and not the CLI current plan.
+    const selected = screen.getByRole('treeitem', { name: /Selected finished/ })
+    expect(selected.getAttribute('aria-current')).toBe('true')
+    expect(selected.textContent).toContain('finished')
+    // Only the OTHER finished plan stays folded, and the fold count does not double-count the selected row.
+    const fold = screen.getByRole('treeitem', { name: '1 finished plan' })
+    expect(screen.queryByRole('treeitem', { name: /Other finished/ })).toBeNull()
+    await user.click(fold)
+    expect(screen.getByRole('treeitem', { name: /Other finished/ })).toBeTruthy()
+    // The archive keeps its own fold; the selected finished row is not duplicated anywhere.
+    expect(screen.getByRole('treeitem', { name: 'Archive · 1' })).toBeTruthy()
+    expect(screen.getAllByRole('treeitem', { name: /Selected finished/ })).toHaveLength(1)
+  })
+
+  it('keeps a selected archived plan foreground and labelled without duplicating the archive count', () => {
+    const current = repo('/cur', [], [], {
+      planId: 'old',
+      plans: [
+        plan({ id: 'main', current: true, goal: 'Live plan', ready: 1, taskCount: 2, accepted: 1 }),
+        plan({ id: 'old', goal: 'Selected archive', archived: true, taskCount: 1, accepted: 1 }),
+        plan({ id: 'old2', goal: 'Other archive', archived: true, taskCount: 1, accepted: 1 }),
+      ],
+    } as Partial<RepoSnapshot>) as OrchestraRepoSnapshot
+    mount(makeSnapshot(current), current)
+    const selected = screen.getByRole('treeitem', { name: /Selected archive/ })
+    expect(selected.getAttribute('aria-current')).toBe('true')
+    expect(selected.textContent).toContain('archived')
+    expect(screen.queryByRole('treeitem', { name: /Other archive/ })).toBeNull()
+    // Only the other archived plan is counted in the fold.
+    expect(screen.getByRole('treeitem', { name: 'Archive · 1' })).toBeTruthy()
+    expect(screen.getAllByRole('treeitem', { name: /Selected archive/ })).toHaveLength(1)
   })
 
   it('lets exactly one row carry the selected state — the current plan', () => {
@@ -564,7 +750,7 @@ describe('sidebar order model', () => {
   })
 
   it('keeps pinned rows in their own leading section under a saved order', () => {
-    const pinnedRepo = repo('/pin', [], [], { pinned: true, lastActivityAt: '2026-09-01T00:00:00Z' } as Partial<RepoSnapshot>)
+    const pinnedRepo = repo('/pin', [], [], { pinned: true, hasPlan: false, lastActivityAt: '2026-09-01T00:00:00Z' } as Partial<RepoSnapshot>)
     const tree = sidebarTree(makeSnapshot(repo('/a'), repo('/b'), pinnedRepo), 0, { repos: ['/b', '/pin', '/a'] })
     expect(tree.pinned.map((g) => g.id)).toEqual(['/pin'])
     expect(tree.repos.map((g) => g.id)).toEqual(['/b', '/a'])

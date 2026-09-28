@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, within } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import { userEvent } from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { App } from '../../src/client/app.js'
@@ -29,8 +29,9 @@ it('shows both repositories, names the other one, and agrees with the queue and 
   render(<><App /><OrchestraIcon size={16} active={false} /></>)
   await act(async () => { FakeEventSource.last?.emit('snapshot', snap); reviewCenter().feed(snap) })
   const tree = screen.getByRole('navigation', { name: 'Repositories' })
-  // Busy groups expand by default, so each plan row carries one status mark, not text badges.
+  // The current group is open; a background group stays folded until asked, then its rows carry a mark.
   expect(within(tree).getByRole('treeitem', { name: /A plan/ }).querySelector('.orc-srow__state')?.getAttribute('aria-label')).toBe('1 running · 1 waiting')
+  await userEvent.setup().click(within(tree).getByRole('treeitem', { name: /ap-b/ }))
   expect(within(tree).getByRole('treeitem', { name: /Later plan/ }).querySelector('.orc-srow__state')?.getAttribute('aria-label')).toBe('1 running · 2 waiting')
   // The inbox lists every repository's waits: both current-plan tasks and the background plan.
   const inboxRows = [...document.querySelectorAll<HTMLElement>('.orc-ibrow')]
@@ -53,24 +54,30 @@ it('shows both repositories, names the other one, and agrees with the queue and 
   expect(localStorage.getItem('crewboard:task:/work/ap-a:a')).toBe('a1')
 })
 
-it('a toast for a background plan opens its repository, then selects the task when the plan arrives', async () => {
+it('a toast for a background plan opens its repository and selects the task read-only', async () => {
   const user = userEvent.setup()
   const quietB = { ...b, tasks: [], plans: [plan('b', 'B plan', true, 0), plan('later', 'Later plan', false, 0)] }
   const before = makeSnapshot(a, quietB)
   const after = makeSnapshot(a, { ...quietB, plans: [plan('b', 'B plan', true, 0), plan('later', 'Later plan', false, 1)] })
-  const calls = installFetch((url) => url.includes('/api/task') ? jsonOk(makeDetail({ id: 'later-task' })) : jsonOk(before))
+  const laterRepo = makeRepo([makeTask({ id: 'later-task', status: 'in_review' })], [], {
+    root: '/work/ap-b', goal: 'Later plan', planId: 'later', plans: [plan('later', 'Later plan', true, 1), plan('b', 'B plan', false, 1)],
+  })
+  const calls = installFetch((url) => {
+    if (url.includes('/api/task')) return jsonOk(makeDetail({ id: 'later-task' }))
+    if (url.includes('/plan-state') && url.includes('plan=later')) return jsonOk(laterRepo)
+    return jsonOk(before)
+  })
   const center = createReviewCenter({ selectPanel: vi.fn() })
   render(<><App /><ReviewToasts center={center} /></>)
   const source = FakeEventSource.last
   await act(async () => { source?.emit('snapshot', before); center.feed(before); center.getState().toasts.forEach((toast) => { center.dismiss(toast.id) }) })
   await act(async () => { source?.emit('snapshot', after); center.feed(after) })
+  console.log('TOASTITEM', JSON.stringify(center.getState().toasts.flatMap((t) => t.items).map((i) => ({ needs: i.needs, planId: i.planId, taskId: i.taskId }))))
   await user.click(screen.getByRole('button', { name: 'Open' }))
   expect(orchestraStore.getState().repoRoot).toBe('/work/ap-b')
-  expect(calls.find((call) => call.url.endsWith('/plan-use'))?.body).toMatchObject({ repo: '/work/ap-b', plan: 'later' })
-  const opened = makeSnapshot(a, makeRepo([makeTask({ id: 'later-task', status: 'in_review' })], [], {
-    root: '/work/ap-b', goal: 'Later plan', planId: 'later', plans: [plan('later', 'Later plan', true, 1), plan('b', 'B plan', false, 1)],
-  }))
-  await act(async () => source?.emit('snapshot', opened))
-  expect(localStorage.getItem('crewboard:task:/work/ap-b:later')).toBe('later-task')
+  // The plan is read read-only with explicit coordinates; the CLI current pointer is untouched.
+  expect(calls.find((call) => call.url.includes('/plan-state') && call.url.includes('plan=later'))).toBeTruthy()
+  expect(calls.some((call) => call.url.endsWith('/plan-use'))).toBe(false)
+  await waitFor(() => expect(localStorage.getItem('crewboard:task:/work/ap-b:later')).toBe('later-task'))
   expect(orchestraStore.getState().queueOpen).toBe(false)
 })

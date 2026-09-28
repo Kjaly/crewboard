@@ -68,10 +68,10 @@ it('I10 loads another page and seeks the last mark outside the loaded page', asy
   render(<LedgerView trace={paged} repo={makeRepo([makeTask({ id: 'a' })])} target={{ taskId: 'a', taskTitle: 'Task', run: { runId: 'run_test', agent: 'dsh', startedAt: new Date(start).toISOString() } }} actions={() => null} />)
   await user.click(screen.getByRole('button', { name: 'Load next 100 steps' }))
   await waitFor(() => expect(screen.getByText('Loaded 200 of 550 steps')).toBeTruthy())
-  expect(request).toHaveBeenCalledWith(expect.any(String), 'a', 'run_test', { cursor: 'step:100' })
+  expect(request).toHaveBeenCalledWith(expect.any(String), 'a', 'run_test', { cursor: 'step:100' }, undefined)
   await user.click(screen.getByRole('button', { name: 'Jump to latest' }))
   await waitFor(() => expect(screen.getByLabelText('Record inspector').textContent).toContain('last failure'))
-  expect(request).toHaveBeenCalledWith(expect.any(String), 'a', 'run_test', { seek: 'step:550' })
+  expect(request).toHaveBeenCalledWith(expect.any(String), 'a', 'run_test', { seek: 'step:550' }, undefined)
 })
 
 it('I10 resolves a run and step link beyond the first page', async () => {
@@ -83,7 +83,7 @@ it('I10 resolves a run and step link beyond the first page', async () => {
   render(<LedgerView trace={paged} repo={repo} target={{ taskId: 'a', taskTitle: 'Task', run: { runId: 'run_test', agent: 'dsh', startedAt: new Date(start).toISOString() } }} actions={() => null} />)
   await waitFor(() => expect(screen.getByLabelText('Record inspector').textContent).toContain('last failure'))
   await waitFor(() => expect(document.activeElement?.getAttribute('data-step-id')).toBe('step:550'))
-  expect(request).toHaveBeenCalledWith(repo.root, 'a', 'run_test', { seek: 'step:550' })
+  expect(request).toHaveBeenCalledWith(repo.root, 'a', 'run_test', { seek: 'step:550' }, undefined)
 })
 
 it('I10 focuses a linked step even when a frame arrives before the list scrolls to it', async () => {

@@ -257,7 +257,7 @@ export function ReviewView({
     [repo.tasks, matched, rows, state.filters, state.investigation, state.sort, state.descending, cost, now],
   )
   const onScreen = state.mode !== 'runs' ? [] : state.group === 'none' ? reviewPage(sorted, state.page, state.size) : reviewPage(groups, state.page, 25).filter((group) => state.expanded.includes(group.key)).flatMap((group) => reviewPage(group.rows, state.childPages[group.key] ?? 1, 20))
-  const stepsOf = useRunSteps(repo.root, onScreen.map((row) => row.run), cost?.generatedAt ?? '')
+  const stepsOf = useRunSteps(repo.root, repo.planId, onScreen.map((row) => row.run), cost?.generatedAt ?? '')
   const openRun = (row: ReviewRow) => {
     change({ focusedRunId: row.run.runId })
     // The app selects the task itself when it opens a run: a second selection here would push a history entry.

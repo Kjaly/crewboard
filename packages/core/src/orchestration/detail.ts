@@ -346,8 +346,8 @@ async function readReport(runs: Run[], lastRunId: string | undefined, lastRaw: R
 }
 
 /** Diff of one changed file; any file outside the task's change list is refused (no path traversal). */
-export async function getTaskDiff(root: string, taskId: string, file: string, exec: Exec): Promise<string> {
-  const plan = await loadPlan(root)
+export async function getTaskDiff(root: string, taskId: string, file: string, exec: Exec, planId?: string): Promise<string> {
+  const plan = await loadPlan(root, planId)
   const task = plan.tasks.find((t) => t.id === taskId)
   if (!task) throw new DetailError('unknown_task', { id: taskId })
   if (plan.example) {

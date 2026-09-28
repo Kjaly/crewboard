@@ -57,15 +57,15 @@ export function FeedTab({ detail, freshFrom }: { detail: TaskDetail | null; fres
 }
 
 /** Older runs have no normalized feed endpoint; the existing trace supplies their activity. */
-export function OlderRunActivity({ root, taskId, runId }: { root: string; taskId: string; runId: string }) {
+export function OlderRunActivity({ root, plan, taskId, runId }: { root: string; plan?: string; taskId: string; runId: string }) {
   useLang()
   const [trace, setTrace] = useState<Trajectory | null>(null)
   useEffect(() => {
     let alive = true
     setTrace(null)
-    void api.trace(root, taskId, runId).then((result) => { if (alive && result.ok) setTrace(result.value) }).catch(() => {})
+    void api.trace(root, taskId, runId, undefined, plan).then((result) => { if (alive && result.ok) setTrace(result.value) }).catch(() => {})
     return () => { alive = false }
-  }, [root, taskId, runId])
+  }, [root, plan, taskId, runId])
   if (!trace) return <p className="orc-meta">{t('panel.trace.loading')}</p>
   return <ul className="orc-feed">{toSteps(trace).map((step) => <li key={step.key} className="orc-ev"><i className="orc-ev__time">{offset(step.start, trace.start)}</i><span className="orc-ev__text"><strong>{KIND_NAME[step.kind]}</strong> · {step.label}</span></li>)}</ul>
 }
@@ -85,7 +85,7 @@ function Diff({ text }: { text: string }) {
   )
 }
 
-export function ChangesTab({ detail, root }: { detail: TaskDetail | null; root: string }) {
+export function ChangesTab({ detail, root, plan }: { detail: TaskDetail | null; root: string; plan?: string }) {
   useLang()
   const [file, setFile] = useState<string | null>(null)
   const [diff, setDiff] = useState<string>('')
@@ -104,7 +104,7 @@ export function ChangesTab({ detail, root }: { detail: TaskDetail | null; root: 
     if (!detail || !file || mode !== 'diff') return
     let alive = true
     api
-      .diff(root, detail.id, file)
+      .diff(root, detail.id, file, plan)
       .then((text) => {
         if (alive) setDiff(text)
       })
@@ -112,7 +112,7 @@ export function ChangesTab({ detail, root }: { detail: TaskDetail | null; root: 
     return () => {
       alive = false
     }
-  }, [root, detail?.id, file, mode])
+  }, [root, plan, detail?.id, file, mode])
 
   useEffect(() => {
     if (!expanded) return
@@ -146,8 +146,8 @@ export function ChangesTab({ detail, root }: { detail: TaskDetail | null; root: 
         <button type="button" aria-pressed={mode === 'diff'} onClick={() => setMode('diff')}>{t('panel.preview.diff')}</button>
         {mode === 'preview' ? <button type="button" onClick={() => setExpanded(true)}>{t('panel.preview.fullSize')}</button> : null}
       </div>
-        {mode === 'preview' ? <FilePreview repo={root} id={detail.id} file={file} /> : diff ? <Diff text={diff} /> : <p className="orc-meta">{t('panel.tabs.emptyDiff')}</p>}
-        {expanded ? <div className="orc-preview-modal" role="dialog" aria-modal="true" aria-label={file}><button type="button" onClick={() => setExpanded(false)}>{t('panel.preview.close')}</button><h2>{file}</h2><FilePreview repo={root} id={detail.id} file={file} expanded /></div> : null}
+        {mode === 'preview' ? <FilePreview repo={root} plan={plan} id={detail.id} file={file} /> : diff ? <Diff text={diff} /> : <p className="orc-meta">{t('panel.tabs.emptyDiff')}</p>}
+        {expanded ? <div className="orc-preview-modal" role="dialog" aria-modal="true" aria-label={file}><button type="button" onClick={() => setExpanded(false)}>{t('panel.preview.close')}</button><h2>{file}</h2><FilePreview repo={root} plan={plan} id={detail.id} file={file} expanded /></div> : null}
       </> : null}
     </>
   )

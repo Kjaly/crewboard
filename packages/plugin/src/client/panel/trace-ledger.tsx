@@ -42,7 +42,7 @@ export function LedgerView({ trace, repo, target, workers, onSteerFrom, actions,
   const loadPage = async (request: { cursor?: string; seek?: string }) => {
     setLoading(true); setPageError(false)
     try {
-      const result = await api.trace(repo.root, target.taskId, target.run.runId, request)
+      const result = await api.trace(repo.root, target.taskId, target.run.runId, request, repo.planId)
       if (!result.ok) { setPageError(true); return }
       setRecords((old) => request.seek ? [...old.filter((item) => !result.value.records?.some((found) => found.stepId === item.stepId)), ...(result.value.records ?? [])].sort((a, b) => a.index - b.index) : [...old, ...(result.value.records ?? []).filter((item) => !old.some((found) => found.stepId === item.stepId))])
       if (!request.seek) setNextCursor(result.value.nextCursor ?? null)
@@ -56,7 +56,7 @@ export function LedgerView({ trace, repo, target, workers, onSteerFrom, actions,
     let cursor: string | null = nextCursor
     try {
       while (cursor) {
-        const result = await api.trace(repo.root, target.taskId, target.run.runId, { cursor })
+        const result = await api.trace(repo.root, target.taskId, target.run.runId, { cursor }, repo.planId)
         if (!result.ok) { setPageError(true); break }
         setRecords((old) => [...old, ...(result.value.records ?? []).filter((item) => !old.some((found) => found.stepId === item.stepId))])
         cursor = result.value.nextCursor ?? null

@@ -14,6 +14,10 @@ describe('orchestration hash route', () => {
     expect(parseRoute('#orchestra/r/p/graph?draft=d&run=r')).toBeNull()
     expect(parseRoute('#orchestra/r/p/graph?step=step%3A1')).toBeNull()
   })
+  it('round trips the global Now route without a repository or plan', () => {
+    expect(parseRoute('#orchestra/now')).toEqual({ repo: '_', plan: '_', view: 'now' })
+    expect(formatRoute({ repo: '_', plan: '_', view: 'now' })).toBe('#orchestra/now')
+  })
   it('applies Back and clears only orchestration hashes on leave', () => {
     const win = window
     const apply = vi.fn()

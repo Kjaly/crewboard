@@ -12,6 +12,7 @@ const paths: Record<string, string> = {
   trace: '/crewboard/assets/screen-trace.js',
   task: '/crewboard/assets/screen-task.js',
   graph: '/crewboard/assets/screen-graph.js',
+  now: '/crewboard/assets/screen-now.js',
 }
 const pending = new Map<string, Promise<Bundle>>()
 
