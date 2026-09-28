@@ -675,7 +675,7 @@ const CSS = `
 .orc-sheet__risk{color:var(--orc-warn)}
 .orc-sheet__foot .orc-actions{margin-top:0}
 
-/* Task panel */
+/* Task panel. The scroll region holds the tab body only; the tab strip stays a fixed-height flex sibling. */
 .orc-panel__scroll{flex:1 1 auto;min-height:0;overflow:auto}
 .orc-panel__fixed{flex:none;max-height:55%;overflow:auto;background:var(--orc-layer1);border-bottom:1px solid var(--orc-line)}
 .orc-panel__fixed .orc-sec:last-child{border-bottom:0}
@@ -734,7 +734,7 @@ const CSS = `
 .orc-decision__action-help p{margin:2px 0}
 .orc-drill__sub{margin:-4px 0 10px;color:var(--orc-fg3);font-size:12px}
 .orc-steers{display:grid;gap:8px}.orc-steer{padding:8px 10px;border:1px solid var(--orc-hair);border-radius:7px}.orc-steer__text{margin:0;color:var(--orc-fg);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.orc-steer__meta{margin:4px 0 0;color:var(--orc-fg3);font-size:11px}.orc-steer__recovery{display:flex;flex-direction:column;align-items:flex-start;gap:8px;margin-top:8px;color:var(--orc-fg2);font-size:12px}
-.orc-tabs{display:flex;flex-wrap:nowrap;gap:6px;padding:6px 8px 0;border-bottom:1px solid var(--orc-hair)}
+.orc-tabs{flex:none;display:flex;flex-wrap:nowrap;gap:6px;padding:6px 8px 0;border-bottom:1px solid var(--orc-hair)}
 .orc-tab{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-height:24px;padding:4px 2px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--orc-fg3);font:var(--dsw-font-xxs-12,12px/18px system-ui,sans-serif);cursor:pointer;text-align:center}
 .orc-tab:nth-child(1),.orc-tab:nth-child(2){flex-grow:1.2}
 .orc-tab:hover{color:var(--orc-fg2)}

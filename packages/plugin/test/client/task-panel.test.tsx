@@ -66,6 +66,30 @@ it('shows exactly four tabs and no extra contract link', async () => {
   expect(screen.queryByRole('button', { name: /Открыть контракт/ })).toBeNull()
 })
 
+it('keeps the tab strip outside the scrolling body so tabs never scroll away', async () => {
+  const task = makeTask({ id: 'a', status: 'running' })
+  calls = installFetch((url) => url.includes('/api/task') ? jsonOk(makeDetail({ id: task.id })) : jsonOk(null))
+  const { container } = render(<TaskPanel repo={makeRepo([task])} task={task} attention={[]} onSelect={() => {}} density="overview" />)
+  await waitFor(() => expect(screen.getAllByRole('tab')).toHaveLength(4))
+  const panel = container.querySelector('.orc-panel') as HTMLElement
+  const tablist = panel.querySelector('.orc-tabs[role="tablist"]') as HTMLElement
+  const scroll = panel.querySelector('.orc-panel__scroll') as HTMLElement
+  const tabpanel = scroll.querySelector('.orc-tabpanel[role="tabpanel"]') as HTMLElement
+  const composer = panel.querySelector('.orc-composer') as HTMLElement
+  // The tab strip is a direct, non-scrolling sibling of the content scroll — never a descendant of it.
+  expect(tablist).toBeTruthy()
+  expect(scroll.contains(tablist)).toBe(false)
+  expect(tablist.parentElement).toBe(panel)
+  expect(scroll.parentElement).toBe(panel)
+  expect(scroll.previousElementSibling).toBe(tablist)
+  // Only the tab body scrolls with the content.
+  expect(tabpanel?.parentElement).toBe(scroll)
+  // The composer is its own region below the scroll, so it never scrolls under the tabs either.
+  expect(composer).toBeTruthy()
+  expect(scroll.contains(composer)).toBe(false)
+  expect(composer.parentElement).toBe(panel)
+})
+
 it('falls back to Overview for a stale external tab request', async () => {
   const task = makeTask({ id: 'a' })
   calls = installFetch((url) => url.includes('/api/task') ? jsonOk(makeDetail({ id: task.id })) : jsonOk(null))

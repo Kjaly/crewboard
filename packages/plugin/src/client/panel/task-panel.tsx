@@ -638,23 +638,24 @@ export function TaskPanel({
           {action.error ? <p className="orc-error">{action.error}</p> : null}
         </div>
       </div>
+      {/* The tab strip is a non-scrolling flex sibling of the content region, so only the tab body scrolls. */}
+      <div className="orc-tabs" role="tablist" aria-label={t('panel.task.details')} onKeyDown={(event) => {
+        const index = tabs.findIndex((item) => item.key === tab)
+        const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1
+        if (next < 0) return
+        event.preventDefault()
+        setTab(tabs[next]!.key)
+        setTabPinned(true)
+        onTabChange?.(tabs[next]!.key)
+        event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus()
+      }}>
+        {tabs.map(({ key, label }) => (
+          <button key={key} type="button" role="tab" className="orc-tab" aria-selected={tab === key} onClick={() => { setTab(key); setTabPinned(true); setPanelTrace(null); onTabChange?.(key) }}>
+            {label}
+          </button>
+        ))}
+      </div>
       <div className="orc-panel__scroll" ref={liveScroll}>
-        <div className="orc-tabs" role="tablist" aria-label={t('panel.task.details')} onKeyDown={(event) => {
-          const index = tabs.findIndex((item) => item.key === tab)
-          const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1
-          if (next < 0) return
-          event.preventDefault()
-          setTab(tabs[next]!.key)
-          setTabPinned(true)
-          onTabChange?.(tabs[next]!.key)
-          event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus()
-        }}>
-          {tabs.map(({ key, label }) => (
-            <button key={key} type="button" role="tab" className="orc-tab" aria-selected={tab === key} onClick={() => { setTab(key); setTabPinned(true); setPanelTrace(null); onTabChange?.(key) }}>
-              {label}
-            </button>
-          ))}
-        </div>
         <div className="orc-tabpanel" role="tabpanel">
           {tab === 'overview' ? <>
             {attempt ? <LastAttemptBlock task={task} attempt={attempt} pending={action.pending} onRetry={() => start()} onContinue={continueRun} /> : null}

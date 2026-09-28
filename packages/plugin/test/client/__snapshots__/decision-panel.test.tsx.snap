@@ -106,46 +106,46 @@ exports[`keeps the ordinary task panel snapshot 1`] = `
     </div>
   </div>
   <div
+    aria-label="Подробности задачи"
+    class="orc-tabs"
+    role="tablist"
+  >
+    <button
+      aria-selected="true"
+      class="orc-tab"
+      role="tab"
+      type="button"
+    >
+      Обзор
+    </button>
+    <button
+      aria-selected="false"
+      class="orc-tab"
+      role="tab"
+      type="button"
+    >
+      Активность
+    </button>
+    <button
+      aria-selected="false"
+      class="orc-tab"
+      role="tab"
+      type="button"
+    >
+      Изменения
+    </button>
+    <button
+      aria-selected="false"
+      class="orc-tab"
+      role="tab"
+      type="button"
+    >
+      Контракт
+    </button>
+  </div>
+  <div
     class="orc-panel__scroll"
   >
-    <div
-      aria-label="Подробности задачи"
-      class="orc-tabs"
-      role="tablist"
-    >
-      <button
-        aria-selected="true"
-        class="orc-tab"
-        role="tab"
-        type="button"
-      >
-        Обзор
-      </button>
-      <button
-        aria-selected="false"
-        class="orc-tab"
-        role="tab"
-        type="button"
-      >
-        Активность
-      </button>
-      <button
-        aria-selected="false"
-        class="orc-tab"
-        role="tab"
-        type="button"
-      >
-        Изменения
-      </button>
-      <button
-        aria-selected="false"
-        class="orc-tab"
-        role="tab"
-        type="button"
-      >
-        Контракт
-      </button>
-    </div>
     <div
       class="orc-tabpanel"
       role="tabpanel"
