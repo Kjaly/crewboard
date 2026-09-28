@@ -234,14 +234,19 @@ describe('draft review in the screen', () => {
     window.history.replaceState(null, '', '/')
   })
 
-  it('shows drafts under the repository and refreshes them on a snapshot', async () => {
+  it('shows drafts under the repository and asks for them again only when their stamp moves (pf1)', async () => {
     mountDraft()
     await waitFor(() => expect(screen.getByRole('button', { name: /Новый маршрут/ })).toBeTruthy())
     expect(screen.getByText('Черновики')).toBeTruthy()
     expect(screen.getByText('1 задача')).toBeTruthy()
-    const before = calls.filter((call) => call.url.includes('/api/plan-drafts?')).length
-    act(() => { FakeEventSource.last?.emit('snapshot', { ...snapshot, generatedAt: '2026-09-23T12:00:00Z' }) })
-    await waitFor(() => expect(calls.filter((call) => call.url.includes('/api/plan-drafts?')).length).toBeGreaterThan(before))
+    const asked = (path: string) => calls.filter((call) => call.url.includes(`/api/${path}?`)).length
+    expect([asked('plan-drafts'), asked('plan-draft-jobs')]).toEqual([1, 1])
+    // A snapshot that did not move the drafts asks for nothing, however many come.
+    for (const at of ['12:00', '12:01', '12:02']) act(() => { FakeEventSource.last?.emit('snapshot', { ...snapshot, generatedAt: `2026-09-23T${at}:00Z` }) })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect([asked('plan-drafts'), asked('plan-draft-jobs')]).toEqual([1, 1])
+    act(() => { FakeEventSource.last?.emit('snapshot', { ...snapshot, generatedAt: '2026-09-23T12:03:00Z', repos: snapshot.repos.map((repo) => ({ ...repo, draftsStamp: 'moved' })) }) })
+    await waitFor(() => expect([asked('plan-drafts'), asked('plan-draft-jobs')]).toEqual([2, 2]))
   })
 
   it('shows a blocking finding and disables approval with a reason', async () => {

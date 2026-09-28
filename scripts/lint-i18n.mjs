@@ -39,7 +39,13 @@ export async function scanI18n(base = root, allowed = exemptions) {
     try { files = await walk(dir) } catch { continue }
     for (const file of files) {
       const relative = path.relative(base, file).split(path.sep).join('/')
-      if (relative === 'packages/plugin/src/client/dict/en.ts' || relative === 'packages/plugin/src/client/dict/ru.ts' || relative === 'packages/plugin/src/host/i18n.ts') continue
+      if (
+        relative === 'packages/plugin/src/client/dict/en.ts' ||
+        relative === 'packages/plugin/src/client/dict/ru.ts' ||
+        relative === 'packages/plugin/src/client/dict/shell.ts' ||
+        relative === 'packages/plugin/src/host/i18n.ts'
+      )
+        continue
       const text = withoutComments(await readFile(file, 'utf8'))
       if (!cyrillic.test(text)) continue
       if (allowed.has(relative)) continue

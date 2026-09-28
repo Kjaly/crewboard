@@ -52,7 +52,7 @@ const STRINGS: Record<HandoffLang, HandoffStrings> = {
     noWait: 'nothing — no task is waiting.',
     waits: {
       in_review: 'review the result; the person accepts it or sends it back in dsh or with orch accept / orch reject in their terminal.',
-      decision: 'the person makes the decision in dsh or with orch accept / orch reject in their terminal.',
+      decision: 'the person makes the decision in dsh or with orch accept / orch reject in their terminal; an answer already given in chat is recorded with orch decision answer <id> --answer "…" --basis "…", and "study it and propose" sends it back to preparation with orch decision prepare <id> --reason "…".',
       preparing: 'nothing yet — the orchestrator prepares the decision (options and a recommendation) with orch verify --done.',
       own: 'nothing yet — the orchestrator does this work itself, then reports it with orch verify --done.',
       root: 'nothing — the orchestrator starts this work itself with orch start.',
@@ -79,7 +79,7 @@ const STRINGS: Record<HandoffLang, HandoffStrings> = {
     noWait: 'ничего — задачи не ждут.',
     waits: {
       in_review: 'проверить результат; принимает или возвращает человек — в dsh или командой orch accept / orch reject в своём терминале.',
-      decision: 'решение принимает человек — в dsh или командой orch accept / orch reject в своём терминале.',
+      decision: 'решение принимает человек — в dsh или командой orch accept / orch reject в своём терминале; ответ, уже данный в чате, записывает оркестратор через orch decision answer <id> --answer "…" --basis "…", а поручение «изучи и предложи» возвращает его в подготовку через orch decision prepare <id> --reason "…".',
       preparing: 'пока ничего — оркестратор готовит решение (варианты и рекомендацию) через orch verify --done.',
       own: 'пока ничего — эту работу оркестратор делает сам, затем отчитывается через orch verify --done.',
       root: 'ничего — эту работу оркестратор начинает сам через orch start.',
@@ -129,8 +129,10 @@ function commandsFor(task: HandoffTask, planId?: string): string[] {
   }
   if (task.status === 'in_review' || openDecision(task)) {
     // Accepting and rejecting are the person's (the CLI refuses them without a terminal): the agent
-    // gets what it needs to prepare the review, not the verdict.
+    // gets what it needs to prepare the review, not the verdict. For a decision it gets the chat
+    // paths too: record an answer already given, or take the question back into preparation (dc1).
     commands.push(`orch trace ${task.id} --json${plan}`)
+    if (openDecision(task)) commands.push(`orch decision answer ${task.id} --answer "…" --basis "…"${plan}`, `orch decision prepare ${task.id} --reason "…"${plan}`)
     return commands
   }
   if (task.status === 'ready') {

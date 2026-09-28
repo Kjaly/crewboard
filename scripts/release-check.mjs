@@ -10,9 +10,14 @@ const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
 // 2026-09-24): a heavier tarball fails here. Growth past them is a decision to make on purpose — measure it and
 // move the number with the new size.
 // Tarballs measured after wave 1 (w1a–w1f), 2026-09-24: crewboard 123.6 KiB → 130, dsh-crewboard 796.2 KiB → 836.
-const TARBALL_CEILING_KIB = { cli: 130, plugin: 836 }
+// crewboard re-measured after wave 2 and sz1 (2026-09-25): 162.4 KiB → 171 (the Russian texts in dist/dict-ru.js).
+// crewboard re-measured after merging main's at2/nb1/SSE-hub texts into sz1 (2026-09-25): 164.7 KiB → 173.
+// Re-measured after wave 2 (2026-09-25): crewboard 169.8 KiB → 179, dsh-crewboard 851.3 KiB → 894.
+// crewboard re-measured after rq1's grouped "no worker" refusal (2026-09-25): 180.6 KiB → 190.
+// crewboard re-measured after rb1's review fixes (2026-09-25): 190.5 KiB → 200.
+const TARBALL_CEILING_KIB = { cli: 200, plugin: 894 }
 // The always-loaded client bundle: measured 296.0 KiB plus ~5% (2026-09-24, after opt2), as in the plugin build test.
-const CLIENT_CEILING_KIB = 329
+const CLIENT_CEILING_KIB = 352 // re-measured after wave 2 (2026-09-25): 334.8 KiB
 const temp = await mkdtemp(join(tmpdir(), 'crewboard-release-'))
 const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { cwd: root, stdio: 'inherit', ...opts })
 try {
@@ -31,7 +36,7 @@ try {
     const forbidden = listing.filter((x) => /(^|\/)(src|test|tests|\.orchestration)(\/|$)|(^|\/)(\.env[^/]*|.*\.pem|.*\.key)$|node_modules/.test(x))
     if (forbidden.length) throw new Error(`${pkg.name} contains excluded files: ${forbidden.join(', ')}`)
     const expected = dir === 'cli'
-      ? ['dist/main.js', 'dist/runner-main.js', 'dist/cli-runner-main.js', 'README.md', 'LICENSE']
+      ? ['dist/main.js', 'dist/dict-ru.js', 'dist/runner-main.js', 'dist/cli-runner-main.js', 'README.md', 'LICENSE']
       : ['lib/index.js', 'lib/runner-main.js', 'lib/cli-runner-main.js', 'lib/client.js', 'lib/elk.js', 'lib/dict-en.js', 'lib/dict-ru.js', 'lib/preview-dxf.js', 'lib/preview-structured.js', 'cordis.patch.yml', 'README.md', 'LICENSE', ...['review','welcome','settings','draft','ledger','trace','task'].map(n => `lib/screen-${n}.js`)]
     for (const name of expected) if (!listing.includes(name)) throw new Error(`${pkg.name} missing required tarball file ${name}`)
     // The CLI ships exactly its bundle and runners: anything else is a stale build leftover.

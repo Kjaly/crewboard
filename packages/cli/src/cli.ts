@@ -1,9 +1,11 @@
+import { readFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import {
   AcpError,
   BackendUnavailableError,
   CheckError,
   DetailError,
+  SplitError,
   DraftError,
   DraftJobError,
   ExamplePlanError,
@@ -14,13 +16,19 @@ import {
   LegacyRunReadOnlyError,
   type Exec,
   LaunchError,
+  MergeError,
   PlanConflictError,
   PlanCorruptError,
   PlanArchivedError,
   PlanIncompatibleError,
   PlanIdError,
   PlanInvalidError,
+  PlanLockBusyError,
   PlanNotFoundError,
+  PlanRestoreError,
+  planIdOfFile,
+  previousPlanFile,
+  stateFileError,
   PrepareError,
   PresetAuthorityError,
   ProfileError,
@@ -31,17 +39,20 @@ import {
   plansDir,
 } from '@crewboard/core'
 import { cmdPreflight, cmdWorktree } from './commands/env.js'
+import { cmdSlot } from './commands/slot.js'
 import { cmdAccept, cmdChat, cmdInit, cmdPlan, cmdReject, cmdStatus, cmdSupersede, cmdDrop, cmdTask, cmdWorkers } from './commands/plan.js'
 import { cmdAttention } from './commands/attention.js'
+import { cmdMarkMerged, cmdMerge } from './commands/merge.js'
 import { cmdContinue, cmdCost, cmdEvents, cmdRun, cmdSteer, cmdStop, cmdWait } from './commands/runs.js'
 import { cmdTrace } from './commands/trace.js'
 import { cmdStart, cmdVerify } from './commands/verify.js'
+import { cmdDecision } from './commands/decision.js'
 import { cmdPresets, cmdRepo } from './commands/presets.js'
 import { warnIfOffScreen } from './commands/repos.js'
 import { repoRoot } from './context.js'
-import { help } from './help.js'
+import { helpAll, helpShort } from './help.js'
 import { type Io, UserError } from './io.js'
-import { cliT, envLang, programName, setProgram } from './i18n.js'
+import { cliT, envLang, loadLang, programName, setProgram } from './i18n.js'
 
 type Command = (argv: string[], io: Io, exec: Exec) => Promise<number>
 
@@ -56,6 +67,9 @@ const COMMANDS: Record<string, Command> = {
   wait: cmdWait,
   task: cmdTask,
   accept: cmdAccept,
+  decision: cmdDecision,
+  merge: cmdMerge,
+  'mark-merged': cmdMarkMerged,
   reject: cmdReject,
   supersede: cmdSupersede,
   drop: cmdDrop,
@@ -71,6 +85,7 @@ const COMMANDS: Record<string, Command> = {
   cost: cmdCost,
   preflight: cmdPreflight,
   worktree: cmdWorktree,
+  slot: cmdSlot,
 }
 
 /**
@@ -89,19 +104,60 @@ function describeError(err: unknown, lang: 'en' | 'ru'): { message: string; code
   }
   if (err instanceof PresetAuthorityError) return { message: err.message, code: 2 }
   if (err instanceof DetailError) return { message: again(err.code, err.vars), code: 1 }
-  if (err instanceof DraftError || err instanceof DraftJobError) return { message: cliT(lang, `draft.error.${err.reason}`, { id: err.id }), code: 1 }
+  if (err instanceof SplitError) return { message: again(err.code, err.vars), code: 1 }
+  if (err instanceof MergeError) return { message: again(`merge.${err.code}`, err.vars), code: 1 }
+  if (err instanceof DraftError || err instanceof DraftJobError) return { message: cliT(lang, `draft.error.${err.reason}`, { id: err.id, detail: err instanceof DraftJobError ? (err.detail ?? '') : '' }), code: 1 }
   if (err instanceof BackendUnavailableError) return { message: cliT(lang, 'cli.backendUnavailable', { error: err.message }), code: 1 }
   if (err instanceof LegacyRunReadOnlyError) return { message: cliT(lang, 'cli.legacyReadOnly'), code: 1 }
   if (err instanceof ProfileError) return { message: err.message, code: 1 }
   if (err instanceof PlanIncompatibleError) return { message: cliT(lang, `cli.planIncompatible.${err.mode}`, { file: err.file, details: err.details.slice(0, 3).join(', ') }), code: 1 }
   if (err instanceof PlanArchivedError) return { message: cliT(lang, 'cli.planArchived', { id: err.planId }), code: 1 }
-  if (err instanceof PlanCorruptError || err instanceof PlanInvalidError) return { message: err.message, code: 1 }
+  if (err instanceof PlanCorruptError) {
+    const restore = err.restorable ? `\n${cliT(lang, 'cli.planCorruptRestore', { id: planIdOfFile(err.file) })}` : ''
+    return { message: `${cliT(lang, 'cli.planCorrupt', { file: err.file, copy: err.quarantinedTo })}${restore}`, code: 1 }
+  }
+  if (err instanceof PlanInvalidError) return { message: err.message, code: 1 }
+  if (err instanceof PlanLockBusyError) return { message: err.holder ? cliT(lang, 'cli.lockBusy', { lock: err.lock, ...err.holder }) : cliT(lang, 'cli.lockBusyUnknown', { lock: err.lock }), code: 1 }
+  if (err instanceof PlanRestoreError) return { message: cliT(lang, `cli.restore.${err.reason}`, { id: planIdOfFile(err.file), prev: previousPlanFile(err.file) }), code: 1 }
   if (err instanceof PlanConflictError) return { message: cliT(lang, 'cli.conflict'), code: 1 }
   if (err instanceof CheckError || err instanceof PrepareError || err instanceof ExamplePlanError || err instanceof ExampleRunError || err instanceof SpecUploadError || err instanceof FilePreviewError || err instanceof AcpError) return { message: err.message, code: 1 }
   if (isSchemaError(err)) return { message: cliT(lang, 'cli.invalidPlan', { error: err.message }), code: 1 }
+  // A full, forbidden or read-only disk under a state file: one sentence with the path, not a stack (sf1).
+  const disk = stateFileError(err)
+  if (disk) return { message: cliT(lang, `cli.stateFile.${disk.reason}`, { path: disk.path }), code: 1 }
   // node:util parseArgs throws TypeErrors with ERR_PARSE_ARGS_* codes: a usage mistake, not a crash.
   if (err instanceof TypeError && (String((err as NodeJS.ErrnoException).code ?? '').startsWith('ERR_PARSE_ARGS') || /parseArgs|Unknown option/i.test(err.message))) return { message: err.message, code: 2 }
   return { message: err instanceof Error ? (err.stack ?? err.message) : String(err), code: 1 }
+}
+
+/** The package version (`{prog} --version`): read next to `dist/` (bundled) or next to `src/` (tests) — both one level under the package root (cl2). */
+function packageVersion(): string {
+  return (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version
+}
+
+/** Edit distance between two short command names, for «did you mean …» (cl2): cheap enough for a handful of candidates. */
+function levenshtein(a: string, b: string): number {
+  let previous = Array.from({ length: b.length + 1 }, (_, j) => j)
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i, ...new Array<number>(b.length).fill(0)]
+    for (let j = 1; j <= b.length; j++) {
+      current[j] = a[i - 1] === b[j - 1] ? (previous[j - 1] ?? 0) : 1 + Math.min(previous[j - 1] ?? 0, previous[j] ?? 0, current[j - 1] ?? 0)
+    }
+    previous = current
+  }
+  return previous[b.length] ?? 0
+}
+
+/** The closest known command to a typo, within a tolerance that grows with the name's length; `undefined` when nothing is close. */
+function suggestCommand(name: string): string | undefined {
+  const candidates = [...Object.keys(COMMANDS), 'help']
+  let best: { id: string; dist: number } | undefined
+  for (const id of candidates) {
+    const dist = levenshtein(name, id)
+    if (!best || dist < best.dist) best = { id, dist }
+  }
+  const threshold = Math.min(3, Math.max(1, Math.floor(name.length / 2)))
+  return best && best.dist <= threshold ? best.id : undefined
 }
 
 /** A missing plan id means something else than an empty repository: name it and list what exists. */
@@ -122,6 +178,7 @@ async function describeMissingPlan(err: PlanNotFoundError, io: Io, exec: Exec, l
 export async function run(argv: string[], io: Io, exec: Exec = nodeExec): Promise<number> {
   setProgram(io.program ?? 'crewboard')
   let lang = envLang(io.env)
+  await loadLang(lang)
   const args = [...argv]
   for (let i = 0; i < args.length; i++) if (args[i] === '--lang') {
     const selected = args[i + 1]
@@ -130,14 +187,24 @@ export async function run(argv: string[], io: Io, exec: Exec = nodeExec): Promis
     args.splice(i, 2); i--
   }
   io.lang = lang
+  await loadLang(lang)
   const [name, ...rest] = args
-  if (!name || name === 'help' || name === '--help' || name === '-h') {
-    io.out(help(lang))
+  if (name === '--version' || name === '-v') {
+    io.out(`${packageVersion()}\n`)
+    return 0
+  }
+  if (!name || name === '--help' || name === '-h') {
+    io.out(helpShort(lang))
+    return 0
+  }
+  if (name === 'help') {
+    io.out(rest[0] === 'all' ? helpAll(lang) : helpShort(lang))
     return 0
   }
   const command = COMMANDS[name]
   if (!command) {
-    io.err(`${cliT(lang, 'cli.unknown', { name })}\n\n${help(lang)}`)
+    const suggestion = suggestCommand(name)
+    io.err(`${suggestion ? cliT(lang, 'cli.unknownSuggest', { name, suggestion }) : cliT(lang, 'cli.unknown', { name })}\n\n${helpShort(lang)}`)
     return 2
   }
   let code: number
@@ -169,4 +236,4 @@ function runRefusal(err: unknown, message: string, id: string | undefined, lang:
 }
 
 /** Commands that do not work on a plan: they never carry the «not on screen» warning. */
-const OFF_PLAN_COMMANDS = new Set(['repo', 'presets', 'workers', 'preflight'])
+const OFF_PLAN_COMMANDS = new Set(['repo', 'presets', 'workers', 'preflight', 'slot'])

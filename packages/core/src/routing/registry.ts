@@ -3,7 +3,8 @@ import { dirname, join } from 'node:path'
 import type { Transport } from './profile-store.js'
 import { crewboardEnv } from '../env.js'
 
-export type WorkerKind = 'dsh' | 'claude' | 'codex' | 'devin'
+export type WorkerKind = 'dsh' | 'claude' | 'codex' | 'devin' | 'opencode' | 'cursor' | 'gemini' | 'grok'
+export const WORKER_KINDS: readonly WorkerKind[] = ['dsh', 'claude', 'codex', 'devin', 'opencode', 'cursor', 'gemini', 'grok']
 /** `minCliVersion` is the oldest CLI release that can run this entry's model (unknown: no check). */
 export type WorkerEntry = { id: string; kind: WorkerKind; model?: string; label: string; transport?: Transport; effort?: string; billing: 'API' | 'подписка' | 'промо'; note?: string; minCliVersion?: string }
 export type WorkerRegistry = { version: 1; workers: WorkerEntry[] }
@@ -62,7 +63,7 @@ async function writeRegistry(path: string, registry: WorkerRegistry): Promise<vo
 }
 
 export async function saveWorker(path: string, entry: WorkerEntry): Promise<WorkerRegistry> {
-  if (!entry.id.trim() || !entry.label.trim() || !['dsh', 'claude', 'codex', 'devin'].includes(entry.kind)) throw new TypeError('Некорректная запись воркера')
+  if (!entry.id.trim() || !entry.label.trim() || !WORKER_KINDS.includes(entry.kind)) throw new TypeError('Некорректная запись воркера')
   const registry = await loadRegistry(path)
   const index = registry.workers.findIndex((w) => w.id === entry.id)
   if (index < 0) registry.workers.push(entry)

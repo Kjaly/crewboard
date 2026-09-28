@@ -9,7 +9,7 @@ import type { Backends } from '../src/orchestration/backends.js'
 import { getTaskDetail } from '../src/orchestration/detail.js'
 import { newTask } from '../src/plan/schema.js'
 import { initPlan, updatePlan } from '../src/plan/store.js'
-import { extractReport, finalMessage } from '../src/runs/report.js'
+import { extractReport, finalMessage, reportedAnswer } from '../src/runs/report.js'
 
 const NOW = new Date('2026-09-22T12:00:00Z')
 const fixture = async (name: string) =>
@@ -107,6 +107,46 @@ describe('finalMessage', () => {
 
     expect(finalMessage([{ ts: 't', type: 'tool_started', data: 'Read file' }])).toBeUndefined()
     expect(finalMessage([])).toBeUndefined()
+  })
+})
+
+describe('reportedAnswer', () => {
+  // ny1 (2026-09-25): the report, then a direction queued with `steer --mode queue` and the worker's answer to it.
+  const report = 'Готово. Архивный план больше не попадает ни в «Needs you», ни в какой счётчик.\n\n**Проверки:** всё прошло.'
+  const reply = 'С этими настройками не упал ни один тест.'
+  const bash = { tool: 'bash', status: 'running', input: { command: 'pnpm test' } }
+  const edit = { tool: 'edit', status: 'running', input: { file_path: 'src/a.ts' } }
+  const run = (between: RawEvent[], second: string): RawEvent[] => [
+    { ts: 't0', type: 'turn_started', data: { turn: 1, text: 'task' } },
+    { ts: 't1', type: 'tool_started', data: edit },
+    { ts: 't2', type: 'answer_delta', data: report },
+    { ts: 't3', type: 'turn_ended', data: { turn: 1 } },
+    { ts: 't4', type: 'steer', data: 'The machine is overloaded right now' },
+    { ts: 't5', type: 'turn_started', data: { turn: 2, text: 'The machine is overloaded right now' } },
+    ...between,
+    { ts: 't7', type: 'answer_delta', data: second },
+    { ts: 't8', type: 'turn_ended', data: { turn: 2 } },
+  ]
+
+  it('keeps the report when later turns only answer a direction and write no file', () => {
+    expect(reportedAnswer(run([{ ts: 't6', type: 'tool_started', data: bash }], reply))).toEqual({ text: report, followUp: reply })
+    // A reply that repeats a result line does not replace the report either.
+    expect(reportedAnswer(run([], 'Результат: получен'))).toEqual({ text: report, followUp: 'Результат: получен' })
+  })
+
+  it('reads the last answer with a result line once a later turn writes files', () => {
+    expect(reportedAnswer(run([{ ts: 't6', type: 'tool_started', data: edit }], reply))).toEqual({ text: report, followUp: reply })
+    expect(reportedAnswer(run([{ ts: 't6', type: 'tool_started', data: edit }], 'Результат: получен, поправил тест'))).toEqual({ text: 'Результат: получен, поправил тест' })
+  })
+
+  it('reads a turn woken without a direction as the report, and the last answer when no turn has a result line', () => {
+    const woken = run([], 'Результат: получен').filter((ev) => ev.type !== 'steer')
+    expect(reportedAnswer(woken)).toEqual({ text: 'Результат: получен' })
+    expect(reportedAnswer([{ ts: 't', type: 'answer_delta', data: 'нет строки результата' }])).toEqual({ text: 'нет строки результата' })
+    // A stop request is no direction: the answer after it is the run's own.
+    const stopped = run([], 'Результат: получен').map((ev) => ev.type === 'steer' ? { ...ev, data: 'остановка по запросу' } : ev)
+    expect(reportedAnswer(stopped)).toEqual({ text: 'Результат: получен' })
+    expect(reportedAnswer([])).toEqual({})
   })
 })
 

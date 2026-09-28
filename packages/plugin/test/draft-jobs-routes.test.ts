@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { expect, it } from 'vitest'
-import { type Backends, type RunBackend, listDraftJobs, loadDraft } from '@crewboard/core'
+import { type Backends, type Exec, type RunBackend, listDraftJobs, loadDraft, nodeExec } from '@crewboard/core'
 import { CLIENT_HEADER, actionRoutes } from '../src/host/actions.js'
 import type { Native } from '../src/host/native.js'
 import { OrchestraService } from '../src/host/service.js'
@@ -12,24 +12,32 @@ import { OrchestraService } from '../src/host/service.js'
 const NOW = new Date('2026-09-24T12:00:00Z')
 const good = { id: 'bye-plan', goal: 'Bye', source: 'chat', lanes: ['core'], tasks: [], decisions: [] as unknown[] }
 
-type FakeRun = { done: boolean; answer?: string; prompt: string }
+type FakeRun = { done: boolean; answer?: string; prompt: string; agent?: string; readOnly?: boolean; failure?: string }
 function fakeBackends(runs: Map<string, FakeRun>): Backends {
   const backend: RunBackend = {
     id: 'codex',
-    launch: async ({ promptFile }) => { const id = `run_fake-${runs.size + 1}`; runs.set(id, { done: false, prompt: await readFile(promptFile, 'utf8') }); return id },
-    status: async (id) => ({ status: runs.get(id)!.done ? 'completed' : 'running', terminal: runs.get(id)!.done, exitCode: 0 }),
-    events: async (id) => { const run = runs.get(id)!; return run.answer === undefined ? [] : [{ ts: '', type: 'final', data: run.answer }] },
+    readOnlyLaunch: true,
+    launch: async ({ promptFile, agent, readOnly }) => { const id = `run_fake-${runs.size + 1}`; runs.set(id, { done: false, prompt: await readFile(promptFile, 'utf8'), agent, ...(readOnly ? { readOnly } : {}) }); return id },
+    status: async (id) => ({ status: runs.get(id)!.failure ? 'failed' : runs.get(id)!.done ? 'completed' : 'running', terminal: runs.get(id)!.done, exitCode: 0 }),
+    events: async (id) => { const run = runs.get(id)!; return run.failure ? [{ ts: '', type: 'run_failed', data: run.failure }] : run.answer === undefined ? [] : [{ ts: '', type: 'final', data: run.answer }] },
     steer: async () => {},
     cancel: async () => {},
   }
   return { forAgent: async () => backend }
 }
 
+/** Preflight over a fake machine: Devin is not installed, dsh is (with its key), so the research preset picks dsh. */
+const machine: Exec = async (cmd, args, opts) => {
+  if (cmd === 'git') return nodeExec(cmd, args, opts)
+  if (cmd === 'dsh') return { code: 0, stdout: 'dsh 1.4.0', stderr: '', timedOut: false }
+  return { code: 127, stdout: '', stderr: `command not found: ${cmd}`, timedOut: false }
+}
+
 async function host(root: string, runs: Map<string, FakeRun>) {
   const backends = fakeBackends(runs)
   const native: Native = { confirm: async () => true, notify: async () => {} }
   const service = new OrchestraService({ config: { repos: [root], refreshMs: 60_000 }, backendsFor: () => backends, now: () => NOW })
-  const routes = actionRoutes({ service, repos: [root], backendsFor: () => backends, native, env: {}, home: root, now: () => NOW })
+  const routes = actionRoutes({ service, repos: [root], backendsFor: () => backends, native, env: { DEEPSEEK_API_KEY: 'k' }, home: root, now: () => NOW, exec: machine })
   const call = async (method: 'GET' | 'POST', name: string, body: Record<string, string> = {}) => {
     const route = routes.find((r) => r.path === `/crewboard/api/${name}`)
     if (!route) throw new Error(`no route ${name}`)
@@ -93,4 +101,22 @@ it('saves an uploaded or pasted spec under .orchestration/specs and drafts it li
   expect(await call('POST', 'spec-upload', { name: '../../escape.md', text: '# x' })).toMatchObject({ status: 400, json: { error: 'bad_name' } })
   expect(await call('POST', 'spec-upload', { name: 'big.md', text: 'x'.repeat(256 * 1024 + 1) })).toMatchObject({ status: 413, json: { error: 'too_large' } })
   expect(runs.size).toBe(2)
+})
+
+it('says who writes the draft and why the first worker was skipped, starts it read-only and retries a failed automatic pick with a fresh pick', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'orch-draft-worker-'))
+  await writeFile(join(root, 'bye.txt'), '# Bye')
+  const runs = new Map<string, FakeRun>()
+  const { call } = await host(root, runs)
+  const who = await call('GET', 'draft-worker')
+  expect(who.json.value).toMatchObject({ agent: 'dsh/deepseek-flash', skipped: [{ id: 'devin', reason: expect.any(String) }], options: expect.arrayContaining(['devin', 'dsh/deepseek-flash']) })
+  const started = await call('POST', 'plan-draft-from', { file: 'bye.txt' })
+  expect(started.json.value.job).toMatchObject({ agent: 'dsh/deepseek-flash', pick: 'auto', isolation: 'read_only' })
+  expect(runs.get('run_fake-1')).toMatchObject({ agent: 'dsh/deepseek-flash', readOnly: true })
+  Object.assign(runs.get('run_fake-1')!, { done: true, failure: 'Not logged in · Please run /login\nat x' })
+  expect((await call('GET', 'plan-draft-jobs')).json.value).toMatchObject([{ status: 'failed', detail: 'Not logged in · Please run /login', hint: 'login' }])
+  const retried = await call('POST', 'plan-draft-job-repair', { id: started.json.value.job.id })
+  expect(retried.json.value).toMatchObject({ status: 'running', attempts: 2, pick: 'auto' })
+  // A named worker the API-only policy refuses is rejected, not replaced.
+  expect(await call('POST', 'plan-draft-from', { file: 'bye.txt', agent: 'claude/opus' })).toMatchObject({ status: 409, json: { error: 'anthropic_api_key_missing' } })
 })

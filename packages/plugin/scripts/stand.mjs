@@ -6,12 +6,13 @@
 // with a plain HTTP server, and mounts the built client (`lib/client.js`) in a page that plays the
 // shell: React from a CDN, the module loader, and the slots the client registers into.
 //
-//   node packages/plugin/scripts/stand.mjs [--port 4640] [--repo <root> ...]
+//   node packages/plugin/scripts/stand.mjs [--port 4640] [--repo <root> ...] [--refresh-ms 5000] [--log-requests <file>] [--dsh-catalog <file.json>]
 //   open http://127.0.0.1:4640/            the orchestration screen
 //   open http://127.0.0.1:4640/?screen=settings&lang=ru
 //
 // Nothing here writes on its own: the native dialogs answer «no», so accepting from the stand is
 // refused exactly as a declined macOS confirmation would be.
+import { appendFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { dirname, join } from 'node:path'
@@ -22,6 +23,15 @@ const lib = join(here, '..', 'lib')
 const args = process.argv.slice(2)
 const port = Number(args[args.indexOf('--port') + 1]) || 4640
 const repos = args.flatMap((a, i) => (a === '--repo' ? [args[i + 1]] : []))
+const refreshMs = Number(args[args.indexOf('--refresh-ms') + 1]) || 5000
+// Every request the page makes, with the milliseconds since the stand started: the first-load measurement (pf1)
+// counts them per resource.
+const requestLog = args.includes('--log-requests') ? args[args.indexOf('--log-requests') + 1] : undefined
+const started = performance.now()
+// dsh's model catalog as its session controller would give it (wo1): the stand has no dsh, so without this file
+// the settings say dsh models are not listed. The file holds `modelCatalog()`'s answer: `{ groups, failures }`.
+const catalogFile = args.includes('--dsh-catalog') ? args[args.indexOf('--dsh-catalog') + 1] : undefined
+const catalog = catalogFile ? JSON.parse(await readFile(catalogFile, 'utf8')) : undefined
 
 const { apply } = await import(join(lib, 'index.js'))
 
@@ -32,6 +42,7 @@ const ctx = {
   inject: (names, fn) => fn({
     ...ctx,
     ...(names.includes('webServer') ? { webServer: { register: (r) => { routes.push(r); return () => {} } } } : {}),
+    ...(names.includes('sessionController') && catalog ? { sessionController: { modelCatalog: async () => catalog } } : {}),
   }),
   tools: { register: noop },
   systemPrompt: { section: noop },
@@ -40,7 +51,7 @@ const native = {
   confirm: async (_title, question) => { console.log(`[stand] confirm refused: ${question.split('\n')[0]}`); return false },
   notify: async () => {},
 }
-apply(ctx, { repos, refreshMs: 5000, notifications: false }, { native })
+apply(ctx, { repos, refreshMs, notifications: false }, { native })
 
 const PAGE = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>orchestra stand</title>
@@ -85,6 +96,7 @@ const match = (url) => {
 }
 
 createServer(async (req, res) => {
+  if (requestLog) appendFileSync(requestLog, `${Math.round(performance.now() - started)} ${req.method} ${req.url}\n`)
   if (req.url === '/' || req.url.startsWith('/?')) {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(PAGE)
     return

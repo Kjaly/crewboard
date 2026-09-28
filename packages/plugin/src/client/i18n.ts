@@ -1,5 +1,6 @@
 import { bindClientService, type ClientContext, type ClientServices } from './dsh.js'
 import { useSyncExternalStore } from 'react'
+import { SHELL_LABELS, type ShellLabelKey } from './dict/shell.js'
 
 export type Lang = 'ru' | 'en'
 type Vars = Record<string, string | number>
@@ -15,9 +16,14 @@ type LocaleFace = ClientServices['locale']
  * Text stays empty while `waiting` (the active language is not in yet): a raw key or an English flash for
  * a Russian reader is worse than a blank frame. `revision` moves on every change so hooks re-render.
  * `adoption` numbers every language change: a dictionary load that resolves after a newer one is dropped.
+ * `activeLang` is the one exception to the no-flash rule: the language dsh's own snapshot reports right
+ * now, set the moment we learn it rather than once a dictionary confirms it — `shellLabel` (lb1) reads
+ * it for the handful of strings dsh calls outside React, where a blank frame at boot is worse than a
+ * language guess a `settle()` a moment later may still correct.
  */
 type I18nStore = {
   language: Lang
+  activeLang: Lang
   waiting: boolean
   revision: number
   adoption: number
@@ -35,13 +41,18 @@ declare global {
 // One shared object: the dictionary assets (`dict-*-entry.ts`) write into the same global.
 globalThis.__orchDictionaries ??= {}
 const dictionaries: Partial<Record<Lang, Dictionary>> = globalThis.__orchDictionaries
-globalThis.__crewboardI18n ??= { language: 'en', waiting: false, revision: 0, adoption: 0, listeners: new Set(), pending: new Map() }
+globalThis.__crewboardI18n ??= { language: 'en', activeLang: 'en', waiting: false, revision: 0, adoption: 0, listeners: new Set(), pending: new Map() }
 const store: I18nStore = globalThis.__crewboardI18n
 const emit = () => { store.revision++; store.listeners.forEach((listener) => { listener() }) }
 const markReady = () => { if (store.waiting) { store.waiting = false; emit() } }
 const activate = (lang: Lang) => {
   if (store.language === lang) return
   store.language = lang
+  emit()
+}
+const setActiveLang = (lang: Lang) => {
+  if (store.activeLang === lang) return
+  store.activeLang = lang
   emit()
 }
 
@@ -68,6 +79,7 @@ export function loadLang(lang: Lang): Promise<void> {
 
 export function setLang(lang: Lang): void {
   const ticket = ++store.adoption
+  setActiveLang(lang)
   if (dictionaries[lang]) { activate(lang); return }
   void loadLang(lang).then(() => { if (ticket === store.adoption) activate(lang) }).catch(() => {
     if (ticket === store.adoption && dictionaries.en) activate('en')
@@ -105,6 +117,25 @@ export function t(key: string, vars: Vars = {}): string {
   return value.replace(/\{([\w]+)\}/g, (match, name: string) => vars[name] === undefined ? match : String(vars[name]))
 }
 
+/**
+ * The three strings dsh reads from a slot's `label`/`title` outside React (see `dict/shell.ts`): `t()`
+ * wins once its lazy dictionary is in, and until then this always-loaded table stands in, keyed by the
+ * language dsh already told us is active — never blank, never a wait on the dictionary script.
+ */
+export function shellLabel(key: ShellLabelKey): string {
+  return t(key) || SHELL_LABELS[store.activeLang][key]
+}
+
+/**
+ * The screen's half of a host message written in both languages («English. / Русский.»): a full disk or a
+ * busy lock (sf1) keeps the path the words carry. A message in one language comes back as it is.
+ */
+export function ownHalf(message: string): string {
+  const at = message.indexOf(' / ')
+  if (at < 0) return message
+  return store.language === 'ru' ? message.slice(at + 3) : message.slice(0, at)
+}
+
 const langOf = (id: string | undefined): Lang => id?.toLowerCase().split('-')[0] === 'ru' ? 'ru' : 'en'
 
 /**
@@ -128,12 +159,14 @@ export function bindLocale(ctx: ClientContext): void {
       localeSeen = true
       const ticket = ++store.adoption
       const lang = langOf(locale.getSnapshot().active)
+      setActiveLang(lang)
       if (dictionaries.en && dictionaries[lang]) { activate(lang); markReady(); return }
       if (!store.waiting) { store.waiting = true; emit() }
       // The load that finishes applies what dsh shows now, and only while no newer adoption started.
       const settle = () => {
         if (ticket !== store.adoption || !current()) return
         const now = langOf(locale.getSnapshot().active)
+        setActiveLang(now)
         activate(dictionaries.en && dictionaries[now] ? now : 'en')
         markReady()
       }

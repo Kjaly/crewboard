@@ -123,6 +123,25 @@ describe('tab title count', () => {
     act(() => center.feed(makeSnapshot(makeRepo([], [failed]))))
     expect(center.getState().failed).toBe(1)
   })
+
+  // nt2: the favicon's danger count and the host notifier read the same «is this a real alarm» rule
+  // (`countsAsAttention`) — a command merely running, or a short quiet spell, never turns the icon red,
+  // while «may be stuck» and «worker gone» do, same as failed.
+  it('never counts a command merely running or a short quiet spell as a failure', () => {
+    const running: Attention = { kind: 'running', severity: 'warn', taskId: 'x', runId: 'r', message: 'running' }
+    const stalled: Attention = { kind: 'stalled', severity: 'warn', taskId: 'x', runId: 'r', message: 'quiet' }
+    const center = createReviewCenter()
+    act(() => center.feed(makeSnapshot(makeRepo([], [running, stalled]))))
+    expect(center.getState().failed).toBe(0)
+  })
+
+  it('counts «may be stuck» and «worker gone» as failures, like a failed run', () => {
+    const stuck: Attention = { kind: 'running', severity: 'alert', taskId: 'x', runId: 'r', message: 'may be stuck' }
+    const gone: Attention = { kind: 'worker_gone', severity: 'alert', taskId: 'y', runId: 'r2', message: 'gone' }
+    const center = createReviewCenter()
+    act(() => center.feed(makeSnapshot(makeRepo([], [stuck, gone]))))
+    expect(center.getState().failed).toBe(2)
+  })
 })
 
 /* -------------------------------------------------------------------- favicon */
@@ -267,7 +286,24 @@ describe('browser notifications', () => {
     expect(shown).toHaveLength(2)
     expect(shown[0]?.closed).toBe(true)
     expect(shown[0]?.options.tag).toBe(shown.at(-1)?.options.tag)
-    expect(shown.at(-1)?.options.body).toContain('2 tasks are waiting for acceptance')
+    expect(shown.at(-1)?.options.body).toContain('2 tasks wait for review')
+    notifier.dispose()
+  })
+
+  // at2 (B28): three tasks that finish together are one notification grouped by reason, and it opens the plan's «Needs you».
+  it('a burst of three finished tasks yields one grouped notification that opens the plan', () => {
+    visibility = 'hidden'
+    const { notifier, shown, opened } = notifierFor()
+    notifier.feed([
+      { ...item('t1', 'p'), plan: 'Ship it' },
+      { ...item('t2', 'p'), plan: 'Ship it' },
+      { ...item('t3', 'p'), plan: 'Ship it', reason: 'decision', decision: true },
+    ])
+    expect(shown).toHaveLength(1)
+    expect(shown[0]?.options.body).toBe('2 tasks wait for review · 1 decision in “Ship it”')
+    shown[0]?.onclick?.()
+    expect(opened).toEqual([expect.objectContaining({ root: '/repo', planId: 'p', needs: true })])
+    expect(opened[0]).not.toHaveProperty('taskId')
     notifier.dispose()
   })
 

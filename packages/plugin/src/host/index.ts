@@ -3,26 +3,28 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { type Backends, createBackends, deriveViews, loadPlan, loadRepoPreferences, loadSidebarOrder, nodeExec, normalize, readDshWorkspaces, readRepoRegistry, workerSettingsProblem } from '@crewboard/core'
-import { actionRoutes, resolvedWorkers } from './actions.js'
+import { actionRoutes, dshCatalogOf, resolvedWorkers } from './actions.js'
 import { assetRoutes } from './assets.js'
 import { type ChatDeps, createChatWaker, readChats } from './chat.js'
 import { Config, legacyDshConfigFromYaml, resolveConfigWithLegacy } from './config.js'
 import type { HostContext, SessionControllerFace } from './dsh.js'
 import { macNative, type Native } from './native.js'
+import { dshHomeOf, watchDshSettings } from './dsh-settings.js'
 import { bindHostService, reportHostBoundary } from './boundary.js'
 import { hostLang } from './i18n.js'
 import { createAttentionNotifier } from './notify.js'
 import { ORCHESTRA_PROMPT, ORCHESTRA_PROMPT_NAME, ORCHESTRA_PROMPT_ORDER } from './prompt.js'
 import { createNotificationPresence } from './presence.js'
 import { orchestraRoutes } from './routes.js'
-import { OrchestraService } from './service.js'
+import { OrchestraService, type ServiceDeps } from './service.js'
 import { orchestraTools, toDshTool } from './tools.js'
 
 export { Config }
+
 export const name = 'crewboard'
 export const inject = ['tools', 'systemPrompt']
 
-export function apply(ctx: HostContext, rawConfig?: unknown, dependencies?: { native?: Native; onService?: (service: OrchestraService) => void }): void {
+export function apply(ctx: HostContext, rawConfig?: unknown, dependencies?: { native?: Native; onService?: (service: OrchestraService) => void; profile?: ServiceDeps['profile'] }): void {
   const home = process.env.HOME ?? homedir()
   // dsh passes only the current plugin row to apply(). Recover the previous row's repos
   // from its profile patch so changing plugin ids does not drop the owner's repository list.
@@ -47,14 +49,6 @@ export function apply(ctx: HostContext, rawConfig?: unknown, dependencies?: { na
     return b
   }
 
-  // The chat bindings live next to the plan and are read when the snapshot is built, so the client
-  // can show which plans already have one.
-  const service = new OrchestraService({ config, backendsFor, now: () => new Date(), chatsFor: readChats, workspaces, registered, workersFor: () => resolvedWorkers(process.env, home), workerSettingsFor: () => workerSettingsProblem(process.env, home), prefsFor: () => loadRepoPreferences(process.env, home), orderFor: () => loadSidebarOrder(process.env, home), env: { ...process.env, HOME: home } })
-  const stop = service.start()
-  dependencies?.onService?.(service)
-  ctx.effect(() => stop, 'crewboard: service')
-
-  const native = dependencies?.native ?? macNative(nodeExec)
   let settings: { get(namespace: string): unknown } | undefined
   bindHostService(ctx, 'settings', (face) => {
     settings = face
@@ -67,23 +61,40 @@ export function apply(ctx: HostContext, rawConfig?: unknown, dependencies?: { na
       return hostLang(preference)
     } catch (error) { reportHostBoundary('settings', 'callback', error); return 'en' as const }
   }
+  // The session controller is optional: without it every chat route answers 503, dsh's models are not
+  // listed, and the plugin works exactly as before.
+  let sessions: SessionControllerFace | undefined
+
+  // The chat bindings live next to the plan and are read when the snapshot is built, so the client
+  // can show which plans already have one. The worker list carries every model dsh's catalog lists (pv1).
+  const service = new OrchestraService({ config, backendsFor, now: () => new Date(), chatsFor: readChats, workspaces, registered, workersFor: async () => resolvedWorkers(process.env, home, { ...await dshCatalogOf(sessions).then((catalog) => (catalog ? { catalog } : {})), lang: lang() }), workerSettingsFor: () => workerSettingsProblem(process.env, home), prefsFor: () => loadRepoPreferences(process.env, home), orderFor: () => loadSidebarOrder(process.env, home), env: { ...process.env, HOME: home }, ...(dependencies?.profile ? { profile: dependencies.profile } : {}) })
+  const stop = service.start()
+  dependencies?.onService?.(service)
+  ctx.effect(() => stop, 'crewboard: service')
+
+  const native = dependencies?.native ?? macNative(nodeExec)
+  // dsh hot-reloads its providers from `settings.yaml` (what Settings → Models writes): the worker list follows.
+  ctx.effect(() => watchDshSettings(dshHomeOf(process.env, home), () => void service.refresh()), 'crewboard: dsh settings')
   // While a browser tab promises to show notifications, the host stays quiet; when the last such
   // client stops heart-beating the macOS fallback takes over again.
   const presence = createNotificationPresence()
   if (config.notifications) {
+    // Work that waits on the person, grouped by plan and reason — one notification per change (at2).
     const notifier = createAttentionNotifier((title, message) => native.notify(title, message), lang, () => !presence.active())
-    ctx.effect(
-      () =>
-        service.subscribe((s) => {
-          notifier(s)
-        }),
-      'crewboard: notifications',
-    )
+    ctx.effect(() => {
+      const stop = service.subscribe((s) => {
+        notifier(s)
+      })
+      return () => {
+        stop()
+        notifier.dispose()
+      }
+    }, 'crewboard: notifications')
   }
 
   ctx.effect(() => ctx.systemPrompt.section({ name: ORCHESTRA_PROMPT_NAME, order: ORCHESTRA_PROMPT_ORDER, text: ORCHESTRA_PROMPT }), 'crewboard: prompt section')
 
-  const tools = orchestraTools({ service, repos: config.repos, workspaces, backendsFor, env: process.env, home, now: () => new Date() })
+  const tools = orchestraTools({ service, repos: config.repos, workspaces, backendsFor, env: process.env, home, now: () => new Date(), lang })
   for (const spec of tools) ctx.effect(() => ctx.tools.register(toDshTool(spec)), `crewboard: ${spec.name}`)
 
   // The task brief wants the latest events; only the host has the run backends, so it reads them here.
@@ -100,13 +111,13 @@ export function apply(ctx: HostContext, rawConfig?: unknown, dependencies?: { na
     }
   }
 
-  // The session controller is optional: without it every chat route answers 503 and the plugin works
-  // exactly as before. The waker only exists while the service is injected.
-  let sessions: SessionControllerFace | undefined
+  // The waker only exists while the session controller is injected.
   ctx.inject(['sessionController'], (chat) => {
     const controller = chat.sessionController
     if (!controller) return
     sessions = controller
+    // The catalog just became readable: list dsh's models now rather than at the next refresh.
+    void service.refresh()
     const waker = createChatWaker({ sessions: controller, now: () => new Date(), newId: () => randomUUID(), readTask })
     chat.effect(() => service.subscribe((s) => waker(s)), 'crewboard: chat waker')
     chat.effect(

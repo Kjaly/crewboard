@@ -35,9 +35,10 @@ it('shows both repositories, names the other one, and agrees with the queue and 
   // The inbox lists every repository's waits: both current-plan tasks and the background plan.
   const inboxRows = [...document.querySelectorAll<HTMLElement>('.orc-ibrow')]
   expect(inboxRows.map((row) => row.querySelector('.orc-ibrow__line')?.textContent)).toEqual(['A review', 'B decision', 'Later plan'])
-  expect(screen.getByTitle('Orchestration · 4 waiting — ap-a: A plan (1); ap-b: B plan (1), Later plan (2)')).toBeTruthy()
+  expect(screen.getByTitle('Orchestration · 4 in review queue — ap-a · A plan: 1 task waits for review; ap-b · B plan: 1 decision; ap-b · Later plan: 2 tasks wait for review')).toBeTruthy()
   expect(document.querySelector('.orc-icon__badge')?.textContent).toBe('4')
-  await userEvent.setup().click(screen.getByRole('button', { name: /Waiting for you · 1/ }))
+  // at2: the chip names its scope, and «all» is the badge's number.
+  await userEvent.setup().click(screen.getByRole('button', { name: /Review queue · in this plan 1 · all 4/ }))
   const queue = screen.getByRole('complementary', { name: 'Review queue' })
   expect(within(queue).getByText('A review')).toBeTruthy()
   expect(within(queue).queryByText('B decision')).toBeNull()
@@ -45,8 +46,8 @@ it('shows both repositories, names the other one, and agrees with the queue and 
   await user.click(screen.getByRole('button', { name: /B decision/ }))
   expect(orchestraStore.getState().repoRoot).toBe('/work/ap-b')
   expect(localStorage.getItem('crewboard:task:/work/ap-b:b')).toBe('b1')
-  await user.click(screen.getByRole('button', { name: /Waiting for you · 3/ }))
-  expect(within(screen.getByRole('complementary', { name: 'Review queue' })).getByText('2 waiting for you')).toBeTruthy()
+  await user.click(screen.getByRole('button', { name: /Review queue · in this plan 1 · all 4/ }))
+  expect(within(screen.getByRole('complementary', { name: 'Review queue' })).getByText('2 in review queue')).toBeTruthy()
   await user.click(document.querySelector('.orc-icon__badge') as HTMLElement)
   expect(orchestraStore.getState().repoRoot).toBe('/work/ap-a')
   expect(localStorage.getItem('crewboard:task:/work/ap-a:a')).toBe('a1')

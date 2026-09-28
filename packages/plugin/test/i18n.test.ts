@@ -4,9 +4,10 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { bindLocale, getLang, installDictionary, relativeTime, setLang, t } from '../src/client/i18n.js'
+import { bindLocale, getLang, installDictionary, relativeTime, setLang, shellLabel, t } from '../src/client/i18n.js'
 import { en } from '../src/client/dict/en.js'
 import { ru } from '../src/client/dict/ru.js'
+import { SHELL_LABELS, type ShellLabelKey } from '../src/client/dict/shell.js'
 import { STATUS_LABEL } from '../src/client/summary.js'
 import { DECISION_LANE, laneTitle } from '../src/client/views/graph/layout.js'
 
@@ -35,11 +36,11 @@ describe('i18n dictionary and locale binding', () => {
   it('updates shared status and graph labels when the language changes', () => {
     setLang('en')
     expect(STATUS_LABEL.in_review).toBe('awaiting review')
-    expect(laneTitle(DECISION_LANE)).toBe('Decisions')
+    expect(laneTitle(DECISION_LANE)).toBe('Open questions to you')
     expect(t('graph.edgeCount', { count: 2 })).toBe('2 links')
     setLang('ru')
     expect(STATUS_LABEL.in_review).toBe('ждёт приёмки')
-    expect(laneTitle(DECISION_LANE)).toBe('Решения')
+    expect(laneTitle(DECISION_LANE)).toBe('Открытые вопросы к вам')
     expect(t('graph.edgeCount', { count: 1 })).toBe('1 связь')
     expect(t('graph.edgeCount', { count: 2 })).toBe('2 связи')
     expect(t('graph.edgeCount', { count: 5 })).toBe('5 связей')
@@ -99,6 +100,64 @@ describe('i18n dictionary and locale binding', () => {
     installDictionary('en', en)
     installDictionary('ru', ru)
     vi.unstubAllGlobals()
+  })
+
+  // lb1: dsh calls a slot's `label`/`title` itself, outside React, at mount — before the lazy
+  // dictionary script has had any chance to run. shellLabel must never hand it back the '' that t()
+  // returns while store.waiting, in either language, and must not regress once the real dictionary is in.
+  it('falls back to the built-in shell table while the dictionary is not in, unchanged once it lands', async () => {
+    const scripts = stubScripts()
+    const registry = globalThis.__orchDictionaries!
+    delete registry.en
+    delete registry.ru
+    const locale = { getSnapshot: () => ({ active: 'ru' }), subscribe: () => () => {}, addLanguage: () => () => {} }
+    bindLocale(grant(locale))
+    expect(t('notify.badge')).toBe('')
+    expect(shellLabel('notify.badge')).toBe('Оркестрация')
+    expect(shellLabel('settings.section')).toBe('Crewboard')
+    expect(shellLabel('panel.tab')).toBe('Оркестрация')
+    installDictionary('en', en)
+    scripts[0]!.onload?.()
+    await flush()
+    installDictionary('ru', ru)
+    scripts[1]!.onload?.()
+    await flush()
+    expect(t('notify.badge')).toBe('Оркестрация')
+    expect(shellLabel('notify.badge')).toBe('Оркестрация')
+    expect(shellLabel('settings.section')).toBe('Crewboard')
+    expect(shellLabel('panel.tab')).toBe('Оркестрация')
+    setLang('en')
+    expect(shellLabel('notify.badge')).toBe('Orchestration')
+    expect(shellLabel('settings.section')).toBe('Crewboard')
+    expect(shellLabel('panel.tab')).toBe('Orchestration')
+    vi.unstubAllGlobals()
+  })
+
+  it('falls back to the built-in shell table in English before any dictionary is in', async () => {
+    const scripts = stubScripts()
+    const registry = globalThis.__orchDictionaries!
+    delete registry.en
+    delete registry.ru
+    const locale = { getSnapshot: () => ({ active: 'en' }), subscribe: () => () => {}, addLanguage: () => () => {} }
+    bindLocale(grant(locale))
+    expect(t('notify.badge')).toBe('')
+    expect(shellLabel('notify.badge')).toBe('Orchestration')
+    expect(shellLabel('settings.section')).toBe('Crewboard')
+    expect(shellLabel('panel.tab')).toBe('Orchestration')
+    // The active language is English: only the English dictionary loads, Russian is never fetched.
+    installDictionary('en', en)
+    scripts[0]!.onload?.()
+    await flush()
+    installDictionary('ru', ru)
+    vi.unstubAllGlobals()
+  })
+
+  it('keeps the built-in shell table in sync with the lazy dictionary entries it stands in for', () => {
+    const keys: ShellLabelKey[] = ['notify.badge', 'settings.section', 'panel.tab']
+    for (const key of keys) {
+      expect(SHELL_LABELS.en[key]).toBe(en[key])
+      expect(SHELL_LABELS.ru[key]).toBe(ru[key])
+    }
   })
 
   it('mounts when the root locale getter throws and reads only the granted snapshot', () => {

@@ -12,11 +12,12 @@ const task = { id: 'build', title: 'Build', lane: 'core', class: 'code', kind: '
 const answer = (patch: Record<string, unknown> = {}) => JSON.stringify({ id: 'bye-plan', goal: 'Say bye', source: 'chat', lanes: ['core'], tasks: [task], decisions: [], ...patch })
 
 /** Runs live in a map that plays the part of `.orchestration/runs`: a new Backends over the same map is a restarted host. */
-type FakeRun = { terminal: boolean; status: string; answer?: string; prompt: string }
+type FakeRun = { terminal: boolean; status: string; answer?: string; prompt: string; readOnly?: boolean }
 function fakeBackends(runs: Map<string, FakeRun>): Backends {
   const backend: RunBackend = {
     id: 'codex',
-    launch: async ({ promptFile }) => { const id = `run_fake-${runs.size + 1}`; runs.set(id, { terminal: false, status: 'running', prompt: await readFile(promptFile, 'utf8') }); return id },
+    readOnlyLaunch: true,
+    launch: async ({ promptFile, readOnly }) => { const id = `run_fake-${runs.size + 1}`; runs.set(id, { terminal: false, status: 'running', prompt: await readFile(promptFile, 'utf8'), ...(readOnly ? { readOnly } : {}) }); return id },
     status: async (id) => { const run = runs.get(id)!; return { status: run.status, terminal: run.terminal, exitCode: run.terminal ? 0 : null } },
     events: async (id) => { const run = runs.get(id)!; return run.answer === undefined ? [] : [{ ts: '', type: 'final', data: run.answer }] },
     steer: async () => {},
@@ -44,6 +45,8 @@ describe('draft jobs', () => {
     await startDraftJob({ root, spec: 'bye.txt', agent: 'codex/gpt', backends: fakeBackends(runs), now: NOW })
     expect(runs.get('run_fake-1')!.prompt).toContain('"decisions"')
     expect(runs.get('run_fake-1')!.prompt).toContain('Say bye to the user.')
+    // dr2: a draft worker never gets write access to the checkout.
+    expect(runs.get('run_fake-1')!.readOnly).toBe(true)
   })
 
   it('normalises object decisions into the stored strings and saves the draft', async () => {

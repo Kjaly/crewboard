@@ -33,7 +33,7 @@ describe('plan drafts', () => {
     expect((await listPlans(root)).map((p) => p.id)).toEqual(['main'])
     const plan = await approveDraft(root, 'spec-draft', now)
     expect(plan).toMatchObject({ goal: 'Ship', draftSource: base.source, tasks: [{ id: 'one', contract: '.orchestration/contracts/one.md', acceptance: ['works'], sources: ['§1'] }] })
-    expect(await readFile(join(root, '.orchestration/contracts/one.md'), 'utf8')).toBe(base.tasks[0].contract)
+    expect(await readFile(join(root, '.orchestration/contracts/one.md'), 'utf8')).toContain('Own src/one.ts')
     expect((await loadPlan(root, 'main')).goal).toBe('Existing')
     expect((await loadPlan(root, 'spec-draft')).tasks).toHaveLength(1)
     expect(await listDrafts(root)).toEqual([])

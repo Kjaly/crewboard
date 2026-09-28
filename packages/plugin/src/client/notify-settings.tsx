@@ -26,17 +26,12 @@ export function NotifySettings() {
     <section className="orc-block" aria-label={t('settings.notify.title')}>
       <h2 className="orc-block__head">{t('settings.notify.title')}</h2>
       <p className="orc-hint">{t('settings.notify.hint')}</p>
-      <div className="orc-notify" role="radiogroup" aria-label={t('settings.notify.title')}>
+      <div className="orc-seg orc-notify" role="radiogroup" aria-label={t('settings.notify.title')}>
         {options.map((option) => (
-          <label key={option.id} className="orc-notify__opt">
-            <input
-              type="radio"
-              name="orc-notify-mode"
-              checked={settings.mode === option.id}
-              onChange={() => setNotifyMode(option.id)}
-            />
-            <span>{option.label}</span>
-          </label>
+          /* biome-ignore lint/a11y/useSemanticElements: This segmented control uses styled buttons with radio state. */
+          <button key={option.id} type="button" role="radio" className="orc-seg__item" aria-checked={settings.mode === option.id} onClick={() => setNotifyMode(option.id)}>
+            {option.label}
+          </button>
         ))}
       </div>
       <p className="orc-hint" role="status">

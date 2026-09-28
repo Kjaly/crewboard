@@ -19,10 +19,12 @@ These pages are in English only. · Эти страницы только на а
 
 - [Architecture](architecture.md) — packages, data flow, trust boundary, dsh integration.
 - [Releasing](releasing.md) — npm packages, trusted publishing, repository settings.
+- [Research notes](notes/README.md) — audits and design research behind the current behaviour.
+- [Documentation audit, 2026-09-28](audits/2026-09-28/documentation.md) — current status of the user and maintainer docs, with resolved fixes and remaining gaps.
 - [Contributing](../CONTRIBUTING.md) · [Changelog](../CHANGELOG.md) · [Security](../SECURITY.md)
 
-Screenshots live in `assets/` with language-neutral names; captions and alt text are written in each guide's language.
-Скриншоты лежат в `assets/` под нейтральными именами; подписи и альтернативный текст — на языке каждого руководства.
+Screenshots live in `assets/` with language-neutral names; captions and alt text are written in each guide's language. They are dated illustrations captured from a real dsh host (the 0.4.0 set on 2026-09-25, `settings.png` on 2026-09-24), not regenerated automatically; later UI changes may not be in them.
+Скриншоты лежат в `assets/` под нейтральными именами; подписи и альтернативный текст — на языке каждого руководства. Это датированные иллюстрации, снятые с настоящего хоста dsh (набор 0.4.0 — 2026-09-25, `settings.png` — 2026-09-24), а не автоматически перегенерированные; более поздние изменения интерфейса в них могут отсутствовать.
 
 `pnpm lint` checks that every relative link and image in the READMEs and `docs/` resolves and that each English guide has a Russian twin.
 `pnpm lint` проверяет, что все относительные ссылки и картинки в README и `docs/` существуют и у каждого английского руководства есть русская пара.

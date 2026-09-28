@@ -1,15 +1,15 @@
 import { readFile, stat } from 'node:fs/promises'
 import { isAbsolute, relative, resolve } from 'node:path'
-import type { Exec } from '../exec.js'
-import { type ViewStatus, deriveViews } from '../plan/graph.js'
-import type { Note, Run, Task } from '../plan/schema.js'
+import { nodeExec, type Exec } from '../exec.js'
+import { type ViewStatus, deriveViews, isOwnWork } from '../plan/graph.js'
+import type { Note, Run, Task, TaskCheck } from '../plan/schema.js'
 import { loadPlan } from '../plan/store.js'
 import type { RawEvent } from '../runs/raw-event.js'
 import { type NormEvent, normalize } from '../runs/normalize.js'
-import { type RunReport, extractReport, finalMessage } from '../runs/report.js'
-import { readEvidence, type RunEvidence } from '../runs/evidence.js'
+import { type RunReport, extractReport, reportedAnswer } from '../runs/report.js'
+import { type EvidenceFile, type FileStatus, fileStatus, readEvidence, type RunEvidence } from '../runs/evidence.js'
 import type { Backends } from './backends.js'
-import { verdictOf, type Verdict } from './verdict.js'
+import { attestedVerdict, contractBlock, projectWorkerCheckClaims, requiredChecks, verdictOf, type Verdict, type WorkerClaimProjection } from './verdict.js'
 import { backendsForPlan } from '../runs/example-backend.js'
 import { exampleFilePath } from '../plan/example.js'
 import { listSteers, type SteerRecord } from '../runs/steers.js'
@@ -17,8 +17,12 @@ import { join } from 'node:path'
 import { CREWBOARD_DIR } from '../plan/store.js'
 import { type MessageVars, orchText } from './messages.js'
 import { type BaselineRecord, readWorktreeState } from '../worktree/state.js'
-import { baseBranch, uncommittedCount } from '../worktree/merged.js'
+import { baseBranch, checkedOutBranch, uncommittedCount } from '../worktree/merged.js'
+import { resolveDefaultBase } from '../worktree/default-base.js'
 import { mergeCommands } from '../plan/merge.js'
+import { taskBase } from '../worktree/merge-task.js'
+import { type LastDecision, lastDecisionOf } from './decision.js'
+import { inspectAttestation } from './attestation.js'
 
 const MAX_CONTRACT_BYTES = 64 * 1024
 const MAX_DIFF_CHARS = 200 * 1024
@@ -38,34 +42,66 @@ export type TaskDetail = {
   id: string
   title: string
   kind: Task['kind']
+  /** The stored class (routing); absent — the kind decides. */
+  class?: Task['class']
   status: ViewStatus
   lane?: string
   deps: string[]
   dependents: string[]
+  /** Dependencies not done yet (a blocked task); `waitingMerge` — the part accepted but not merged (w1d). */
+  blockedBy?: string[]
+  waitingMerge?: string[]
   worker?: string
+  /** The orchestrator's check (vr1, rt1) as stored: state, who, when, the note and, on own work, the report file. */
+  check?: TaskCheck
+  /** Latest independent judgement and a live freshness check against run, Git HEAD and contract. */
+  resultAttestation?: Awaited<ReturnType<typeof inspectAttestation>>
+  /** Current Git observation, separate from immutable worker-time evidence. */
+  currentGit?: { head?: string; uncommitted?: number; observedAt: string }
+  liveCopyAvailable?: boolean
+  /** The accepted work reached its base (w1d, mg1). */
+  merged?: Task['merged']
   /** `baseline` is the copy's last baseline run (worktree/state.ts); absent when none is on record. */
-  worktree?: { path: string; branch: string; baseline?: BaselineRecord }
-  contract?: { path: string; text: string; truncated: boolean }
+  worktree?: { path: string; branch: string; base?: string; baseline?: BaselineRecord }
+  contract?: { path: string; text: string; truncated: boolean; humanReviewRequired?: boolean }
   runs: Run[]
   notes: Note[]
   steers: SteerRecord[]
   events: NormEvent[]
   changedFiles: string[]
+  /** `changedFiles` with line counts and A/M/D (wk1) — for the Changes tab; counts are null when git did not give them. */
+  files?: EvidenceFile[]
   report?: RunReport
   evidence?: RunEvidence
+  /** Versioned, read-time re-extraction from the immutable worker answer; never a receipt. */
+  workerClaimProjection?: WorkerClaimProjection
   /** Absent on a decision (w1b, B05): a decision is the person's choice, there is no worker's claim to judge. */
   verdict?: Verdict
+  /** The latest human decision (wk1, B23), as the snapshot's task carries it. */
+  lastDecision?: LastDecision
   /**
    * Files the run left in the copy without a commit (w1d) — from its evidence, else the copy as it is now. Accepted
    * as is, they would not reach the base branch.
    */
   uncommitted?: number
   /** Accepted work not merged into the base branch yet (w1d): where it goes and the exact commands that take it there. */
-  merge?: { into: string; branch: string; path: string; commands: string[] }
+  merge?: {
+    into: string
+    branch: string
+    path: string
+    commands: string[]
+    /** mk1: `into` is the HEAD commit of a detached main checkout, not a branch — say «the current commit of <root>». */
+    detached?: { root: string }
+  }
+  /**
+   * The task's recorded base differs from the repository's current default base (bs1): the person chose one
+   * on purpose, or the default moved on since. `path` is the copy, for the rebase command.
+   */
+  baseDrift?: { base: string; default: string; path: string }
   example?: boolean
 }
 
-type Changes = { base?: string; tracked: string[]; untracked: string[] }
+type Changes = { base?: string; tracked: string[]; untracked: string[]; status?: Map<string, FileStatus> }
 
 const exists = (p: string) => stat(p).then(() => true, () => false)
 const lines = (s: string) => s.split('\n').map((l) => l.trim()).filter(Boolean)
@@ -82,7 +118,7 @@ async function readContract(root: string, rel: string | undefined): Promise<Task
   if (!abs) return undefined
   const buf = await readFile(abs).catch(() => undefined)
   if (!buf) return undefined
-  return { path: rel, text: buf.subarray(0, MAX_CONTRACT_BYTES).toString('utf8'), truncated: buf.length > MAX_CONTRACT_BYTES }
+  return { path: rel, text: buf.subarray(0, MAX_CONTRACT_BYTES).toString('utf8'), truncated: buf.length > MAX_CONTRACT_BYTES, humanReviewRequired: contractBlock(buf.toString('utf8'), 'human_review') !== undefined }
 }
 
 /** Changes of a task worktree relative to where it branched off the repository HEAD, plus untracked files. */
@@ -94,14 +130,42 @@ async function listChanges(root: string, wt: string, exec: Exec): Promise<Change
   if (mergeBase.code !== 0) return { tracked: [], untracked: [] }
   const base = mergeBase.stdout.trim()
   const [tracked, untracked] = await Promise.all([
-    exec('git', ['-C', wt, 'diff', '--name-only', base]),
+    exec('git', ['-C', wt, 'diff', '--name-status', '--no-renames', base]),
     exec('git', ['-C', wt, 'ls-files', '--others', '--exclude-standard']),
   ])
-  return {
-    base,
-    tracked: tracked.code === 0 ? lines(tracked.stdout) : [],
-    untracked: untracked.code === 0 ? lines(untracked.stdout) : [],
+  const status = new Map<string, FileStatus>()
+  for (const line of tracked.code === 0 ? tracked.stdout.split('\n').filter(Boolean) : []) {
+    const [code, ...path] = line.split('\t')
+    const known = fileStatus(code)
+    if (known && path.length) status.set(path.join('\t'), known)
   }
+  const added = untracked.code === 0 ? lines(untracked.stdout) : []
+  for (const path of added) status.set(path, 'A')
+  return { base, tracked: [...status.keys()].filter((path) => !added.includes(path)), untracked: added, status }
+}
+
+/** Once the base contains a task merge, diffing the live copy against that base becomes empty. The recorded
+ * merge commit's first parent is the base immediately before this task landed, excluding unrelated earlier work. */
+async function mergedHandoffChanges(root: string, task: Task, exec: Exec): Promise<Changes | undefined> {
+  const merged = task.merged
+  if (!merged?.mergeCommit || !merged.commit || merged.commit !== task.check?.commit) return undefined
+  const diff = await exec('git', ['-C', root, 'diff', '--name-status', '--no-renames', `${merged.mergeCommit}^1`, merged.mergeCommit])
+  if (diff.code !== 0) return undefined
+  const status = new Map<string, FileStatus>()
+  for (const line of diff.stdout.split('\n').filter(Boolean)) {
+    const [code, ...parts] = line.split('\t')
+    const known = fileStatus(code)
+    if (known && parts.length) status.set(parts.join('\t'), known)
+  }
+  return { tracked: [...status.keys()], untracked: [], status }
+}
+
+/** Whether `into` is the HEAD commit of a detached checkout rather than a branch (mk1). */
+async function detachedAt(root: string, into: string, exec: Exec): Promise<boolean> {
+  if (await checkedOutBranch(root, exec)) return false
+  if ((await exec('git', ['-C', root, 'show-ref', '--verify', '--quiet', `refs/heads/${into}`])).code === 0) return false
+  const head = await exec('git', ['-C', root, 'rev-parse', '--verify', '--quiet', 'HEAD'])
+  return head.code === 0 && head.stdout.trim() === into
 }
 
 export async function getTaskDetail(root: string, taskId: string, backends: Backends, exec: Exec, planId?: string): Promise<TaskDetail> {
@@ -126,36 +190,122 @@ export async function getTaskDetail(root: string, taskId: string, backends: Back
   }
   const completed = [...task.runs].reverse().find((r) => r.outcome === 'completed')
   const reportEvidence = completed?.runId === run?.runId ? evidence : await readEvidence(root, completed?.evidence)
-  const report = task.kind === 'root' || task.kind === 'decision' ? await readOwnReport(root, task) : reportEvidence ? reportEvidence.report : await readReport(task.runs, run?.runId, raw, source)
-  const changes = evidence ? undefined : task.worktree ? await listChanges(root, task.worktree.path, exec) : { tracked: [], untracked: [] }
+  const handoff = run?.outcome === 'incomplete' && task.check?.state === 'checked' && task.check.runId === run.runId && task.check.report && task.check.commit
+  const handoffPath = handoff ? insideRoot(root, task.check!.report!) : undefined
+  const handoffText = handoffPath ? await readFile(handoffPath, 'utf8').catch(() => undefined) : undefined
+  const report: RunReport | undefined = handoffText ? { runId: run!.runId, text: handoffText, source: 'orchestrator', truncated: false }
+    : task.kind === 'root' || task.kind === 'decision' ? await readOwnReport(root, task) : reportEvidence ? reportEvidence.report : await readReport(task.runs, run?.runId, raw, source)
+  const liveCopyAvailable = task.worktree ? await exists(task.worktree.path) : undefined
+  const changes = handoffText || !evidence ? (handoffText ? await mergedHandoffChanges(root, task, exec) : undefined) ?? (task.worktree && liveCopyAvailable ? await listChanges(root, task.worktree.path, exec) : { tracked: [], untracked: [] }) : undefined
+  const livePaths = [...(changes?.tracked ?? []), ...(changes?.untracked ?? [])]
+  // The recorded run's files remain useful if a task reached the base by another path and its merge diff is empty.
+  const fallbackPaths = handoffText && task.merged && livePaths.length === 0 ? evidence?.files.map((file) => file.path) ?? [] : []
+  const changedPaths = evidence && !handoffText ? evidence.files.map((file) => file.path) : [...new Set([...livePaths, ...fallbackPaths])].sort()
   const contract = await readContract(root, task.contract)
+  const runContractPath = run?.contractPath ?? task.contract
+  const runContract = runContractPath === task.contract ? contract : await readContract(root, runContractPath)
+  const workerClaimProjection = evidence?.finalAnswerState === 'reported' && evidence.finalAnswer?.trim() && runContract
+    ? projectWorkerCheckClaims(evidence.finalAnswer, evidence.capturedAt, requiredChecks(runContract.text))
+    : undefined
+  const currentGit = task.worktree && !plan.example && liveCopyAvailable ? {
+    head: (await exec('git', ['-C', task.worktree.path, 'rev-parse', 'HEAD'])).stdout.trim() || undefined,
+    uncommitted: await uncommittedCount(task.worktree.path, exec), observedAt: new Date().toISOString(),
+  } : undefined
+  const resultAttestation = await inspectAttestation(root, task, exec)
   const baseline = task.worktree && (await exists(task.worktree.path)) ? (await readWorktreeState(task.worktree.path))?.baseline : undefined
   // What the run left uncommitted is a fact of its evidence; without evidence (an older run) the copy is asked now.
-  const uncommitted = evidence ? evidence.uncommitted : task.worktree && !plan.example ? await uncommittedCount(task.worktree.path, exec) : undefined
-  const into = view.unmerged ? await baseBranch(root, exec) : undefined
+  const uncommitted = handoffText || !evidence ? task.worktree && !plan.example && liveCopyAvailable ? await uncommittedCount(task.worktree.path, exec) : undefined : evidence.uncommitted
+  // Where Merge takes it (mg1): the copy's recorded base, else the checked-out branch.
+  const into = view.unmerged ? (task.worktree ? await taskBase(root, task.worktree, exec) : undefined) ?? (await baseBranch(root, exec)) : undefined
+  // bs1: a copy whose recorded base no longer matches the repository's default — a person chose one on
+  // purpose, or the default moved on since — is worth a notice, once, wherever the base is shown.
+  const defaultBase = task.worktree?.base && !plan.example ? (await resolveDefaultBase(root, exec, { planId, plan })).branch : undefined
+  const baseDrift = defaultBase && task.worktree?.base && defaultBase !== task.worktree.base ? { base: task.worktree.base, default: defaultBase, path: task.worktree.path } : undefined
   const detail: Omit<TaskDetail, 'verdict'> = {
     id: task.id,
     ...(plan.example ? { example: true } : {}),
     title: task.title,
     kind: task.kind,
+    ...(task.class ? { class: task.class } : {}),
     status: view.status,
     ...(task.lane ? { lane: task.lane } : {}),
     deps: task.deps,
     dependents: plan.tasks.filter((t) => t.deps.includes(task.id)).map((t) => t.id),
+    ...(view.status === 'blocked' && view.blockedBy.length ? { blockedBy: view.blockedBy } : {}),
+    ...(view.waitingMerge?.length ? { waitingMerge: view.waitingMerge } : {}),
     ...(task.worker ? { worker: task.worker } : {}),
+    ...(task.check ? { check: task.check } : {}),
+    ...(resultAttestation ? { resultAttestation } : {}),
+    ...(currentGit ? { currentGit } : {}),
+    ...(liveCopyAvailable !== undefined ? { liveCopyAvailable } : {}),
+    ...(task.merged ? { merged: task.merged } : {}),
     ...(task.worktree ? { worktree: { ...task.worktree, ...(baseline ? { baseline } : {}) } } : {}),
     ...(contract ? { contract } : {}),
     runs: task.runs,
     notes: task.notes,
     steers: run ? await listSteers(join(root, CREWBOARD_DIR, 'runs', run.runId)) : [],
     events: normalize(raw).slice(-MAX_EVENTS),
-    changedFiles: evidence ? evidence.files.map((file) => file.path) : [...new Set([...(changes?.tracked ?? []), ...(changes?.untracked ?? [])])].sort(),
+    changedFiles: changedPaths,
+    files: evidence && !handoffText ? evidence.files : changedPaths.map((path) => {
+      const status = changes?.status?.get(path)
+      return { path, added: null, deleted: null, ...(status ? { status } : {}) }
+    }),
     ...(evidence ? { evidence } : {}),
+    ...(workerClaimProjection ? { workerClaimProjection } : {}),
     ...(report ? { report } : {}),
     ...(uncommitted ? { uncommitted } : {}),
-    ...(into && task.worktree ? { merge: { into, ...task.worktree, commands: mergeCommands({ root, taskId: task.id, ...task.worktree, uncommitted: await uncommittedCount(task.worktree.path, exec) }) } } : {}),
+    ...(lastDecisionOf(task) ? { lastDecision: lastDecisionOf(task) } : {}),
+    ...(into && task.worktree ? { merge: { into, branch: task.worktree.branch, path: task.worktree.path, commands: mergeCommands({ root, taskId: task.id, ...task.worktree, uncommitted: await uncommittedCount(task.worktree.path, exec) }), ...((await detachedAt(root, into, exec)) ? { detached: { root } } : {}) } } : {}),
+    ...(baseDrift ? { baseDrift } : {}),
   }
-  return detail.kind === 'decision' ? detail : { ...detail, verdict: verdictOf(detail) }
+  const acceptedVerdict = task.status === 'accepted' ? task.notes.filter((note) => note.type === 'accept').at(-1)?.verdict?.kind : undefined
+  return detail.kind === 'decision' ? detail : { ...detail, verdict: acceptedVerdict === 'result'
+    ? { kind: 'result', claim: 'result', facts: changedPaths.length ? [{ code: 'files_changed', count: changedPaths.length, tone: 'ok' }] : [] }
+    : acceptedVerdict === 'negative' ? { kind: 'negative', claim: 'negative', why: 'negative', facts: [] }
+    : acceptedVerdict === 'disputed' ? { kind: 'disputed', mismatch: 'claim_missing', facts: [] }
+    : detail.resultAttestation?.freshness === 'current' && detail.resultAttestation.proof !== undefined
+      ? attestedVerdict(detail.resultAttestation.record.verdict, detail.resultAttestation.proof)
+      : verdictOf(detail) }
+}
+
+/**
+ * The verdict of a worker's finished task from its recorded evidence alone (vc1): what the card, Work, Needs you
+ * and `attention` show without reading the run's events or the copy. Undefined when the evidence is missing — an
+ * older run, or a report the evidence of the last completed run does not hold — rather than a verdict that
+ * would read differently from the task panel's.
+ */
+export async function verdictFromEvidence(root: string, task: Pick<Task, 'id' | 'title' | 'kind' | 'deps' | 'runs' | 'worktree' | 'resultAttestations' | 'status' | 'merged' | 'notes' | 'contract'> & Partial<Pick<Task, 'check'>>): Promise<Verdict | undefined> {
+  if (isOwnWork(task.kind)) return undefined
+  const acceptedVerdict = task.status === 'accepted' ? task.notes.filter((note) => note.type === 'accept').at(-1)?.verdict?.kind : undefined
+  if (acceptedVerdict) {
+    const evidence = await readEvidence(root, task.runs.at(-1)?.evidence)
+    const facts = evidence?.files.length ? [{ code: 'files_changed' as const, count: evidence.files.length, tone: 'ok' as const }] : []
+    if (acceptedVerdict === 'result') return { kind: 'result', claim: 'result', facts }
+    if (acceptedVerdict === 'negative') return { kind: 'negative', claim: 'negative', why: 'negative', facts }
+    return { kind: 'disputed', mismatch: 'claim_missing', facts }
+  }
+  const attestation = await inspectAttestation(root, task, nodeExec)
+  if (attestation?.freshness === 'current' && attestation.proof !== undefined) return attestedVerdict(attestation.record.verdict, attestation.proof)
+  const run = task.runs.at(-1)
+  const evidence = await readEvidence(root, run?.evidence)
+  if (!run || !evidence) return undefined
+  const completed = [...task.runs].reverse().find((r) => r.outcome === 'completed')
+  const reportEvidence = !completed || completed.runId === run.runId ? evidence : await readEvidence(root, completed.evidence)
+  if (completed && !reportEvidence) return undefined
+  const report = completed ? reportEvidence?.report : undefined
+  const handoff = run.outcome === 'incomplete' && task.check?.state === 'checked' && task.check.runId === run.runId && task.check.report && task.check.commit
+  const handoffPath = handoff ? insideRoot(root, task.check!.report!) : undefined
+  const handoffText = handoffPath ? await readFile(handoffPath, 'utf8').catch(() => undefined) : undefined
+  const contract = await readContract(root, run.contractPath ?? task.contract)
+  const workerClaimProjection = reportEvidence?.finalAnswerState === 'reported' && reportEvidence.finalAnswer?.trim() && contract
+    ? projectWorkerCheckClaims(reportEvidence.finalAnswer, reportEvidence.capturedAt, requiredChecks(contract.text))
+    : undefined
+  return verdictOf({
+    id: task.id, title: task.title, kind: task.kind, status: 'in_review', deps: task.deps, dependents: [], runs: task.runs, notes: [], steers: [], events: [],
+    changedFiles: evidence.files.map((file) => file.path), evidence, ...(workerClaimProjection ? { workerClaimProjection } : {}),
+    ...(handoffText ? { report: { runId: run.runId, text: handoffText, source: 'orchestrator' as const, truncated: false }, check: task.check } : report ? { report } : {}),
+    ...(!handoffText && evidence.uncommitted ? { uncommitted: evidence.uncommitted } : {}),
+  })
 }
 
 /**
@@ -175,7 +325,8 @@ async function readOwnReport(root: string, task: Task): Promise<RunReport | unde
 
 /**
  * The report of the last completed run, taken from the same raw events as the feed. When the completed
- * run is not the last one its events are read separately; a backend error simply leaves the report out.
+ * run is not the last one its events are read separately; a backend error simply leaves the report out. A reply to a
+ * direction queued after the report is not the report (vr2).
  */
 async function readReport(runs: Run[], lastRunId: string | undefined, lastRaw: RawEvent[], backends: Backends): Promise<RunReport | undefined> {
   const completed = [...runs].reverse().find((r) => r.outcome === 'completed')
@@ -190,7 +341,7 @@ async function readReport(runs: Run[], lastRunId: string | undefined, lastRaw: R
       return undefined
     }
   }
-  const text = finalMessage(raw)
+  const { text } = reportedAnswer(raw)
   return text ? extractReport(completed.runId, text) : undefined
 }
 

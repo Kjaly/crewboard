@@ -127,12 +127,12 @@ function Blocks({ text, markedLine }: { text: string; markedLine: number | null 
 }
 
 /**
- * The worker's own report above the raw feed. Open while the task waits for
- * acceptance or after a failure; folded to three lines once accepted, where it is history.
+ * The worker's report starts as a short preview; the result, check and next action
+ * above it already carry the decision. An orchestrator-authored decision stays open.
  */
 export function ReportCard({ task, detail, onTab, jump }: { task: TaskSnapshot; detail: TaskDetail; onTab(tab: TabKey): void; jump?: { line: number; seq: number } | null }) {
   useLang()
-  const [open, setOpen] = useState(task.status !== 'accepted')
+  const [open, setOpen] = useState(detail.report?.source === 'orchestrator')
   const [markedLine, setMarkedLine] = useState<number | null>(null)
   const region = useRef<HTMLElement>(null)
   const report = detail.report
@@ -173,11 +173,11 @@ export function ReportCard({ task, detail, onTab, jump }: { task: TaskSnapshot; 
             <span className="orc-report__title">{title}</span>
           )}
         </header>
-        {RISK_WORDS.some((word) => report.text.toLocaleLowerCase('ru').includes(word)) ? <p className="orc-report__risk-note">{t('report.riskNote')}</p> : null}
-        <div className="orc-report__body">
+        {!folded && RISK_WORDS.some((word) => report.text.toLocaleLowerCase('ru').includes(word)) ? <p className="orc-report__risk-note">{t('report.riskNote')}</p> : null}
+        <div className={`orc-report__body${folded ? ' orc-report__body--folded' : ''}`}>
           <Blocks text={folded ? lines.slice(0, PREVIEW_LINES).join('\n') : report.text} markedLine={markedLine} />
         </div>
-        {report.source === 'final' ? (
+        {!folded && report.source === 'final' ? (
           <p className="orc-report__note">{t('report.finalNote')}</p>
         ) : null}
         {report.truncated ? <button type="button" className="orc-report__link" onClick={() => onTab('activity')}>{t('report.showAll')}</button> : null}

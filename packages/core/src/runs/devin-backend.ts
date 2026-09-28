@@ -8,6 +8,7 @@ import { readRunEvents } from '../dsh/runner.js'
 import { readCliRunState } from './cli-runner.js'
 import { startState } from './start-guard.js'
 import { type DevinRunnerArgs, writeDevinJson } from './devin-runner.js'
+import { stateFailure } from './failure.js'
 
 export type DevinBackendOptions = {
   runsRoot: string
@@ -56,13 +57,15 @@ export function createDevinBackend(o: DevinBackendOptions): RunBackend {
       if (!state) return startState(dir(id))
       if (state.status === 'running') {
         try { process.kill(state.pid, 0) }
-        catch { return { status: 'failed', terminal: true, exitCode: 1 } }
+        catch { return { status: 'failed', terminal: true, exitCode: 1, failure: { reason: 'interrupted' } } }
       }
+      const failure = stateFailure('devin', state)
       return {
         status: state.status,
         terminal: state.status !== 'running',
         exitCode: state.exitCode,
         ...(state.finishedAt ? { finishedAt: state.finishedAt } : {}),
+        ...(failure ? { failure } : {}),
       }
     },
     async steer(id, promptFile, mode = 'auto', steerId) {

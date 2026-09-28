@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -54,6 +54,31 @@ describe('plan-init over HTTP', () => {
 
     const again = await call(routes, 'plan-init', { repo: root, goal: 'Второй план' })
     expect(again).toMatchObject({ status: 409, json: { ok: false, error: 'plan_exists' } })
+  })
+
+  it('adds the first task of an empty plan with a contract from the template (nb1)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'orch-task-add-'))
+    const workspace: DshWorkspace = { id: 'w1', path: root, title: 'W' }
+    const workspaces = () => [workspace]
+    const service = new OrchestraService({ config: { repos: [], refreshMs: 60_000 }, workspaces, backendsFor: () => idle, now: () => NOW })
+    const routes = actionRoutes({ service, repos: [], workspaces, backendsFor: () => idle, native, env: {}, home: root, now: () => NOW })
+    await service.refresh()
+    expect((await call(routes, 'plan-init', { repo: root, goal: 'Sign-in' })).status).toBe(200)
+
+    const first = await call(routes, 'task-add', { repo: root, title: 'Add a sign-in form', result: 'The form signs a user in' })
+    expect(first).toMatchObject({ status: 200, json: { ok: true, value: { id: 'add-a-sign-in-form' } } })
+    const again = await call(routes, 'task-add', { repo: root, title: 'Add a sign-in form', result: '' })
+    expect(again.json.value).toEqual({ id: 'add-a-sign-in-form-2' })
+    const plan = await loadPlan(root)
+    expect(plan.tasks.map((task) => [task.id, task.status, task.contract])).toEqual([
+      ['add-a-sign-in-form', 'ready', '.orchestration/contracts/main/add-a-sign-in-form.md'],
+      ['add-a-sign-in-form-2', 'ready', '.orchestration/contracts/main/add-a-sign-in-form-2.md'],
+    ])
+    const contract = await readFile(join(root, '.orchestration/contracts/main/add-a-sign-in-form.md'), 'utf8')
+    expect(contract).toContain('# Add a sign-in form')
+    expect(contract).toContain('The form signs a user in')
+    expect(contract).toContain('<checks>')
+    expect((await call(routes, 'task-add', { repo: root, title: '  ' })).status).toBe(400)
   })
 
   it('refuses a repo that is neither a workspace nor a configured repo', async () => {

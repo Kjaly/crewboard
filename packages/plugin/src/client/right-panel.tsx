@@ -188,12 +188,21 @@ function ReviewRow({ root, task, wait, onOpenTask }: { root: string; task: TaskS
       ) : null}
 
       <div className="orc-qrow__acts">
-        <button type="button" className="orc-btn" disabled={action.pending} onClick={() => action.call(() => api.accept(root, task.id))}>
-          {t('panel.side.accept')}
-        </button>
-        <button type="button" className="orc-btn orc-btn--ghost" onClick={() => onOpenTask(task.id)}>
-          {decision ? t('panel.side.open') : t('panel.side.changes')}
-        </button>
+        {decision ? (
+          // dc1: no blind Accept for a decision — the concrete proposal is confirmed in the task panel.
+          <button type="button" className="orc-btn" onClick={() => onOpenTask(task.id)}>
+            {t('panel.side.openDecision')}
+          </button>
+        ) : (
+          <button type="button" className="orc-btn" disabled={action.pending} onClick={() => action.call(() => api.accept(root, task.id))}>
+            {t('panel.side.accept')}
+          </button>
+        )}
+        {!decision ? (
+          <button type="button" className="orc-btn orc-btn--ghost" onClick={() => onOpenTask(task.id)}>
+            {t('panel.side.changes')}
+          </button>
+        ) : null}
         <button type="button" className="orc-btn orc-btn--ghost" aria-expanded={rejecting} onClick={() => setRejecting(!rejecting)}>
           {t('panel.side.sendBack')}
         </button>

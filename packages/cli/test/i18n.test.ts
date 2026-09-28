@@ -23,8 +23,8 @@ describe('CLI language selection', () => {
   it('leaves identifiers and paths as data', async () => {
     const en = makeHarness({ cwd: '/tmp', env: {} })
     const ru = makeHarness({ cwd: '/tmp', env: {} })
-    await run(['--lang', 'en', '--help'], en.io)
-    await run(['--lang', 'ru', '--help'], ru.io)
+    await run(['--lang', 'en', 'help', 'all'], en.io)
+    await run(['--lang', 'ru', 'help', 'all'], ru.io)
     expect(en.out()).not.toBe(ru.out())
     expect(en.out()).toContain('Plans\n')
     expect(en.out()).not.toMatch(/[А-Яа-яЁё]/)

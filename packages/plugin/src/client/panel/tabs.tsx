@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { TaskDetail, TaskSnapshot, Trajectory, WorkerInfo } from '../../shared/types.js'
 import { identityLabel, workerIdentity } from '../provider.js'
 import { api } from '../api.js'
-import { clock, failureText } from '../summary.js'
+import { clock, eventText } from '../summary.js'
 import { t, useLang } from '../i18n.js'
 import { noteText } from '../note-text.js'
 import type { TraceTarget } from './trace.js'
@@ -68,7 +68,7 @@ export function FeedTab({ detail }: { detail: TaskDetail | null }) {
             </details>
           ) : group.kind === 'action' || group.kind === 'file' ? (
             <span className="orc-feed__tool-label" title={group.events[0]?.text}>{group.events[0]?.text}</span>
-          ) : <span className="orc-ev__text">{group.kind === 'steer' ? <strong>{t('panel.tabs.yourSteer')} · </strong> : null}{group.events[0]?.reason ? failureText(group.events[0].reason) : group.events[0]?.text}</span>}
+          ) : <span className="orc-ev__text">{group.kind === 'steer' ? <strong>{t('panel.tabs.yourSteer')} · </strong> : null}{group.events[0] ? eventText(group.events[0]) : null}</span>}
         </li>
       ))}
     </ul>
@@ -142,16 +142,23 @@ export function ChangesTab({ detail, root }: { detail: TaskDetail | null; root: 
 
   if (!detail) return <p className="orc-meta">{t('panel.tabs.changesLoading')}</p>
   if (detail.changedFiles.length === 0) return <p className="orc-meta">{t('panel.tabs.noChanges')}</p>
+  // wk1: each file says what happened to it — added, modified, deleted — and its line counts when git gave them.
+  const stats = new Map((detail.files ?? []).map((item) => [item.path, item]))
   return (
     <>
       <ul className="orc-list">
-        {detail.changedFiles.map((name) => (
-          <li key={name}>
-            <button type="button" className="orc-link" aria-pressed={file === name} onClick={() => { setFile(file === name ? null : name); setMode(previewKind(name) === 'diff' ? 'diff' : 'preview'); setDiff('') }}>
-              {name}
-            </button>
-          </li>
-        ))}
+        {detail.changedFiles.map((name) => {
+          const stat = stats.get(name)
+          return (
+            <li key={name} className="orc-file">
+              {stat?.status ? <span className={`orc-file__status orc-file__status--${stat.status}`} title={t(`panel.tabs.fileStatus.${stat.status}`)}>{stat.status}</span> : null}
+              <button type="button" className="orc-link" aria-pressed={file === name} onClick={() => { setFile(file === name ? null : name); setMode(previewKind(name) === 'diff' ? 'diff' : 'preview'); setDiff('') }}>
+                {name}
+              </button>
+              {stat && (stat.added !== null || stat.deleted !== null) ? <span className="orc-file__counts"><span className="orc-file__added">+{stat.added ?? '—'}</span> <span className="orc-file__deleted">−{stat.deleted ?? '—'}</span></span> : null}
+            </li>
+          )
+        })}
       </ul>
       {file ? <><div className="orc-preview-controls">
         {previewKind(file) !== 'diff' ? <button type="button" aria-pressed={mode === 'preview'} onClick={() => setMode('preview')}>{t('panel.preview.preview')}</button> : null}

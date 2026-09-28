@@ -1,27 +1,24 @@
-import { existsSync } from 'node:fs'
-import { basename } from 'node:path'
 import { parseArgs } from 'node:util'
 import {
   type Exec,
   type NeedsYouItem,
   type NeedsYouKind,
+  type NeedsYouReasons,
   type NeedsYouRepo,
   buildRepoSnapshot,
-  discoverWorktreeRepos,
-  folderKey,
   gatherAttention,
-  listedRepositories,
   loadRepoPreferences,
   needsYou,
+  reasonParts,
+  waitingCounts,
 } from '@crewboard/core'
-import { homeOf, makeBackends, repoRoot } from '../context.js'
-import { cliT } from '../i18n.js'
+import { discoverRepoRefs, homeOf, makeBackends, nameOf, repoRoot } from '../context.js'
+import { cliT, pluralT } from '../i18n.js'
 import { type Io, UserError } from '../io.js'
-import { failureText, syncPlan } from './runs.js'
+import { attentionText, noteUnsaved, syncPlan } from './runs.js'
+import { checkWords, verdictWords } from './plan.js'
 
 type Named = NeedsYouRepo & { name: string }
-
-const nameOf = (root: string, title?: string) => title || basename(root) || root
 
 /** The current repository as the screen sees it; a missing or broken plan is an error, as before. */
 async function currentRepo(io: Io, exec: Exec, planId: string | undefined): Promise<Named[]> {
@@ -34,14 +31,10 @@ async function currentRepo(io: Io, exec: Exec, planId: string | undefined): Prom
   return [{ ...snap, name: nameOf(root, snap.title) }]
 }
 
-/** Every repository the screen lists (rg1): dsh workspaces, config and Crewboard's list, their plan worktrees. */
 async function knownRepos(io: Io, exec: Exec): Promise<Named[]> {
   const home = homeOf(io)
-  const listed = listedRepositories(io.env, home)
-  const keys = new Set(listed.map((r) => folderKey(r.root)))
-  const found = (await discoverWorktreeRepos(listed, exec).catch(() => [])).filter((r) => !keys.has(folderKey(r.root)))
+  const refs = await discoverRepoRefs(io, exec)
   const prefs = await loadRepoPreferences(io.env, home).catch(() => ({}) as Awaited<ReturnType<typeof loadRepoPreferences>>)
-  const refs = [...listed, ...found].filter((ref) => existsSync(ref.root))
   return Promise.all(
     refs.map(async (ref) => {
       const snap = await buildRepoSnapshot(ref.root, makeBackends(io, exec, ref.root), io.now())
@@ -52,18 +45,29 @@ async function knownRepos(io: Io, exec: Exec): Promise<Named[]> {
 
 const ORDER: NeedsYouKind[] = ['review', 'decision', 'unmerged', 'attention', 'plan']
 
+/** «2 tasks wait for review · 1 decision» — the screen's summary in the reader's language (at2). */
+function reasonsLine(io: Io, reasons: Partial<NeedsYouReasons>): string {
+  const lang = io.lang ?? 'en'
+  return reasonParts(reasons)
+    .map(([reason, count]) => pluralT(lang, `attention.reason.${reason}`, count))
+    .join(' · ')
+}
+
 function line(io: Io, item: NeedsYouItem, repo: string | undefined): string {
   const lang = io.lang ?? 'en'
   const where = repo ? `[${repo}] ` : ''
-  const alarm = item.message ? `${item.alert ? '⚠' : '•'} ${item.message}${item.hint ? ` → ${item.hint}` : ''}` : ''
+  const said = item.attention ? attentionText(lang, item.attention) : item.message
+  const alarm = said ? `${item.alert ? '⚠' : '•'} ${said}${item.hint ? ` → ${item.hint}` : ''}` : ''
   if (item.background) {
-    const waiting = item.count ? cliT(lang, 'attention.planWaiting', { count: item.count }) : ''
+    const waiting = item.reasons ? reasonsLine(io, item.reasons) : item.count ? cliT(lang, 'attention.planWaiting', { count: item.count }) : ''
     return `  ${where}${item.planId}: ${item.title} — ${[waiting, alarm].filter(Boolean).join(' · ')} (--plan ${item.planId})\n`
   }
   if (item.kind === 'attention') return `  ${where}${item.taskId}: ${alarm}\n`
   if (item.kind === 'unmerged') return `  ${where}${item.taskId}: ${item.title}${item.hint ? ` → ${item.hint}` : ''}\n`
-  const checked = item.kind === 'review' ? ` · ${cliT(lang, item.checked ? 'attention.checked' : 'attention.unchecked')}` : ''
-  return `  ${where}${item.taskId}: ${item.title}${checked}\n`
+  // The verdict and the orchestrator's check in the screen's words (vc1, B27); a decision has neither.
+  const verdict = item.verdict ? ` · ${verdictWords(lang, item.verdict)}` : ''
+  const checked = item.check ? ` · ${checkWords(lang, item.check)}` : item.kind === 'review' ? ` · ${cliT(lang, item.checked ? 'attention.checked' : 'attention.unchecked')}` : ''
+  return `  ${where}${item.taskId}: ${item.title}${verdict}${checked}\n`
 }
 
 /**
@@ -80,14 +84,15 @@ export async function cmdAttention(argv: string[], io: Io, exec: Exec): Promise<
     if (values.all) throw new UserError(cliT(lang, 'attention.alarmsAll'))
     const root = await repoRoot(io, exec)
     const backends = makeBackends(io, exec, root)
-    const { plan, states } = await syncPlan(root, io, backends, values.plan)
+    const { plan, states, unsaved } = await syncPlan(root, io, backends, values.plan)
+    noteUnsaved(io, unsaved)
     const alarms = await gatherAttention(plan, states, backends, io.now())
     if (values.json) {
       io.out(`${JSON.stringify(alarms, null, 2)}\n`)
       return 0
     }
     if (alarms.length === 0) io.out(`${cliT(lang, 'runs.quiet')}\n`)
-    for (const a of alarms) io.out(`${a.severity === 'alert' ? '⚠' : '•'} ${a.taskId}: ${a.reason ? failureText(lang, a.reason) : a.message}${a.hint ? ` → ${a.hint}` : ''}\n`)
+    for (const a of alarms) io.out(`${a.severity === 'alert' ? '⚠' : '•'} ${a.taskId}: ${attentionText(lang, a)}${a.hint ? ` → ${a.hint}` : ''}\n`)
     return 0
   }
   if (values.all && values.plan) throw new UserError(cliT(lang, 'attention.planAll'))
@@ -102,6 +107,12 @@ export async function cmdAttention(argv: string[], io: Io, exec: Exec): Promise<
   if (items.length === 0) {
     io.out(`${cliT(lang, 'runs.quiet')}\n`)
     return 0
+  }
+  // The one waiting number with its scope (at2) — the same count the screen shows for this state.
+  const counts = waitingCounts(items, open && { root: open.root, planId: open.planId })
+  if (counts.all > 0) {
+    const total = counts.plan === undefined ? cliT(lang, 'attention.total.all', { all: counts.all }) : cliT(lang, 'attention.total.plan', { plan: counts.plan, repo: counts.all })
+    io.out(`${total} — ${reasonsLine(io, counts.reasons)}\n`)
   }
   const names = new Map(repos.map((r) => [r.root, r.name]))
   const repoOf = (item: NeedsYouItem) => (values.all ? names.get(item.root) : undefined)

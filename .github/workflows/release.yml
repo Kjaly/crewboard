@@ -48,7 +48,15 @@ jobs:
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - run: npm publish --provenance --access public
+      # A version already on npm (for example the first release, published by hand before the trusted
+      # publisher could be configured) is skipped, so re-running the tag does not fail.
+      - name: Publish crewboard
         working-directory: packages/cli
-      - run: npm publish --provenance --access public
+        run: |
+          name=$(node -p "require('./package.json').name"); version=$(node -p "require('./package.json').version")
+          if npm view "$name@$version" version >/dev/null 2>&1; then echo "$name@$version is already on npm, skipping"; else npm publish --provenance --access public; fi
+      - name: Publish dsh-crewboard
         working-directory: packages/plugin
+        run: |
+          name=$(node -p "require('./package.json').name"); version=$(node -p "require('./package.json').version")
+          if npm view "$name@$version" version >/dev/null 2>&1; then echo "$name@$version is already on npm, skipping"; else npm publish --provenance --access public; fi

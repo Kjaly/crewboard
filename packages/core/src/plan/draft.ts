@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import * as z from '../util/zod.js'
+import { type ContractLang, contractTemplate, planContext } from './contract.js'
 import { findCycle } from './graph.js'
 import { PLAN_ID, CREWBOARD_DIR, planPath, savePlan } from './store.js'
 import { setCurrentPlan } from './plans.js'
@@ -130,7 +131,24 @@ export async function discardDraft(root: string, id: string): Promise<void> {
 }
 export const sourceHash = (text: string) => createHash('sha256').update(text).digest('hex')
 
-export async function approveDraft(root: string, id: string, now: Date): Promise<Plan> {
+/**
+ * The draft's open questions become decisions of the plan (ct1, B16): each is a task of kind `decision` titled
+ * as the question, so it waits for the person like any decision instead of a field no one reads. Ids follow
+ * the task ids of the draft without clashing with them.
+ */
+export function decisionTasks(questions: readonly string[], taken: ReadonlySet<string>): { id: string; title: string }[] {
+  const used = new Set(taken)
+  let n = 0
+  return questions.map((question) => question.trim()).filter(Boolean).map((title) => {
+    let id: string
+    do id = `decision-${++n}`
+    while (used.has(id))
+    used.add(id)
+    return { id, title }
+  })
+}
+
+export async function approveDraft(root: string, id: string, now: Date, lang?: ContractLang): Promise<Plan> {
   const draft = await loadDraft(root, id)
   // Refuse before anything is written: a refused approval must leave no plan and no stray contract.
   const blocking = checkDraft(draft).filter(isBlocking)
@@ -138,8 +156,21 @@ export async function approveDraft(root: string, id: string, now: Date): Promise
   if (await exists(planPath(root, id))) throw new DraftError('plan_id_collision', id)
   const paths = draft.tasks.map((task) => join(root, CREWBOARD_DIR, 'contracts', `${task.id}.md`))
   for (const [i, path] of paths.entries()) if (await exists(path)) throw new DraftError('contract_id_collision', draft.tasks[i]!.id)
-  const plan: Plan = { ...emptyPlan(draft.goal, now), draftSource: draft.source, draftDecisions: draft.decisions, tasks: draft.tasks.map((task) => newTask({ id: task.id, title: task.title, lane: task.lane, class: task.class, kind: task.kind, deps: task.deps, contract: `${CREWBOARD_DIR}/contracts/${task.id}.md`, acceptance: task.acceptance, sources: task.sources })) }
-  for (const [i, path] of paths.entries()) await atomic(path, draft.tasks[i]!.contract)
+  const decisions = decisionTasks(draft.decisions, new Set(draft.tasks.map((task) => task.id)))
+  const plan: Plan = {
+    ...emptyPlan(draft.goal, now),
+    draftSource: draft.source,
+    tasks: [
+      ...draft.tasks.map((task) => newTask({ id: task.id, title: task.title, lane: task.lane, class: task.class, kind: task.kind, deps: task.deps, contract: `${CREWBOARD_DIR}/contracts/${task.id}.md`, acceptance: task.acceptance, sources: task.sources })),
+      ...decisions.map((decision) => newTask({ ...decision, kind: 'decision' })),
+    ],
+  }
+  // The sketch is the contract's result; acceptance fills its checks (ux7 F-01: a one-line contract without
+  // them made every task from a draft read as disputed).
+  for (const [i, path] of paths.entries()) {
+    const task = draft.tasks[i]!
+    await atomic(path, contractTemplate({ goal: task.title, context: planContext(draft.goal, task.deps, lang), result: task.contract, checks: task.acceptance, sources: task.sources, lang }))
+  }
   const saved = await savePlan(root, plan, -1, now, id)
   await rm(draftPath(root, id))
   // The approved plan is the one the next command works on, as after `plan new` (B22, ux7 F-21).

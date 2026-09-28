@@ -76,7 +76,8 @@ export function orchestraRoutes(service: OrchestraService, opts: { pingMs?: numb
         const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
         res.write('retry: 2000\n\n')
         send('snapshot', service.snapshot())
-        const off = service.subscribe((s) => send('snapshot', s))
+        // The screen takes the quick first paint too (pf1); the full snapshot follows on the same stream.
+        const off = service.subscribe((s) => send('snapshot', s), { partial: true })
         const ping = setInterval(() => res.write(': ping\n\n'), opts.pingMs ?? 20_000)
         const close = () => {
           clearInterval(ping)

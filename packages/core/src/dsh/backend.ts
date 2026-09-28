@@ -9,6 +9,8 @@ import { type RunState, TERMINAL_STATUSES } from '../plan/graph.js'
 import { DEFAULT_DSH_COMMAND, type RunnerArgs, readRunEvents, readRunState } from './runner.js'
 import { startState } from '../runs/start-guard.js'
 import { steerMailName } from '../runs/steers.js'
+import { stateFailure } from '../runs/failure.js'
+import { AnthropicPolicyError, classifyAnthropicRoute } from '../routing/anthropic-policy.js'
 
 /** Compiled supervisor entry; exists in dist only. */
 export const RUNNER_ENTRY = fileURLToPath(new URL('./runner-main.js', import.meta.url))
@@ -49,10 +51,12 @@ export function createDshBackend(opts: DshBackendOptions): RunBackend {
     id: 'dsh',
 
     async launch({ agent, promptFile, cwd, model: configuredModel }: LaunchInput) {
+      const model = configuredModel ?? dshModel(agent)
+      const policy = classifyAnthropicRoute({ backend: 'dsh', model, id: agent }, {})
+      if (policy.applies && !policy.allowed) throw new AnthropicPolicyError(policy.code, policy.vars)
       const runId = `run_dsh-${Date.now().toString(36)}${suffix()}`
       const runDir = dirOf(runId)
       await mkdir(join(runDir, 'mailbox'), { recursive: true })
-      const model = configuredModel ?? dshModel(agent)
       const args: RunnerArgs = {
         runDir,
         cwd,
@@ -71,13 +75,18 @@ export function createDshBackend(opts: DshBackendOptions): RunBackend {
     async status(runId): Promise<RunState> {
       const s = await readRunState(dirOf(runId))
       if (!s) return startState(dirOf(runId))
-      if (s.status === 'running' && !alive(s.pid)) return { status: 'failed', terminal: true, exitCode: 1 }
+      if (s.status === 'running' && !alive(s.pid)) return { status: 'failed', terminal: true, exitCode: 1, failure: { reason: 'interrupted' } }
       const state: RunState = { status: s.status, terminal: TERMINAL_STATUSES.has(s.status), exitCode: s.exitCode }
       if (s.finishedAt) state.finishedAt = s.finishedAt
+      const failure = stateFailure('dsh', s)
+      if (failure) state.failure = failure
       return state
     },
 
     async steer(runId, promptFile, _mode, steerId) {
+      const recorded = await readFile(join(dirOf(runId), 'args.json'), 'utf8').then((raw) => JSON.parse(raw) as Partial<RunnerArgs> & { agent?: string }).catch(() => ({} as Partial<RunnerArgs> & { agent?: string }))
+      const policy = classifyAnthropicRoute({ backend: 'dsh', model: recorded.model, id: recorded.agent }, {})
+      if (policy.applies && !policy.allowed) throw new AnthropicPolicyError(policy.code, policy.vars)
       await writeFile(join(await mailbox(runId), steerMailName(steerId ?? suffix())), await readFile(promptFile, 'utf8'))
     },
 

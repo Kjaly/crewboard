@@ -1,8 +1,8 @@
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { type Backends, type RunBackend, initPlan, loadDraft, loadPlan, newTask, updatePlan } from '@crewboard/core'
+import { type Backends, type RunBackend, getTaskShow, initPlan, loadDraft, loadPlan, newTask, nodeExec, updatePlan } from '@crewboard/core'
 import { OrchestraService } from '../src/host/service.js'
 import { orchestraTools, toDshTool, toLosslessJson } from '../src/host/tools.js'
 import { OrchestraService as Service } from '../src/host/service.js'
@@ -48,7 +48,10 @@ describe('orchestra tools', () => {
     const { tools } = await setup()
     expect(tools.map((t) => t.name).sort()).toEqual([
       'orchestra_attention',
+      'orchestra_close',
       'orchestra_decision',
+      'orchestra_decision_answer',
+      'orchestra_decision_prepare',
       'orchestra_draft_job_repair',
       'orchestra_draft_jobs',
       'orchestra_events',
@@ -57,6 +60,7 @@ describe('orchestra tools', () => {
       'orchestra_run',
       'orchestra_steer',
       'orchestra_stop',
+      'orchestra_task',
       'orchestra_task_upsert',
       'orchestra_trace',
       'orchestra_verify',
@@ -68,7 +72,10 @@ describe('orchestra tools', () => {
 
   // vr1: the chat gets the same three actions as `orch verify`; acceptance stays out of reach.
   it('orchestra_verify takes, finishes and returns a check', async () => {
-    const { root, tool } = await setup()
+    const { root, tool, tools } = await setup()
+    const verifySchema = tools.find((item) => item.name === 'orchestra_verify')?.parameters as { properties?: { action?: { enum?: string[] }; verdict?: { enum?: string[] } } }
+    expect(verifySchema.properties?.action?.enum).toContain('attest')
+    expect(verifySchema.properties?.verdict?.enum).toEqual(['result', 'negative', 'disputed'])
     await expect(tool('orchestra_verify').execute({ task: 'b', action: 'take' })).rejects.toMatchObject({ code: 'not_in_review' })
     await updatePlan(root, (p) => {
       const b = p.tasks.find((t) => t.id === 'b')!
@@ -85,9 +92,51 @@ describe('orchestra tools', () => {
     // A repeated take leaves checked work with the person; only reopen takes it back.
     expect(await tool('orchestra_verify').execute({ task: 'b', action: 'take' })).toMatchObject({ alreadyChecked: true, check: { state: 'checked' } })
     expect(await tool('orchestra_verify').execute({ task: 'b', action: 'reopen' })).toMatchObject({ check: { state: 'checking' } })
-    await expect(tool('orchestra_verify').execute({ task: 'b', action: 'accept' })).rejects.toThrow('action must be start, take, reopen, done or return')
+    await writeFile(join(root, 'attestation.md'), 'Result: received\nCurrent independent proof.\n')
+    await expect(tool('orchestra_verify').execute({ task: 'b', action: 'attest', verdict: 'result', report: 'attestation.md', note: 'checked independently' })).rejects.toMatchObject({ code: 'attestation_not_ready' })
+    await expect(tool('orchestra_verify').execute({ task: 'b', action: 'accept' })).rejects.toThrow('action must be start, take, reopen, done, return or checks')
     // A return relaunches through the contract, like a human relaunch: without one it is refused.
     await expect(tool('orchestra_verify').execute({ task: 'b', action: 'return', note: 'tests red' })).rejects.toMatchObject({ code: 'no_contract' })
+  })
+
+  it('orchestra_close refuses unfinished work without accepting it', async () => {
+    const { root, tool } = await setup()
+    await expect(tool('orchestra_close').execute({ task: 'b' })).rejects.toThrow('Automatic acceptance requires')
+    expect((await loadPlan(root)).tasks.find((task) => task.id === 'b')?.status).toBe('ready')
+  })
+
+  // dc1: an answer the person already gave in chat is recorded — no second Accept; an open decision the
+  // person wants investigated returns to the orchestrator's preparation.
+  it('orchestra_decision_answer records the chat answer; orchestra_decision_prepare reopens preparation', async () => {
+    const { root, tool } = await setup()
+    await updatePlan(root, (p) => {
+      p.tasks.push(
+        { ...newTask({ id: 'd1', title: 'Pick a store', kind: 'decision' }), check: { state: 'checked', at: NOW.toISOString(), note: 'options' } },
+        newTask({ id: 'dep', title: 'Uses the store', deps: ['d1'] }),
+      )
+      return p
+    })
+    await expect(tool('orchestra_decision_answer').execute({ task: 'd1', answer: 'sqlite', basis: '' })).rejects.toThrow('basis is required')
+    await expect(tool('orchestra_decision_answer').execute({ task: 'b', answer: 'sqlite', basis: 'chat' })).rejects.toMatchObject({ code: 'not_decision' })
+    expect(await tool('orchestra_decision_answer').execute({ task: 'd1', answer: 'sqlite', basis: 'user message "use sqlite"' })).toMatchObject({ task: 'd1', status: 'accepted', answer: 'sqlite', basis: 'user message "use sqlite"' })
+    const plan = await loadPlan(root)
+    expect(plan.tasks.find((t) => t.id === 'd1')?.notes.at(-1)?.event).toMatchObject({ kind: 'answered', answer: 'sqlite', basis: 'user message "use sqlite"', by: 'orchestrator' })
+    // The repeat is a no-op; a different answer on the closed decision is refused.
+    expect(await tool('orchestra_decision_answer').execute({ task: 'd1', answer: 'sqlite', basis: 'user message "use sqlite"' })).toMatchObject({ alreadyRecorded: true })
+    await expect(tool('orchestra_decision_answer').execute({ task: 'd1', answer: 'postgres', basis: 'other' })).rejects.toMatchObject({ code: 'decision_conflict' })
+    await expect(tool('orchestra_decision_prepare').execute({ task: 'd1', reason: 'rethink' })).rejects.toMatchObject({ code: 'decision_closed' })
+
+    // An open decision goes back to preparation: check and start marks clear, the reason is recorded.
+    await updatePlan(root, (p) => {
+      p.tasks.push({ ...newTask({ id: 'd2', title: 'Pick a cache', kind: 'decision' }), check: { state: 'checked', at: NOW.toISOString(), note: 'options' }, started: { by: 'orchestrator', at: NOW.toISOString() } })
+      return p
+    })
+    expect(await tool('orchestra_decision_prepare').execute({ task: 'd2', reason: 'the person asked to research latency first' })).toMatchObject({ task: 'd2', status: 'ready' })
+    const d2 = (await loadPlan(root)).tasks.find((t) => t.id === 'd2')
+    expect(d2?.check).toBeUndefined()
+    expect(d2?.started).toBeUndefined()
+    expect(d2?.notes.at(-1)?.event).toMatchObject({ kind: 'decision_prepare', reason: 'the person asked to research latency first', by: 'orchestrator' })
+    await expect(tool('orchestra_decision_prepare').execute({ task: 'b', reason: 'x' })).rejects.toMatchObject({ code: 'not_decision' })
   })
 
   // rt1: the orchestrator's own work — start, then done with a report file; the kind of an open task may change.
@@ -148,6 +197,16 @@ describe('orchestra tools', () => {
     expect(toLosslessJson(undefined)).toBeNull()
   })
 
+  // ts1: the orchestrator reads a task whole — the same structure as `crewboard task show --json`.
+  it('orchestra_task returns the task show structure and refuses a missing task with a sentence', async () => {
+    const { root, tool } = await setup()
+    const shown = await tool('orchestra_task').execute({ task: 'b' })
+    expect(shown).toMatchObject({ id: 'b', title: 'B', planId: 'main', mergeState: { state: 'none' }, lastRun: { runId: 'run_dsh-b', agent: 'dsh' }, checks: [] })
+    const backends: Backends = { forAgent: async () => ({ events: async () => [{ ts: '2026-09-22T11:59:10Z', type: 'turn_started', data: { turn: 1, text: 'go' } }, { ts: '2026-09-22T11:59:20Z', type: 'tool_started', data: 'Read file' }] }) as unknown as RunBackend }
+    expect(shown).toEqual(toLosslessJson(await getTaskShow(root, 'b', backends, nodeExec)))
+    await expect(tool('orchestra_task').execute({ task: 'zzz' })).rejects.toThrow('No task zzz.')
+  })
+
   it('reads the plan, events and trace of a run', async () => {
     const { tool } = await setup()
     expect(await tool('orchestra_plan').execute({})).toMatchObject({ goal: 'goal', tasks: [{ id: 'b', status: 'running' }] })
@@ -168,12 +227,39 @@ describe('orchestra tools', () => {
     await expect(tool('orchestra_task_upsert').execute({ id: 'c', status: 'accepted' })).rejects.toThrow(/human/)
   })
 
+  // ct1 (B16, B21): class from the chat, no acceptance in the enum, contracts from the one template.
+  it('offers class and no acceptance statuses in the task tool', async () => {
+    const { tool } = await setup()
+    const props = (tool('orchestra_task_upsert').parameters as { properties: Record<string, { enum?: string[] }> }).properties
+    expect(props.status?.enum).toEqual(['backlog', 'ready'])
+    expect(props.class?.enum).toEqual(['code', 'design', 'review', 'research'])
+    await expect(tool('orchestra_task_upsert').execute({ id: 'c', title: 'C', class: 'docs' })).rejects.toThrow(/unknown class/)
+  })
+
+  it('writes a contract from result and checks, and says what a contract lacks', async () => {
+    const { root, tool } = await setup()
+    const made = await tool('orchestra_task_upsert').execute({ id: 'c', title: 'Add greet', class: 'design', result: 'Add src/greet.ts', checks: ['pnpm test'], sources: ['spec.md §2'] }) as Record<string, unknown>
+    expect(made).toMatchObject({ id: 'c', class: 'design', contract: '.orchestration/contracts/main/c.md' })
+    expect(made).not.toHaveProperty('warnings')
+    const contract = await readFile(join(root, '.orchestration/contracts/main/c.md'), 'utf8')
+    expect(contract).toContain('<checks>\n- pnpm test\n</checks>')
+    expect(contract).toContain('`Result: received`')
+
+    expect(await tool('orchestra_task_upsert').execute({ id: 'd', title: 'D' })).toMatchObject({ needsContract: true, notice: expect.stringContaining('crewboard task set d --template') })
+
+    await writeFile(join(root, 'sketch.md'), 'Add src/e.ts\n')
+    const soft = await tool('orchestra_task_upsert').execute({ id: 'e', title: 'E', contract: 'sketch.md' }) as { warnings: string[] }
+    expect(soft.warnings).toHaveLength(2)
+    expect(soft.warnings[0]).toMatch(/^Warning: the contract of e has no checks/)
+    expect(soft.warnings[1]).toMatch(/^Warning: the contract of e does not ask for the result line/)
+  })
+
   it('steers and stops through the backend and rejects unknown repos', async () => {
     const { calls, tool } = await setup()
     await tool('orchestra_steer').execute({ task: 'b', message: 'use vitest' })
     await tool('orchestra_stop').execute({ task: 'b' })
     expect(calls).toEqual(['steer run_dsh-b', 'cancel run_dsh-b'])
-    await expect(tool('orchestra_plan').execute({ repo: '/not/configured' })).rejects.toThrow(/not a dsh workspace or a configured repo/)
+    await expect(tool('orchestra_plan').execute({ repo: '/not/configured' })).rejects.toThrow(/not a dsh workspace or a Crewboard repository.*crewboard repo add \/not\/configured/)
   })
 
   it('reports launch refusals as tool errors with the reason', async () => {

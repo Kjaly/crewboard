@@ -1,7 +1,7 @@
 import ElkBundle from 'elkjs/lib/elk.bundled.js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { setElkEngine } from '../../src/client/views/graph/elk.js'
-import { DECISION_LANE, NODE_H, NODE_W, type NodePos, laneBands, layoutGraph } from '../../src/client/views/graph/layout.js'
+import { DECISION_LANE, NODE_H, NODE_W, type NodePos, laneBands, laneOrigins, layoutFoldStack, layoutGraph } from '../../src/client/views/graph/layout.js'
 import { makeTask } from './helpers.js'
 
 const Elk = ElkBundle as unknown as new () => { layout(graph: unknown): Promise<unknown> }
@@ -76,6 +76,34 @@ describe('layoutGraph', () => {
   it('takes a pinned position as is', async () => {
     const pos = await layoutGraph([makeTask({ id: 'a' }), makeTask({ id: 'p', deps: ['a'], pos: { x: -40, y: 300 } })])
     expect(pos.get('p')).toMatchObject({ x: -40, y: 300 })
+  })
+
+  it('reads a pin as an offset from its lane, not a world position (mm1)', async () => {
+    const tasks = [makeTask({ id: 'a', lane: 'Above' }), makeTask({ id: 'p', lane: 'Below', pos: { x: 0, y: 40 } })]
+    const origin = laneOrigins(tasks).get('Below') ?? 0
+    expect(origin).toBeGreaterThan(0) // "Above" takes room first, in plan order
+    const pos = await layoutGraph(tasks)
+    expect(pos.get('p')).toMatchObject({ x: 0, y: origin + 40, lane: 'Below' })
+
+    // Reordering lanes moves "Below" to the top: its origin drops to 0, and the pin follows it there
+    // instead of staying at its old world y (which would now sit inside "Above"'s band).
+    const reordered = await layoutGraph(tasks, undefined, ['Below', 'Above'])
+    expect(reordered.get('p')).toMatchObject({ x: 0, y: 40, lane: 'Below' })
+  })
+
+  it('keeps a pin inside its own lane band when a lane above it folds (mm1)', () => {
+    const above = Array.from({ length: 4 }, (_, i) => makeTask({ id: `a${i}`, lane: 'Above', deps: i ? [`a${i - 1}`] : [] }))
+    const tasks = [...above, makeTask({ id: 'p', lane: 'Below', pos: { x: 0, y: 40 } })]
+    const stacked = layoutFoldStack(tasks, new Set(['Above']))
+    const foldedAbove = stacked.bands.find((b) => b.lanes?.includes('Above'))!
+    const below = stacked.bands.find((b) => b.lane === 'Below')!
+    const p = stacked.nodes.get('p')!
+    expect(p.lane).toBe('Below')
+    expect(p.y).toBeGreaterThanOrEqual(below.top)
+    expect(p.y + NODE_H).toBeLessThanOrEqual(below.top + below.height)
+    expect(p.y).toBeGreaterThanOrEqual(foldedAbove.top + foldedAbove.height)
+    // Its offset from "Below"'s own top survived the fold untouched.
+    expect(p.y - stacked.origins.get('Below')!).toBe(40)
   })
 
   it('starts every task without dependencies in the first column of its lane', async () => {

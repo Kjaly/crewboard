@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import type { CheckSetting, EffectiveRouting, WorkerPreset, WorkerInfo } from '../shared/types.js'
-import { api } from './api.js'
+import type { CheckSetting, DefaultBaseSetting, EffectiveRouting, WorkerPreset, WorkerInfo } from '../shared/types.js'
+import { api, shared } from './api.js'
 import { t } from './i18n.js'
 import { repoName } from './review.js'
 
@@ -15,7 +15,7 @@ export function AutoOrder({ effective, workers }: { effective?: EffectiveRouting
   return /* biome-ignore lint/a11y/useSemanticElements: This custom control keeps its established layout and keyboard behavior. */ <div className="orc-preset__order" role="table" aria-label={t('settings.workerOrder')}>{CLASSES.map((cls) => /* biome-ignore lint/a11y/useFocusableInteractive: The row contains focusable controls and is not itself a target. */ <div className="orc-preset__route" role="row" key={cls}><span role="cell">{t(`settings.classShort.${cls}`)}</span><span role="cell">{effective.routing[cls].length ? <><strong>{workerName(effective.routing[cls][0]!, workers)}</strong>{effective.routing[cls].slice(1).map((id) => <span className="orc-preset__fallback" key={id}> → {workerName(id, workers)}</span>)}</> : t('settings.noWorker')}</span></div>)}</div>
 }
 
-export function PresetPickers({ repo, planId, planTitle, effective, check, workers, openRequest, onOpenSettings }: { repo: string; planId?: string; planTitle?: string; effective?: EffectiveRouting; check?: CheckSetting; workers: readonly WorkerInfo[]; openRequest?: number; onOpenSettings?(): void }) {
+export function PresetPickers({ repo, planId, planTitle, effective, check, defaultBase, workers, openRequest, onOpenSettings }: { repo: string; planId?: string; planTitle?: string; effective?: EffectiveRouting; check?: CheckSetting; defaultBase?: DefaultBaseSetting; workers: readonly WorkerInfo[]; openRequest?: number; onOpenSettings?(): void }) {
   const [presets, setPresets] = useState<WorkerPreset[]>([])
   const [repositoryEffective, setRepositoryEffective] = useState<EffectiveRouting>()
   const [pending, setPending] = useState(false)
@@ -28,7 +28,7 @@ export function PresetPickers({ repo, planId, planTitle, effective, check, worke
     let live = true
     setRepositoryEffective(undefined)
     setPresets([])
-    void api.presets(repo).then((result) => { if (live && result.ok) { if (Array.isArray(result.value?.presets)) setPresets(result.value.presets); setRepositoryEffective(result.value.effectiveRouting) } }).catch(() => {})
+    void shared.presets(repo).then((result) => { if (live && result.ok) { if (Array.isArray(result.value?.presets)) setPresets(result.value.presets); setRepositoryEffective(result.value.effectiveRouting) } }).catch(() => {})
     return () => { live = false }
   }, [repo])
   useEffect(() => { if (openRequest) setOpen(true) }, [openRequest])
@@ -78,6 +78,7 @@ export function PresetPickers({ repo, planId, planTitle, effective, check, worke
       <AutoOrder effective={effective} workers={workers} />
       {effective?.dropped.map((entry) => <p className="orc-preset__dropped" key={entry.id}>{t(`settings.skippedWorker.${entry.reason}`, { worker: workerName(entry.id, workers) })}</p>)}
       {check ? <CheckSettingFields repo={repo} planId={planId} check={check} /> : null}
+      {defaultBase ? <DefaultBaseFields repo={repo} planId={planId} defaultBase={defaultBase} /> : null}
       {error ? <span className="orc-error" role="alert">{error}</span> : null}
       {onOpenSettings ? <button type="button" className="orc-preset__settings" onClick={() => { setOpen(false); onOpenSettings() }}>{t('settings.openOrchestration')} →</button> : null}
     </div> : null}
@@ -113,6 +114,37 @@ function CheckSettingFields({ repo, planId, check }: { repo: string; planId?: st
       </select>
     </label> : null}
     <p className="orc-preset__effective">{t(check.enabled ? 'check.setting.inForceOn' : 'check.setting.inForceOff', { source: t(`check.setting.source.${check.source}`) })}</p>
+    {error ? <span className="orc-error" role="alert">{error}</span> : null}
+  </>
+}
+
+/** bs1: the base new copies branch from — never whatever the main checkout happens to have checked out. */
+function DefaultBaseFields({ repo, planId, defaultBase }: { repo: string; planId?: string; defaultBase: DefaultBaseSetting }) {
+  const [repository, setRepository] = useState(defaultBase.repository ?? '')
+  const [plan, setPlan] = useState(defaultBase.plan ?? '')
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => { setRepository(defaultBase.repository ?? '') }, [defaultBase.repository])
+  useEffect(() => { setPlan(defaultBase.plan ?? '') }, [defaultBase.plan])
+  const save = async (scope: 'repo' | 'plan', value: string) => {
+    setPending(true); setError('')
+    try {
+      const result = await api.defaultBase(repo, scope, value.trim() || null, planId)
+      if (!result.ok) setError(result.message ?? result.error)
+    } catch { setError(t('settings.loadError')) }
+    finally { setPending(false) }
+  }
+  return <>
+    <h2 className="orc-preset__title">{t('defaultBase.setting.title')}</h2>
+    <label className="orc-preset__field" title={t('defaultBase.setting.help')}><span>{t('settings.scopeRepository')}</span>
+      <input className="orc-field" aria-label={t('defaultBase.setting.repository', { repo: repoName(repo) })} placeholder={t('defaultBase.setting.placeholder')} value={repository} disabled={pending}
+        onChange={(e) => setRepository(e.target.value)} onBlur={() => { if (repository !== (defaultBase.repository ?? '')) void save('repo', repository) }} />
+    </label>
+    {planId ? <label className="orc-preset__field" title={t('defaultBase.setting.help')}><span>{t('settings.scopePlan')}</span>
+      <input className="orc-field" aria-label={t('defaultBase.setting.plan')} placeholder={t('defaultBase.setting.asRepository')} value={plan} disabled={pending}
+        onChange={(e) => setPlan(e.target.value)} onBlur={() => { if (plan !== (defaultBase.plan ?? '')) void save('plan', plan) }} />
+    </label> : null}
+    <p className="orc-preset__effective">{t('defaultBase.setting.inForce', { branch: defaultBase.branch ?? '?', source: t(`defaultBase.setting.source.${defaultBase.source}`) })}</p>
     {error ? <span className="orc-error" role="alert">{error}</span> : null}
   </>
 }

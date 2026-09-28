@@ -90,9 +90,12 @@ describe('action routes', () => {
     const task = plan.tasks.find((item) => item.id === 'fix-review')
     expect(task).toMatchObject({ deps: ['c'], class: 'review', lane: 'Review', status: 'ready', runs: [], contract: '.orchestration/contracts/main/fix-review.md' })
     const contract = await readFile(join(root, task!.contract!), 'utf8')
-    expect(contract).toContain('c: C')
-    expect(contract).toContain('Verdict:')
-    expect(contract).toContain('Fix the check')
+    expect(contract).toContain('Follow-up to c: C.')
+    expect(contract).toContain('Its verdict:')
+    expect(contract).toContain('## Result\n\nFix the check')
+    // The one template (ct1): a checks block and the result line the verdict reads.
+    expect(contract).toContain('<checks>')
+    expect(contract).toContain('`Result: received`')
   })
   it('keeps a replacement runnable by omitting its superseded parent as a dependency', async () => {
     const { root, call } = await setup()
@@ -165,9 +168,59 @@ describe('action routes', () => {
       return p
     })
     expect((await call('POST', `${A}/accept`, { repo: root, task: 'c' })).status).toBe(200)
-    expect(prompts[0]).toMatch(/^The orchestrator has not finished checking c — accept without it\?/)
+    expect(prompts[0]).toMatch(/^The orchestrator has not checked c yet — accept anyway\?\n\n/)
     const review = await call('GET', `${A}/task-review?repo=${encodeURIComponent(root)}&task=c`)
     expect((review.json as { value: { decisions: Array<{ check?: string }> } }).value.decisions.at(-1)?.check).toBe('unchecked')
+  })
+
+  // vc1: one line on the check in every accept dialog — checked, not checked yet, or no check for this plan and why.
+  describe('the accept dialog states the check in one line', () => {
+    const finish = async (root: string, ids: string[], check?: (id: string) => 'pending' | 'checked' | undefined) => updatePlan(root, (p) => {
+      for (const id of ids) {
+        if (!p.tasks.some((t) => t.id === id)) p.tasks.push(newTask({ id, title: id.toUpperCase() }))
+        const task = p.tasks.find((t) => t.id === id)!
+        task.status = 'in_review'
+        task.runs = [{ runId: `run_dsh-${id}`, agent: 'dsh', startedAt: '2026-09-22T11:00:00Z', finishedAt: '2026-09-22T11:10:00Z', outcome: 'completed' }]
+        const state = check?.(id)
+        if (state) task.check = { state, runId: `run_dsh-${id}`, at: '2026-09-22T11:11:00Z', ...(state === 'checked' ? { note: 'gates green' } : {}) }
+      }
+      return p
+    })
+
+    it('checked, with the note', async () => {
+      const { root, call, prompts } = await setup(true)
+      await finish(root, ['c'], () => 'checked')
+      expect((await call('POST', `${A}/accept`, { repo: root, task: 'c' })).status).toBe(200)
+      expect(prompts[0]).toMatch(/^Checked by the orchestrator — gates green\.\n\n/)
+    })
+
+    it('pending: not checked yet — accept anyway', async () => {
+      const { root, call, prompts } = await setup(true)
+      await writeFile(join(root, '.orchestration', 'settings.json'), JSON.stringify({ orchestratorCheck: true }))
+      await finish(root, ['c'], () => 'pending')
+      expect((await call('POST', `${A}/accept`, { repo: root, task: 'c' })).status).toBe(200)
+      expect(prompts[0]).toMatch(/^The orchestrator has not checked c yet — accept anyway\?\n\n/)
+    })
+
+    it('off: no check for this plan, and why', async () => {
+      const { root, call, prompts } = await setup(true)
+      await finish(root, ['c'])
+      expect((await call('POST', `${A}/accept`, { repo: root, task: 'c' })).status).toBe(200)
+      expect(prompts[0]).toMatch(/^No orchestrator check for this plan \(no orchestrator chat\)\.\n\n/)
+      const repoOff = await setup(true)
+      await writeFile(join(repoOff.root, '.orchestration', 'settings.json'), JSON.stringify({ orchestratorCheck: false }))
+      await finish(repoOff.root, ['c'])
+      expect((await repoOff.call('POST', `${A}/accept`, { repo: repoOff.root, task: 'c' })).status).toBe(200)
+      expect(repoOff.prompts[0]).toMatch(/^No orchestrator check for this plan \(turned off for this repository\)\.\n\n/)
+    })
+
+    it('a batch uses the same words, grouped', async () => {
+      const { root, call, prompts } = await setup(true)
+      await finish(root, ['c', 'd'], (id) => (id === 'c' ? 'checked' : undefined))
+      expect((await call('POST', `${A}/accept-batch`, { repo: root, tasks: ['c', 'd'] })).status).toBe(200)
+      expect(prompts[0]).toContain('Checked by the orchestrator:\n• c — C')
+      expect(prompts[0]).toContain('No orchestrator check for this plan (no orchestrator chat):\n• d — D')
+    })
   })
 
   it('stores the orchestrator check setting per repository and per plan', async () => {
@@ -176,6 +229,17 @@ describe('action routes', () => {
     expect(await call('POST', `${A}/orchestrator-check`, { repo: root, scope: 'plan', value: false })).toMatchObject({ status: 200, json: { value: { enabled: false, source: 'plan', plan: false } } })
     expect(await call('POST', `${A}/orchestrator-check`, { repo: root, scope: 'plan', value: null })).toMatchObject({ json: { value: { enabled: true, source: 'repository' } } })
     expect((await call('POST', `${A}/orchestrator-check`, { repo: root, scope: 'plan', value: 'yes' })).status).toBe(400)
+  })
+
+  // bs1: the base new copies branch from, settable per repository and per plan from the screen too.
+  it('stores the default base override per repository and per plan', async () => {
+    const { root, call } = await setup(true)
+    expect(await call('POST', `${A}/default-base`, { repo: root, scope: 'repo', value: 'develop' })).toMatchObject({ status: 200, json: { value: { branch: 'develop', source: 'repository', repository: 'develop' } } })
+    expect(await call('POST', `${A}/default-base`, { repo: root, scope: 'plan', value: 'release' })).toMatchObject({ status: 200, json: { value: { branch: 'release', source: 'plan', plan: 'release', repository: 'develop' } } })
+    expect(await call('POST', `${A}/default-base`, { repo: root, scope: 'plan', value: null })).toMatchObject({ json: { value: { branch: 'develop', source: 'repository', repository: 'develop' } } })
+    expect(await call('POST', `${A}/default-base`, { repo: root, scope: 'repo', value: null })).toMatchObject({ json: { value: { source: 'default' } } })
+    expect((await call('POST', `${A}/default-base`, { repo: root, scope: 'plan', value: 3 })).status).toBe(400)
+    expect((await call('POST', `${A}/default-base`, { repo: root, scope: 'nowhere', value: 'x' })).status).toBe(400)
   })
 
   it('rejects with a required reason after confirmation', async () => {
@@ -199,6 +263,27 @@ describe('action routes', () => {
     expect((await call('POST', `${A}/stop`, { repo: root, task: 'b' })).status).toBe(200)
     expect(calls).toEqual(['steer run_dsh-b', 'cancel run_dsh-b'])
     expect(await call('POST', `${A}/run`, { repo: root, task: 'b', agent: 'dsh' })).toMatchObject({ status: 409, json: { error: 'running' } })
+  })
+
+  it('a red baseline answers with its output file and tail as fields, never the whole output (tk1)', async () => {
+    const { root, call } = await setup()
+    execFileSync('git', ['-C', root, 'init', '-q'])
+    execFileSync('git', ['-C', root, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init'])
+    await writeFile(join(root, 'contract.md'), '# C\n')
+    await writeFile(join(root, '.orchestration/recipes.json'), JSON.stringify({ baseline: 'seq 1 500; exit 1' }))
+    // A green preflight on record: the launch reaches the baseline without probing a real dsh.
+    await writeFile(join(root, '.orchestration/preflight-cache.json'), JSON.stringify({ dsh: { at: NOW.toISOString(), result: { ok: true, checks: [] } } }))
+    await updatePlan(root, (p) => { p.tasks.find((t) => t.id === 'c')!.contract = 'contract.md'; return p })
+    const r = await call('POST', `${A}/run`, { repo: root, task: 'c', agent: 'dsh' })
+    const body = r.json as { error: string; message: string; output: { path: string; bytes: number; tail: string } }
+    expect(r.status).toBe(409)
+    expect(body).toMatchObject({ error: 'baseline', output: { path: expect.stringContaining('.orchestration/output/c/'), bytes: expect.any(Number) } })
+    const full = await readFile(body.output.path, 'utf8')
+    expect(full.split('\n').filter(Boolean)).toHaveLength(500)
+    expect(body.output.bytes).toBe(Buffer.byteLength(full))
+    expect(body.output.tail.split('\n')).toEqual(Array.from({ length: 20 }, (_, i) => String(481 + i)))
+    expect(r.text).not.toContain('\n1\n2\n3\n')
+    expect(body.message).toContain(body.output.path)
   })
 
   it('pins positions and serves task detail and diffs', async () => {

@@ -103,8 +103,8 @@ describe('inboxItems', () => {
   it('shows the example row in Needs you without a count or an «all clear»', () => {
     const example = repo(ROOT, [makeTask({ id: 'pick', title: 'Pick a tagline', kind: 'decision', status: 'ready', needsHuman: true })], [], { example: true } as Partial<RepoSnapshot>)
     render(<RepoSidebar snapshot={makeSnapshot(example)} repo={example} open onToggle={() => {}} />)
-    const inbox = screen.getByRole('region', { name: 'Needs you' })
-    expect(inbox.querySelector('h3')?.textContent).toBe('Needs you')
+    const inbox = screen.getByRole('region', { name: 'Review queue' })
+    expect(inbox.querySelector('h3')?.textContent).toBe('Review queue')
     expect(inbox.textContent).not.toContain('All clear')
     const row = screen.getByRole('button', { name: /Pick a tagline/ })
     expect(row.className).toContain('orc-ibrow--example')
@@ -120,19 +120,54 @@ describe('inboxItems', () => {
     ])
     const example = repo(ROOT, [makeTask({ id: 'pick', title: 'Pick a tagline', kind: 'decision', status: 'ready', needsHuman: true, activeSince: at('2026-09-01T08:00:00Z') })], [], { example: true } as Partial<RepoSnapshot>)
     render(<RepoSidebar snapshot={makeSnapshot(example, real)} repo={example} open onToggle={() => {}} />)
-    const inbox = screen.getByRole('region', { name: 'Needs you' })
-    expect(inbox.querySelector('h3')?.textContent).toBe('Needs you · 2')
-    const rows = [...inbox.querySelectorAll('.orc-inbox__list > li')].map((li) => (li.classList.contains('orc-inbox__divider') ? '--' : li.querySelector('.orc-ibrow__line')?.textContent))
+    const inbox = screen.getByRole('region', { name: 'Review queue' })
+    expect(inbox.querySelector('h3')?.textContent).toBe('Review queue · in this plan 0 · all 2')
+    const rows = [...inbox.querySelectorAll('.orc-inbox__list > li:not(.orc-inbox__group)')].map((li) => (li.classList.contains('orc-inbox__divider') ? '--' : li.querySelector('.orc-ibrow__line')?.textContent))
     expect(rows).toEqual(['Real decision', 'Real review', '--', 'Pick a tagline'])
     expect(inbox.querySelector('.orc-inbox__divider')?.textContent).toBe('Example')
+  })
+
+  // at2 (B25): grouped by repository and plan with a reason summary, a reason tag on each row, the top rows
+  // and «N more», the full title in the tooltip.
+  it('groups Needs you by plan, tags each row with its reason, and folds the rest under «N more»', async () => {
+    const user = userEvent.setup()
+    const minute = (n: number) => at(`2026-09-22T08:${String(n).padStart(2, '0')}:00Z`)
+    const long = 'Rewrite the whole onboarding flow so a newcomer lands on Welcome with one obvious next step'
+    const tasks = [
+      makeTask({ id: 'dec', title: 'Pick a name', kind: 'decision', status: 'ready', needsHuman: true, activeSince: minute(1) }),
+      makeTask({ id: 'off', title: 'Unchecked work', status: 'in_review', reviewCheck: { state: 'off', source: 'plan' }, activeSince: minute(2) }),
+      makeTask({ id: 'blk', title: 'Stuck worker', status: 'in_review', verdict: { kind: 'negative', why: 'blocked' }, activeSince: minute(3) }),
+      makeTask({ id: 'boom', title: 'Broken run', status: 'ready', activeSince: minute(4) }),
+      ...[1, 2, 3, 4, 5, 6].map((n) => makeTask({ id: `r${n}`, title: n === 1 ? long : `Review ${n}`, status: 'in_review', activeSince: minute(10 + n) })),
+    ]
+    const failed: Attention = { kind: 'failed', severity: 'alert', taskId: 'boom', runId: 'run_boom', message: 'boom', reason: { code: 'worker_error' } }
+    const open = repo('/work/app', tasks, [failed], {
+      goal: 'Ship it',
+      plans: [plan({ id: 'main', goal: 'Ship it', current: true }), plan({ id: 'later', goal: 'Later work', waitingHuman: 2, decisions: 1, updatedAt: '2026-09-22T09:00:00Z' })],
+    })
+    render(<RepoSidebar snapshot={makeSnapshot(open)} repo={open} open onToggle={() => {}} />)
+    const inbox = screen.getByRole('region', { name: 'Review queue' })
+    expect(inbox.querySelector('h3')?.textContent).toBe('Review queue · in this plan 10 · all 12')
+    const heads = [...inbox.querySelectorAll('.orc-inbox__group')]
+    expect(heads.map((head) => head.querySelector('.orc-inbox__gname')?.textContent)).toEqual(['app · Ship it', 'app · Later work'])
+    expect(heads[0]?.querySelector('.orc-inbox__gsum')?.textContent).toBe('6 tasks wait for review · 1 review without the orchestrator check · 1 worker is blocked · 1 decision · 1 run failed or stalled')
+    const rows = () => [...inbox.querySelectorAll<HTMLElement>('.orc-ibrow')]
+    const tags = () => Object.fromEntries(rows().map((row) => [row.querySelector('.orc-ibrow__line')?.textContent, row.querySelector('.orc-ibrow__tag')?.textContent ?? '']))
+    // The open plan shows its first five rows, then «5 more»; the background plan stays one row with its summary.
+    expect(tags()).toEqual({ 'Pick a name': 'decision', 'Unchecked work': 'check off', 'Stuck worker': 'blocked', 'Broken run': 'failed', [long]: 'review', 'Later work': '' })
+    expect(rows().find((row) => row.textContent?.includes('Later work'))?.querySelector('.orc-ibrow__meta')?.textContent).toBe('1 task waits for review · 1 decision')
+    expect(rows().find((row) => row.textContent?.includes('Rewrite'))?.getAttribute('title')?.split('\n')[0]).toBe(long)
+    await user.click(screen.getByRole('button', { name: '5 more' }))
+    expect(rows()).toHaveLength(11)
+    expect(screen.getByRole('button', { name: 'Show fewer' }).getAttribute('aria-expanded')).toBe('true')
   })
 
   it('hides the example rows and their divider once another plan is open', () => {
     const real = repo('/real', [makeTask({ id: 'rev', title: 'Real review', status: 'in_review' })])
     const example = repo(ROOT, [makeTask({ id: 'pick', title: 'Pick a tagline', kind: 'decision', status: 'ready', needsHuman: true })], [], { example: true } as Partial<RepoSnapshot>)
     render(<RepoSidebar snapshot={makeSnapshot(example, real)} repo={real} open onToggle={() => {}} />)
-    const inbox = screen.getByRole('region', { name: 'Needs you' })
-    expect(inbox.querySelector('h3')?.textContent).toBe('Needs you · 1')
+    const inbox = screen.getByRole('region', { name: 'Review queue' })
+    expect(inbox.querySelector('h3')?.textContent).toBe('Review queue · in this plan 1 · all 1')
     expect(inbox.textContent).not.toContain('Pick a tagline')
     expect(inbox.querySelector('.orc-inbox__divider')).toBeNull()
   })
@@ -140,7 +175,7 @@ describe('inboxItems', () => {
   it('draws no divider when there is no example row', () => {
     const real = repo('/real', [makeTask({ id: 'rev', title: 'Real review', status: 'in_review' })])
     render(<RepoSidebar snapshot={makeSnapshot(real)} repo={real} open onToggle={() => {}} />)
-    expect(screen.getByRole('region', { name: 'Needs you' }).querySelector('.orc-inbox__divider')).toBeNull()
+    expect(screen.getByRole('region', { name: 'Review queue' }).querySelector('.orc-inbox__divider')).toBeNull()
   })
 
   it('labels the divider in Russian', () => {

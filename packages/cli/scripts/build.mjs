@@ -10,7 +10,9 @@ const common = { bundle: true, platform: 'node', format: 'esm', target: 'node24'
 // dist/ is published as is and `orch` runs from it while this builds: the bundles go into a fresh
 // directory swapped in whole, so no leftover of an older build ships and dist/ is never empty.
 await buildAtomically(fileURLToPath(new URL('../dist', import.meta.url)), async (dist) => {
-  await build({ ...common, entryPoints: ['src/main.ts'], outfile: `${dist}/main.js` })
+  // The Russian texts stay a file of their own next to main.js, imported only by a Russian run (see i18n.ts).
+  await build({ ...common, entryPoints: ['src/main.ts'], outfile: `${dist}/main.js`, external: ['./dict-ru.js'] })
+  await build({ ...common, entryPoints: ['src/dict-ru.ts'], outfile: `${dist}/dict-ru.js` })
 
   // Runs are supervised by detached runner processes that core starts from files next to its own
   // module (`new URL('./cli-runner-main.js', import.meta.url)`). Bundled into dist/main.js, that

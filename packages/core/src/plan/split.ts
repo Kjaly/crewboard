@@ -41,11 +41,28 @@ export function splitSuggestion(plan: Plan): SplitSuggestion {
   return { kind: 'cluster', tasks: tasks.map((task) => task.id), lanes: [...new Set(tasks.map((task) => task.lane).filter((lane): lane is string => !!lane))] }
 }
 
+export type SplitErrorCode = 'split.badId' | 'split.noGoal' | 'split.sameId' | 'split.nothingToMove'
+
+/**
+ * A refused split, as a code with its vars (fo1, B33): the screen and the CLI say it in the reader's language
+ * (`orchText(lang, error.code, error.vars)`); `message` is the English fallback.
+ */
+export class SplitError extends Error {
+  constructor(
+    readonly code: SplitErrorCode,
+    message: string,
+    readonly vars: Record<string, string> = {},
+  ) {
+    super(message)
+    this.name = 'SplitError'
+  }
+}
+
 /** Creates a child plan and removes only selected tasks whose dependencies stay in the child. */
 export async function splitPlan(root: string, from: string, req: { id: string; goal: string; tasks: string[] }): Promise<{ moved: string[]; kept: string[] }> {
-  if (!PLAN_ID.test(req.id)) throw new Error(`Имя плана — строчные латинские буквы, цифры и дефис: «${req.id}»`)
-  if (!req.goal.trim()) throw new Error('Цель плана не может быть пустой')
-  if (req.id === from) throw new Error('Новый план должен иметь другое имя')
+  if (!PLAN_ID.test(req.id)) throw new SplitError('split.badId', `A plan name is lowercase Latin letters, digits and hyphens: «${req.id}»`, { id: req.id })
+  if (!req.goal.trim()) throw new SplitError('split.noGoal', 'The plan goal cannot be empty')
+  if (req.id === from) throw new SplitError('split.sameId', 'The new plan needs a different name', { id: req.id })
   const source = await loadPlan(root, from)
   const wanted = new Set(req.tasks)
   const byId = new Map(source.tasks.map((task) => [task.id, task]))
@@ -59,7 +76,7 @@ export async function splitPlan(root: string, from: string, req: { id: string; g
   }
   const movedTasks = source.tasks.filter((task) => movable.has(task.id))
   const keptTasks = source.tasks.filter((task) => !movable.has(task.id))
-  if (movedTasks.length === 0) throw new Error('Нет задач, которые можно перенести в новый план')
+  if (movedTasks.length === 0) throw new SplitError('split.nothingToMove', 'No task can be moved to the new plan')
   const child: Plan = { ...source, goal: req.goal, rev: 0, tasks: movedTasks }
   const parent: Plan = { ...source, tasks: keptTasks }
   // Save parent first, then roll it back if creating the child fails.

@@ -71,3 +71,12 @@ it('an explicit All workers choice on a plan overrides the repository while clea
   await setPlanPreset(root, 'main', undefined, env)
   expect((await resolveRouting(root, 'main', env)).source).toBe('repository')
 })
+
+it('V-pv1/missing keeps a dsh model in a preset although no registry entry names it', async () => {
+  const { root, env, routing } = await fixture()
+  await savePreset({ id: 'api', label: 'API', routing: { ...routing, code: ['dsh/openrouter/gone-model', 'not-a-worker'] } }, env)
+  await setRepositoryPreset(root, 'api', env)
+  const result = await resolveRouting(root, undefined, env)
+  expect(result.routing.code).toEqual(['dsh/openrouter/gone-model'])
+  expect(result.dropped).toEqual([{ id: 'not-a-worker', reason: 'unknown' }])
+})

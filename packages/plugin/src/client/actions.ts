@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import type { ApiResult } from './api.js'
-import { t } from './i18n.js'
+import { ownHalf, t } from './i18n.js'
 
 /** Server error code → dictionary name. The code is the stable key; the words may change. */
 const MESSAGE_KEYS: Record<string, string> = {
@@ -9,8 +9,10 @@ const MESSAGE_KEYS: Record<string, string> = {
   unknown_task: 'actions.unknownTask',
   no_worktree: 'actions.noWorktree',
   running: 'actions.running',
+  dirty_copy: 'actions.dirtyCopy',
   blocked: 'actions.blocked',
   not_reviewable: 'actions.notReviewable',
+  decision_batch: 'actions.decisionBatch',
   forbidden: 'actions.forbidden',
   draft_invalid: 'panel.draft.error.invalid',
   not_found: 'panel.draft.error.notFound',
@@ -28,7 +30,10 @@ const MESSAGE_KEYS: Record<string, string> = {
 
 export function describeApiError(error: string, message?: string): string {
   const key = MESSAGE_KEYS[error]
-  return key ? t(key) : message ?? t('actions.failed', { error })
+  if (key) return t(key)
+  // These carry the path or the holder in their words: the host's sentence, in the screen's language (sf1).
+  if (message && (error === 'state_file' || error === 'plan_lock_busy')) return ownHalf(message)
+  return message ?? t('actions.failed', { error })
 }
 
 export type Action = {

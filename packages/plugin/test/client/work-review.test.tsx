@@ -139,7 +139,7 @@ it('separates accounting and opens the exact run', async () => {
     'Of accepted: 0 result verified · 0 disputed · 0 negative · 1 outcome untyped',
   )
   expect(screen.getByRole('region', { name: 'Money and quota' }).textContent).toContain(
-    'Estimate, not charged',
+    'Estimate, not an invoice',
   )
   const run = screen.getByRole('link', { name: /Done task/ })
   await user.click(run)

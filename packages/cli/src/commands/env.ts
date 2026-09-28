@@ -1,6 +1,7 @@
 import { cliT } from '../i18n.js'
 import { parseArgs } from 'node:util'
 import {
+  type AgentProfile,
   type BaselineRecord,
   EMPTY_RECIPE,
   type Exec,
@@ -17,11 +18,14 @@ import {
   preflightAgent,
   codexQuotaUsedPercent,
   workerCommands,
+  PrepareError,
+  orchText,
+  outputVars,
   prepareWorktree,
   removeWorktree,
   updatePlan,
 } from '@crewboard/core'
-import { findProfile, homeOf, loadProfiles, repoRoot } from '../context.js'
+import { findProfile, homeOf, loadDefaultProfiles, loadProfiles, repoRoot } from '../context.js'
 import { type Io, UserError, confirmHuman } from '../io.js'
 
 const formatSize = (bytes: number, lang: 'en' | 'ru'): string => {
@@ -30,10 +34,10 @@ const formatSize = (bytes: number, lang: 'en' | 'ru'): string => {
   return `${Math.max(1, Math.round(bytes / 1024))} ${cliT(lang, 'env.kb')}`
 }
 
-/** `baseline ✓ 1a2b3c4 2026-09-24 10:00` — the copy's last baseline, or that there is none on record. */
+/** `baseline ✓ 1a2b3c4 2026-09-24 10:00` — the copy's last baseline (a red one with its output file), or that there is none on record. */
 const baselineLabel = (record: BaselineRecord | undefined, io: Io): string =>
   record
-    ? cliT(io.lang ?? 'en', record.ok ? 'env.baselineGreen' : 'env.baselineRed', { commit: record.commit.slice(0, 7), at: record.at.slice(0, 16).replace('T', ' ') })
+    ? `${cliT(io.lang ?? 'en', record.ok ? 'env.baselineGreen' : 'env.baselineRed', { commit: record.commit.slice(0, 7), at: record.at.slice(0, 16).replace('T', ' ') })}${!record.ok && record.log ? ` · ${record.log}` : ''}`
     : cliT(io.lang ?? 'en', 'env.baselineUnknown')
 
 const keepReason = (reason: string, io: Io): string => {
@@ -53,10 +57,26 @@ function nothingRemoved(kept: GcCandidate[], io: Io): string {
 
 export async function cmdPreflight(argv: string[], io: Io, exec: Exec): Promise<number> {
   const { values } = parseArgs({ args: argv, options: { agent: { type: 'string', short: 'a' }, probe: { type: 'boolean' }, json: { type: 'boolean' } } })
-  const profiles = values.agent ? [await findProfile(io, values.agent)] : (await loadProfiles(io)).filter((p) => p.enabled)
+  const lang = io.lang ?? 'en'
+  let usingDefaults = false
+  let profiles: AgentProfile[]
+  if (values.agent) {
+    profiles = [await findProfile(io, values.agent)]
+  } else {
+    const stored = (await loadProfiles(io)).filter((p) => p.enabled)
+    if (stored.length) profiles = stored
+    else {
+      // A first run (rq1): nothing saved yet, so check the built-in and routed workers instead of
+      // silently reporting nothing — the gap that made an empty HOME's `preflight` print nothing and exit 0.
+      usingDefaults = true
+      const root = await repoRoot(io, exec).catch(() => undefined)
+      profiles = await loadDefaultProfiles(io, root)
+      if (!values.json) io.out(cliT(lang, 'env.preflightDefaults'))
+    }
+  }
   const results: PreflightResult[] = []
   const env = { ...io.env, HOME: homeOf(io) }
-  for (const p of profiles) results.push(await preflightAgent(p, { exec, codexUsedPercent: codexQuotaUsedPercent, lang: io.lang ?? 'en', env, commands: workerCommands(env) }, { probe: values.probe }))
+  for (const p of profiles) results.push(await preflightAgent(p, { exec, codexUsedPercent: codexQuotaUsedPercent, lang, env, commands: workerCommands(env) }, { probe: values.probe }))
   if (values.json) io.out(`${JSON.stringify(results, null, 2)}\n`)
   else {
     for (const r of results) {
@@ -64,7 +84,10 @@ export async function cmdPreflight(argv: string[], io: Io, exec: Exec): Promise<
       for (const c of r.checks) io.out(`   ${c.ok ? '✓' : '✗'} ${c.name}: ${c.detail}${!c.ok && c.fix ? ` → ${c.fix}` : ''}\n`)
     }
   }
-  return results.every((r) => r.ok) ? 0 : 1
+  // Checking every stored (or explicitly named) profile must all pass, as before. Falling back to the
+  // built-in and routed workers only answers "is there anything at all this machine could run" (rq1):
+  // non-zero only when none of them can.
+  return (usingDefaults ? results.some((r) => r.ok) : results.every((r) => r.ok)) ? 0 : 1
 }
 
 export async function cmdWorktree(argv: string[], io: Io, exec: Exec): Promise<number> {
@@ -77,7 +100,12 @@ export async function cmdWorktree(argv: string[], io: Io, exec: Exec): Promise<n
     if (!id) throw new UserError(cliT(io.lang ?? 'en', 'env.usagePrepare'), 2)
     const task = (await loadPlan(root, values.plan)).tasks.find((t) => t.id === id)
     if (!task) throw new UserError(cliT(io.lang ?? 'en', 'env.noTask', { id }))
-    const wt = await prepareWorktree({ repoRoot: root, taskId: id, title: task.title, recipe: (await loadRecipe(root)) ?? EMPTY_RECIPE, scope: values.scope, exec, env: io.env, lang: io.lang })
+    const wt = await prepareWorktree({ repoRoot: root, taskId: id, title: task.title, recipe: (await loadRecipe(root)) ?? EMPTY_RECIPE, scope: values.scope, exec, env: io.env, lang: io.lang }).catch((err: unknown) => {
+      // The failed step names its output file and shows the last lines, like a refused launch (tk1).
+      const step = err instanceof PrepareError ? err.result.steps.at(-1) : undefined
+      if (!(err instanceof PrepareError) || !step?.log) throw err
+      throw new UserError(orchText(io.lang, 'prepare', { error: err.message, ...outputVars({ ...step.log, tail: step.output }) }))
+    })
     await updatePlan(root, (next) => {
       const t = next.tasks.find((x) => x.id === id)
       if (t) t.worktree = { path: wt.path, branch: wt.branch }
@@ -88,7 +116,7 @@ export async function cmdWorktree(argv: string[], io: Io, exec: Exec): Promise<n
       // Only the refresh can fail without throwing: say why the copy stayed behind.
       if (!s.ok && s.output) io.out(`  ${s.output.trim().replaceAll('\n', '\n  ')}\n`)
     }
-    if (wt.baseline) io.out(`${wt.baseline.ok ? '✓' : '✗'} baseline: ${wt.baseline.step}\n`)
+    if (wt.baseline) io.out(`${wt.baseline.ok ? '✓' : '✗'} baseline: ${wt.baseline.step}${wt.baseline.log ? ` · ${wt.baseline.log.path}` : ''}\n`)
     else if (wt.record) io.out(cliT(io.lang ?? 'en', 'env.baselineKept', { command: wt.record.command, commit: wt.record.commit.slice(0, 7), at: wt.record.at.slice(0, 16).replace('T', ' ') }))
     io.out(`${wt.path} · ${wt.branch}${wt.reused ? cliT(io.lang ?? 'en', 'env.reused') : ''}\n`)
     return wt.baseline && !wt.baseline.ok ? 1 : 0

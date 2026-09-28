@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -81,6 +81,20 @@ async function setup(statuses: Record<string, { status: string; terminal: boolea
 }
 
 describe('GET /api/cost', () => {
+  it('keeps bound orchestrator receipts separate and observes late billing without changing worker totals', async () => {
+    const { root, call, q } = await setup()
+    const url = `${A}/cost?${q}`
+    const unbound = (await call(url)).json.value as PlanCost
+    expect(unbound.orchestrator).toMatchObject({ availability: 'unavailable', reason: 'no_bound_session' })
+    await writeFile(join(root, '.orchestration', 'chats.json'), JSON.stringify({ main: { sessionId: 'orchestrator', boundAt: NOW.toISOString(), wake: true } }))
+    const pending = (await call(url)).json.value as PlanCost
+    expect(pending.orchestrator).toMatchObject({ availability: 'pending', coverage: { pending: 1 } })
+    await mkdir(join(root, '.dsh', 'dsh-bill'), { recursive: true })
+    await writeFile(join(root, '.dsh', 'dsh-bill', 'records.jsonl'), JSON.stringify({ sessionId: 'orchestrator', inputTokens: 0, outputTokens: 10, usd: 0.4, priced: true }))
+    const observed = (await call(url)).json.value as PlanCost
+    expect(observed.orchestrator).toMatchObject({ scope: 'session_lifetime', coverage: { observed: 1, pending: 0 }, sessions: [{ calls: 1, metrics: { input: { state: 'known', value: 0 }, cacheWrite: { state: 'unavailable' } }, cash: { state: 'known', value: 0.4 } }] })
+    expect(observed.totals).toEqual(unbound.totals)
+  })
   it('I3 carries a stable decision association and typed verdict', async () => {
     const { root, call, q } = await setup()
     await updatePlan(root, (plan) => { plan.tasks[0]!.notes[0]!.verdict = { kind: 'disputed', mismatch: 'claim_missing' }; plan.tasks[0]!.reviewIntervals = [{ id: 'review:run_dsh-a2', enteredAt: '2026-09-22T12:03:00Z', decidedAt: '2026-09-22T12:05:00Z', runId: 'run_dsh-a2', source: 'human', association: 'exact', decision: 'accepted' }]; return plan })

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { RepoSnapshot, TaskSnapshot } from '../shared/types.js'
 import { relativeTime, t, useLang } from './i18n.js'
 import { lensTasks, type Lens } from './lens.js'
@@ -39,17 +39,22 @@ const rowMeta = (task: TaskSnapshot): string => {
   return `${who} · ${when}`
 }
 
-export function LensChip({ kind, count, repo, active, onLens, onPick }: {
+export function LensChip({ kind, count, repo, active, onLens, onPick, stage, moving }: {
   kind: Lens
   count: number
   repo: RepoSnapshot
   active: boolean
   onLens(lens: Lens | null): void
   onPick(id: string): void
+  /** Render as a process-strip stage (dot + name + count) instead of a header chip. */
+  stage?: boolean
+  /** The stage dot breathes only while its tasks really work. */
+  moving?: boolean
 }) {
   useLang()
   const [open, setOpen] = useState(false)
   const [row, setRow] = useState(0)
+  const [popPos, setPopPos] = useState<{ left: number; top: number } | null>(null)
   const box = useRef<HTMLSpanElement>(null)
   const rows = useMemo(() => lensRows(repo, kind), [repo, kind])
 
@@ -67,6 +72,24 @@ export function LensChip({ kind, count, repo, active, onLens, onPick }: {
     document.addEventListener('mousedown', onPointerDown)
     return () => document.removeEventListener('mousedown', onPointerDown)
   }, [open])
+
+  // The process strip scrolls horizontally on narrow screens, so an absolute list would be clipped:
+  // a stage's list is fixed to the viewport and re-measured when the stage moves under it.
+  useLayoutEffect(() => {
+    if (!open || !stage) return
+    const place = () => {
+      const rect = box.current?.getBoundingClientRect()
+      if (rect) setPopPos({ left: Math.max(8, Math.min(rect.left, window.innerWidth - 296)), top: rect.bottom + 4 })
+    }
+    place()
+    const scroller = box.current?.closest('.orc-process')
+    window.addEventListener('resize', place)
+    scroller?.addEventListener('scroll', place)
+    return () => {
+      window.removeEventListener('resize', place)
+      scroller?.removeEventListener('scroll', place)
+    }
+  }, [open, stage])
 
   if (count === 0) return null
   const pick = (id: string) => {
@@ -98,26 +121,35 @@ export function LensChip({ kind, count, repo, active, onLens, onPick }: {
     } else if (event.key === 'Escape') {
       setOpen(false)
       onLens(null)
-      box.current?.querySelector<HTMLButtonElement>('.orc-chip')?.focus()
+      box.current?.querySelector<HTMLButtonElement>(':scope > button')?.focus()
       event.preventDefault()
       event.stopPropagation()
     }
   }
   return (
-    <span ref={box} className={`orc-lenschip${active ? ' orc-lenschip--on' : ''}`}>
+    <span ref={box} className={`orc-lenschip${stage ? ' orc-lenschip--stage' : ''}${active ? ' orc-lenschip--on' : ''}`}>
       <button
         type="button"
-        className={`orc-chip orc-chip--${TONE[kind]}`}
+        className={stage ? `orc-process__stage orc-process__stage--active${moving ? ' orc-process__stage--moving' : ''}` : `orc-chip orc-chip--${TONE[kind]}`}
         aria-pressed={active}
         aria-expanded={open}
         title={t(TITLE[kind])}
         onClick={clickChip}
       >
-        <span aria-hidden="true">{GLYPH[kind]}</span> <span className="orc-chip__label">{t(COUNT[kind], { count })}</span>
-        <span className="orc-chip__compact" aria-hidden="true">{count}</span>
+        {stage ? (
+          <>
+            <span className="orc-process__dot" aria-hidden="true" />
+            <span>{t(`process.${kind}`)}</span> <strong>{count}</strong>
+          </>
+        ) : (
+          <>
+            <span aria-hidden="true">{GLYPH[kind]}</span> <span className="orc-chip__label">{t(COUNT[kind], { count })}</span>
+            <span className="orc-chip__compact" aria-hidden="true">{count}</span>
+          </>
+        )}
       </button>
       {open ? (
-        <div className="orc-lenspop" role="listbox" aria-label={t(COUNT[kind], { count })} onKeyDown={onListKeys} tabIndex={-1}>
+        <div className={`orc-lenspop${stage ? ' orc-lenspop--fixed' : ''}`} style={stage && popPos ? { left: popPos.left, top: popPos.top } : undefined} role="listbox" aria-label={t(COUNT[kind], { count })} onKeyDown={onListKeys} tabIndex={-1}>
           <ul className="orc-lenspop__list" role="none">
             {rows.map(({ task, alert }, i) => (
               <li key={task.id} role="none">

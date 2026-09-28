@@ -1,4 +1,5 @@
 import { vi } from 'vitest'
+import { forgetAll } from '../../src/client/api.js'
 import type { Attention, OrchestraSnapshot, RepoSnapshot, TaskDetail, TaskSnapshot } from '../../src/shared/types.js'
 
 export const ROOT = '/repo'
@@ -111,7 +112,9 @@ export const textOk = (text: string) => ({ ok: true, status: 200, json: async ()
  * Installs a fetch double. `handler` answers by URL; every call is recorded with its method,
  * headers and parsed JSON body so tests can assert the guarded POST contract.
  */
+/** A new fetch is a new host: what the shared reads remembered from the previous one is forgotten (pf1). */
 export function installFetch(handler: (url: string, call: FetchCall) => unknown): FetchCall[] {
+  forgetAll()
   const calls: FetchCall[] = []
   const fetchMock = vi.fn(async (input: unknown, init?: { method?: string; headers?: Record<string, string>; body?: string }) => {
     const url = String(input)

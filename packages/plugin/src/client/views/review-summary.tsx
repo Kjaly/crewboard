@@ -18,7 +18,12 @@ const BUCKET_COLOR: Record<string, string> = { accepted: 'var(--orc-ok)', runnin
  * The top band: amber only when a decision waits for this person. Failed work gets its own red
  * count and never turns the band calm-green, because failed is not «nothing to do».
  */
-export function NeedsBand({ waiting, failed, unmerged = [], running, onOpenTask, onWaiting, onFailed, onRuns }: {
+export function NeedsBand({ count, summary, scope, waiting, failed, unmerged = [], running, onOpenTask, onWaiting, onFailed, onRuns }: {
+  /** The open plan's waiting number and its reasons, from the one waiting model (at2). */
+  count?: number
+  summary?: string
+  /** «in this plan 7 · all 13» — absent for the example, which counts toward nothing. */
+  scope?: string
   waiting: Task[]
   failed: Task[]
   /** Accepted work not merged into the base branch yet (w1d): «accepted» here does not mean «in the code». */
@@ -34,7 +39,8 @@ export function NeedsBand({ waiting, failed, unmerged = [], running, onOpenTask,
     <section className={`orc-needs orc-needs--${tone}`} aria-labelledby="review-needs">
       <div className="orc-needs__text">
         <p className="orc-eyebrow">{t('review.needs.title')}</p>
-        <h2 id="review-needs">{waiting.length ? t('review.needs.waiting', { count: waiting.length }) : t('review.needs.none')}</h2>
+        <h2 id="review-needs">{count ? summary : waiting.length ? t('review.needs.waiting', { count: waiting.length }) : t('review.needs.none')}</h2>
+        {scope && count ? <p className="orc-needs__scope">{scope}</p> : null}
         {waiting.length ? (
           <p className="orc-needs__tasks">
             {waiting.slice(0, 2).map((task) => (
@@ -66,7 +72,7 @@ export function NeedsBand({ waiting, failed, unmerged = [], running, onOpenTask,
         ) : null}
       </div>
       <div className="orc-needs__act">
-        <strong className="orc-needs__count" aria-hidden="true">{numeric(waiting.length)}</strong>
+        <strong className="orc-needs__count" aria-hidden="true">{numeric(count ?? waiting.length)}</strong>
         <button type="button" className="orc-needs__action" onClick={waiting.length ? onWaiting : onRuns}>
           {waiting.length ? t('review.needs.open') : t('review.needs.runs')} →
         </button>

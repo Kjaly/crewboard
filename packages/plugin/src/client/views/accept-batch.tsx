@@ -11,12 +11,18 @@ import { durationLabel, usePlanCost } from '../insight.js'
 const WIDTH = 340
 const MIN_HEIGHT = 180
 
-/**
- * What one confirmation may cover — the same rule the host applies before it asks: finished work
- * waiting for a human, plus the decisions only a human can close. Anything else is refused server-side.
- */
+/** Everything that waits on the person right now: finished work in review and the open decisions. */
 export function acceptableTasks(repo: RepoSnapshot): TaskSnapshot[] {
   return repo.tasks.filter((t) => waitsForHuman(t))
+}
+
+/**
+ * dc1: what the batch accept may take — the review queue without the decisions. A decision waits for
+ * the person the same as the rest (`acceptableTasks` stays the waiting list), but it is confirmed one
+ * by one: its own button in the task panel, or `decision answer` for an answer already given in chat.
+ */
+export function batchableTasks(repo: RepoSnapshot): TaskSnapshot[] {
+  return acceptableTasks(repo).filter((t) => t.kind !== 'decision')
 }
 
 /** How long the plan has been waiting on this person: the end of the last run, as the time screen counts it. */
@@ -38,7 +44,7 @@ export function waitLabels(cost: PlanCost | null, now: Date): Map<string, string
 /** The trigger lives in a column head; the sheet is a popover, so the board never loses its place. */
 export function AcceptBatch({ repo, onSelect }: { repo: RepoSnapshot; onSelect(id: string): void }) {
   useLang()
-  const tasks = useMemo(() => acceptableTasks(repo), [repo])
+  const tasks = useMemo(() => batchableTasks(repo), [repo])
   const anchor = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
 
@@ -167,6 +173,7 @@ function Sheet({
     const verdict = verdicts[task.id]
     if (verdict?.kind === 'negative') return `${t('verdict.negative')} · ${verdict.why ? t(`verdict.why.${verdict.why}`) : t('verdict.negative')}`
     if (verdict?.kind === 'disputed') return `${t('verdict.disputed')} · ${verdict.mismatch ? t(`verdict.mismatch.${verdict.mismatch}`) : t('verdict.disputed')}`
+    if (verdict?.kind === 'result' && verdict.caution) return `${t('verdict.result')} · ${t(`verdict.caution.${verdict.caution}`)}`
     if (!verdict && task.kind !== 'decision') return t('queue.batch.verdictUnknown')
     return null
   }

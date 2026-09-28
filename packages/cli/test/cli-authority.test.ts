@@ -80,10 +80,10 @@ describe('orch run -a under the preset', () => {
 
   it('tells agents in the help not to pass -a or --worker', async () => {
     const h = makeHarness({ cwd: root, env })
-    await run(['--help'], h.io)
+    await run(['help', 'all'], h.io)
     expect(h.out()).toContain('agents, do not pass it')
     const ru = makeHarness({ cwd: root, env })
-    await run(['--lang', 'ru', '--help'], ru.io)
+    await run(['--lang', 'ru', 'help', 'all'], ru.io)
     expect(ru.out()).toContain('агентам не передавать')
   })
 })

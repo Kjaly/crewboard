@@ -68,7 +68,7 @@ it('registers the prompt section, draft tool and routes, and disposes them', asy
     else process.env.HOME = previousHome
   }
   expect(sections).toEqual(['crewboard'])
-  expect(tools).toHaveLength(13)
+  expect(tools).toHaveLength(17)
   // Registration order is longest-path-first (see actionRoutes); the set of routes is what is pinned here.
   expect(routes.map((r) => r.path).sort()).toEqual([
     '/crewboard/api/state',
@@ -81,6 +81,7 @@ it('registers the prompt section, draft tool and routes, and disposes them', asy
     '/crewboard/api/repo-add',
     '/crewboard/api/repo-remove',
     '/crewboard/api/orchestrator-check',
+    '/crewboard/api/default-base',
     '/crewboard/api/side-order',
     '/crewboard/api/plan-preset',
     '/crewboard/api/onboarding-workers',
@@ -88,6 +89,7 @@ it('registers the prompt section, draft tool and routes, and disposes them', asy
     '/crewboard/api/recipe-save',
     '/crewboard/api/spec-files',
     '/crewboard/api/plan-draft-from',
+    '/crewboard/api/draft-worker',
     '/crewboard/api/spec-upload',
     '/crewboard/api/plan-draft-jobs',
     '/crewboard/api/plan-draft-job',
@@ -96,6 +98,7 @@ it('registers the prompt section, draft tool and routes, and disposes them', asy
     '/crewboard/api/example-create',
     '/crewboard/api/example-remove',
     '/crewboard/api/task',
+    '/crewboard/api/task-add',
     '/crewboard/api/diff',
     '/crewboard/api/file',
     '/crewboard/api/example-file',
@@ -107,19 +110,26 @@ it('registers the prompt section, draft tool and routes, and disposes them', asy
     '/crewboard/api/worktrees',
     '/crewboard/api/worktree-gc',
     '/crewboard/api/worktree-policy',
+    '/crewboard/api/worker-add-models',
+    '/crewboard/api/worker-adopt',
     '/crewboard/api/worker-check',
     '/crewboard/api/worker-save',
     '/crewboard/api/worker-delete',
+    '/crewboard/api/worker-forget',
+    '/crewboard/api/worker-models',
     '/crewboard/api/task-upsert',
     '/crewboard/api/task-status',
     '/crewboard/api/worktree-open',
     '/crewboard/api/run',
+    '/crewboard/api/run-checks',
     '/crewboard/api/relaunch',
     '/crewboard/api/continue',
     '/crewboard/api/steer',
     '/crewboard/api/stop',
     '/crewboard/api/accept',
     '/crewboard/api/accept-batch',
+    '/crewboard/api/merge',
+    '/crewboard/api/mark-merged',
     '/crewboard/api/reject',
     '/crewboard/api/drop',
     '/crewboard/api/pos',

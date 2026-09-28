@@ -1,7 +1,7 @@
-import { t } from './i18n.js'
+import { shellLabel, subscribeLang } from './i18n.js'
 import { PANEL_ID } from '../shared/types.js'
 import type { ClientContext, SlotsFace } from './dsh.js'
-import { reviewBadgeLabel, startReviewCenter } from './notify.js'
+import { startReviewCenter } from './notify.js'
 import { OrchestraIcon, OrchestraPanel } from './panel.js'
 import { registerRightPaneTab } from './right-pane.js'
 import { bindWorkspace } from './layout.js'
@@ -36,10 +36,32 @@ export const inject = ['slots']
 /** Mount problems must never throw: the dsh web shell fails the whole boot when a plugin apply throws. */
 export function apply(ctx: ClientContext): void {
   bindWorkspace(ctx)
-  // Slots register synchronously: the shell may read them once at boot. Text fills in when the
-  // dictionary arrives (t() is blank until then and useLang re-renders).
+  // Slots register synchronously: the shell may read them once at boot. A React body (OrchestraIcon,
+  // OrchestraSettings) fills in on its own once the dictionary arrives — useLang re-renders it. A
+  // `label`/`title` dsh calls itself, outside React, never returns blank (shellLabel, lb1) and is
+  // re-registered once the dictionary lands or the language changes (registerRelabeled).
   mountOrchestra(ctx)
   bindLocale(ctx)
+}
+
+/**
+ * Registers a list-slot entry whose `label` dsh calls at its own render points — an entries change,
+ * or its own locale switching (lb1) — never because our lazy dictionary landed. `settings.section`'s
+ * own contract names the fix: re-registering bumps dsh's re-render trigger, so the freshest text (once
+ * `shellLabel` can read a landed dictionary through `t()`) reaches the row without dsh subscribing to
+ * our locale state itself. `label` already never returns blank (`shellLabel`); this only asks dsh to
+ * read it again sooner than its own next render would.
+ */
+function registerRelabeled(slots: SlotsFace, options: Record<string, unknown>, component: unknown): () => void {
+  let dispose = slots.register(options, component)
+  const unsubscribe = subscribeLang(() => {
+    dispose()
+    dispose = slots.register(options, component)
+  })
+  return () => {
+    unsubscribe()
+    dispose()
+  }
 }
 
 function mountOrchestra(ctx: ClientContext): void {
@@ -50,11 +72,11 @@ function mountOrchestra(ctx: ClientContext): void {
   } catch {
     /* notifications are a courtesy — a failure here must not take the panel down with it */
   }
-  slots.inject('sidebar.panellist', () => slots.register({ name: 'sidebar.panellist', id: PANEL_ID, order: 100, label: () => reviewBadgeLabel() }, OrchestraIcon))
+  slots.inject('sidebar.panellist', () => registerRelabeled(slots, { name: 'sidebar.panellist', id: PANEL_ID, order: 100, label: () => shellLabel('notify.badge') }, OrchestraIcon))
   slots.inject('main', () => slots.register({ name: 'main', key: PANEL_ID }, OrchestraPanel))
   orchestraStore.startRouting()
   slots.inject('settings.section', () =>
-    slots.register({ name: 'settings.section', id: PANEL_ID, order: 40, label: () => t('settings.section') }, OrchestraSettings),
+    registerRelabeled(slots, { name: 'settings.section', id: PANEL_ID, order: 40, label: () => shellLabel('settings.section') }, OrchestraSettings),
   )
   // Optional right-pane tab (task 2k/3 draws the panel). Absent registry = nothing registered, never a throw.
   registerRightPaneTab(ctx, slots)

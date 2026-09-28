@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api } from './api.js'
+import { api, type DraftWorkerInfo } from './api.js'
 import { t } from './i18n.js'
 
 /** Mirrors core's SPEC_EXTENSIONS / MAX_SPEC_BYTES (the host checks again): the draft pipeline reads text only. */
@@ -7,6 +7,9 @@ export const SPEC_TYPES = ['.md', '.markdown', '.txt', '.rst'] as const
 export const MAX_SPEC_BYTES = 256 * 1024
 export type SpecMode = 'file' | 'paste' | 'repo'
 type Picked = { name: string; text: string; size: number }
+
+/** The first line of a skipped worker's reason, without the preflight's `✗` mark. */
+const reasonLine = (reason: string) => reason.replace(/^✗ /gm, '').split('\n').map((line) => line.trim()).find(Boolean) ?? ''
 
 const typeOf = (name: string) => { const dot = name.lastIndexOf('.'); return dot > 0 ? name.slice(dot).toLowerCase() : '' }
 const kib = (bytes: number) => `${Math.max(1, Math.round(bytes / 1024))} KB`
@@ -38,7 +41,15 @@ export function SpecPicker({ root, initial, onDraft, onClose }: { root: string; 
   const [dragging, setDragging] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
+  const [worker, setWorker] = useState<DraftWorkerInfo | null>(null)
+  const [agent, setAgent] = useState('auto')
   const input = useRef<HTMLInputElement>(null)
+  // Who writes the draft is known before it starts (dr2): the same preflight and preset order as a run.
+  useEffect(() => {
+    let live = true
+    void api.draftWorker(root).then((r) => { if (live && r.ok && Array.isArray(r.value?.options)) setWorker(r.value) }).catch(() => {})
+    return () => { live = false }
+  }, [root])
   const pick = async (file: File | undefined) => {
     if (!file) return
     setError('')
@@ -61,12 +72,14 @@ export function SpecPicker({ root, initial, onDraft, onClose }: { root: string; 
   }, [onClose, pending])
   const matches = (specs ?? []).filter((file) => file.toLowerCase().includes(query.trim().toLowerCase()))
   const pastedBytes = new Blob([pasted]).size
-  const ready = !pending && (mode === 'file' ? !!picked : mode === 'paste' ? !!pasted.trim() && pastedBytes <= MAX_SPEC_BYTES : !!spec && matches.includes(spec))
+  const noWorker = agent === 'auto' && worker !== null && worker.agent === null
+  const ready = !pending && !noWorker && (mode === 'file' ? !!picked : mode === 'paste' ? !!pasted.trim() && pastedBytes <= MAX_SPEC_BYTES : !!spec && matches.includes(spec))
   const submit = async () => {
     if (!ready) return
     setPending(true); setError('')
     try {
-      const result = mode === 'repo' ? await api.draftFrom(root, spec) : await api.specUpload(root, mode === 'file' && picked ? { name: picked.name, text: picked.text } : { text: pasted })
+      const chosen = agent === 'auto' ? undefined : agent
+      const result = mode === 'repo' ? await api.draftFrom(root, spec, chosen) : await api.specUpload(root, mode === 'file' && picked ? { name: picked.name, text: picked.text } : { text: pasted }, chosen)
       if (result.ok) onDraft(result.value.job.id)
       else setError(errorText(result))
     } catch { setError(t('welcome.error')) }
@@ -100,6 +113,15 @@ export function SpecPicker({ root, initial, onDraft, onClose }: { root: string; 
         }} placeholder={t('welcome.specSearchPlaceholder')} /></label>
         {matches.length ? <select aria-label={t('welcome.pickSpec')} size={Math.min(8, Math.max(3, matches.length))} value={spec} onChange={(event) => setSpec(event.target.value)}>{matches.map((file) => <option key={file} value={file}>{file}</option>)}</select> : <p className="orc-welcome__hint">{t('welcome.specNoMatch')}</p>}
       </> : <p>{t('welcome.noSpecs')}</p> : null}
+      {worker ? <div className="orc-spec__worker">
+        <label>{t('welcome.draftWorker')} <select value={agent} onChange={(event) => setAgent(event.target.value)}>
+          <option value="auto">{worker.agent ? t('welcome.draftWorkerAuto', { worker: worker.agent }) : t('welcome.draftWorkerAutoNone')}</option>
+          {worker.options.map((id) => <option key={id} value={id}>{id}</option>)}
+        </select></label>
+        {agent === 'auto' ? worker.skipped.map((skipped) => <p key={skipped.id} className="orc-welcome__hint">{t('welcome.draftWorkerSkipped', { worker: skipped.id, reason: reasonLine(skipped.reason) })}</p>) : null}
+        {noWorker ? <p className="orc-error">{worker.message}</p> : null}
+        <p className="orc-welcome__hint">{t('welcome.draftWorkerReadOnly')}</p>
+      </div> : null}
       {error ? <p role="alert" className="orc-error">{error}</p> : null}
       <div><button type="submit" className="orc-spec__submit" disabled={!ready}>{pending ? t('welcome.specSaving') : t('welcome.draft')}</button><button type="button" onClick={onClose}>{t('welcome.cancel')}</button></div>
     </form>

@@ -17,7 +17,8 @@ it('carries the moment of the last human acceptance, so a decision can say when 
     p.tasks.push(newTask({ id: 'd', title: 'D', kind: 'decision' }), newTask({ id: 'r', title: 'R' }))
     return p
   })
-  await acceptTasks(root, ['d'], now)
+  // dc1: a decision is confirmed by itself — batch acceptance refuses it.
+  await acceptTask(root, 'd', now)
   const backends: Backends = { forAgent: async () => Promise.reject(new Error('none')) }
   const s = await buildRepoSnapshot(root, backends, now)
   expect(s.tasks.find((t) => t.id === 'd')).toMatchObject({ status: 'accepted', acceptedAt: '2026-09-22T16:11:05.712Z' })

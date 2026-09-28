@@ -16,11 +16,12 @@ import { useAction } from '../../actions.js'
 import { api } from '../../api.js'
 import { t, useLang } from '../../i18n.js'
 import { decideFolds, foldGraph, readManualFolds, taskCount, writeManualFold } from '../../fold.js'
-import { laneAt, liveLaneOrder } from '../../lane-tree.js'
+import { laneAt, laneTree, liveLaneOrder } from '../../lane-tree.js'
 import { lensIds, lensTasks } from '../../lens.js'
 import { identityLabel, runFact, taskIdentity } from '../../provider.js'
 import { taskTone } from '../../styles.js'
 import { isChecking } from '../../../../../core/src/plan/graph.js'
+import { checkMark, checkText, verdictMark, verdictText, verdictTone } from '../../review-signals.js'
 import { isHandPicked } from '../../workers.js'
 import { acceptableTasks } from '../accept-batch.js'
 import type { ViewProps } from '../types.js'
@@ -28,8 +29,8 @@ import { type Camera, type Pose, LENS_RESPONSE, createCamera, detailLevel } from
 import { alertIds, chainOf } from './chain.js'
 import { placeLaneLabels } from './lane-labels.js'
 import { elkReady, loadElk } from './elk.js'
-import { NODE_H, NODE_W, type LaneBand, type NodePos, contentBox, laneBands, laneOf, laneTitle, layoutFoldStack, layoutGraph } from './layout.js'
-import { MAP_H, MAP_W, type MapNode, Minimap, mapProjection } from './minimap.js'
+import { NODE_H, NODE_W, type LaneBand, type NodePos, contentBox, laneBands, laneOf, laneOrigins, laneTitle, layoutFoldStack, layoutGraph } from './layout.js'
+import { MAP_H, MAP_W, type MapBand, type MapNode, Minimap, mapProjection } from './minimap.js'
 import { appear, edgePath, flash, leave, lightEdge } from './motion.js'
 import { GraphSearch } from './search.js'
 import { type Spring, settled, snap, spring, springStep } from './spring.js'
@@ -194,6 +195,46 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
     setFanLane(null)
   }
   const byId = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks])
+  // Going to a task — Needs you, the tree, search, a link, the task menu, a notification — never
+  // leaves it inside a folded lane: the lane unfolds, remembered like a manual unfold, and the
+  // camera centres the task once it is laid out. A click on a node the reader already sees only
+  // selects it (`ownPick`); folding the lane again by hand keeps the selection, since only a new
+  // selection reveals.
+  const ownPick = useRef<string | null | undefined>(undefined)
+  const pickHere = (id: string | null) => { ownPick.current = id; onSelect(id) }
+  const revealing = useRef<string | null>(null)
+  const revealTask = (id: string, centre: boolean): boolean => {
+    const task = byId.get(id)
+    if (!task) return false
+    const lane = laneOf(task)
+    const hidden = decision.folded.has(lane) && !decision.guests.get(lane)?.includes(id)
+    if (hidden) {
+      writeManualFold(shown, lane, false)
+      setManual((old) => ({ ...old, [lane]: false }))
+    }
+    if (centre || hidden) revealing.current = id
+    return true
+  }
+  // A lane picked in the minimap (mm1): unfolds it, like a task reveal, then frames its band once
+  // the next layout holds it.
+  const revealingLane = useRef<string | null>(null)
+  const revealLane = (laneName: string) => {
+    if (decision.folded.has(laneName)) {
+      writeManualFold(shown, laneName, false)
+      setManual((old) => ({ ...old, [laneName]: false }))
+    }
+    revealingLane.current = laneName
+  }
+  const seenSelection = useRef<string | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Only a new selection reveals; a later fold by hand must not undo itself.
+  useEffect(() => {
+    if (selectedId === seenSelection.current) return
+    const own = ownPick.current === selectedId
+    ownPick.current = undefined
+    if (selectedId === null) { seenSelection.current = null; revealing.current = null; return }
+    // A task the snapshot does not hold yet (a link into a plan still loading) is revealed once it comes.
+    if (revealTask(selectedId, !own)) seenSelection.current = selectedId
+  }, [selectedId, byId])
   const alerts = useMemo(() => alertIds(shown.attention), [shown.attention])
   const attentionOf = useMemo(() => {
     const map = new Map<string, Attention>()
@@ -316,6 +357,8 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
           arrived.current = true
           // A plan opened on a lane goes to that lane, not to the live work.
           if (laneRef.current && laneServed.current !== laneRef.current.seq) return
+          // A plan opened on a task (a link, a remembered selection) goes to that task.
+          if (revealing.current) return
           const live = liveTask(tasksRef.current)
           const spot = live ? next.get(live) : undefined
           requestAnimationFrame(() => (spot ? camera.centerOn(spot.x + NODE_W / 2, spot.y + NODE_H / 2, reducedRef.current) : camera.fit(reducedRef.current)))
@@ -353,6 +396,29 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
     const target = { minX: Math.min(...spots.map((p) => p.x)), maxX: Math.max(...spots.map((p) => p.x)) + NODE_W, minY: band.top, maxY: band.top + band.height }
     requestAnimationFrame(() => camera.fitBox(target, reducedRef.current))
   }, [lane, nodes, bands, camera])
+
+  // The revealed task is centred once the layout holds it — after an unfold, that is the next layout.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: The selection makes a reveal served in the same commit it was asked for.
+  useEffect(() => {
+    const id = revealing.current
+    const pos = id ? nodes.get(id) : undefined
+    if (!id || !pos) return
+    revealing.current = null
+    requestAnimationFrame(() => camera.centerOn(pos.x + NODE_W / 2, pos.y + NODE_H / 2, reducedRef.current))
+  }, [nodes, camera, selectedId])
+
+  // A lane revealed from the minimap (mm1) frames its band the same way `lane` navigation does, once
+  // an unfold (if any) has had its layout pass.
+  useEffect(() => {
+    const laneName = revealingLane.current
+    if (laneName === null) return
+    const band = bands.find((item) => item.lane === laneName || item.lanes?.includes(laneName))
+    const spots = [...nodes.values()].filter((pos) => pos.lane === laneName)
+    if (!band || spots.length === 0) return
+    revealingLane.current = null
+    const target = { minX: Math.min(...spots.map((p) => p.x)), maxX: Math.max(...spots.map((p) => p.x)) + NODE_W, minY: band.top, maxY: band.top + band.height }
+    requestAnimationFrame(() => camera.fitBox(target, reducedRef.current))
+  }, [nodes, bands, camera])
 
   // The lane in view is written from the frame loop, only when it changes.
   const bandsRef = useRef(bands)
@@ -430,8 +496,15 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
   }, [lens, lensOn, matchKey, matchOrder, camera, nodes])
 
   // Walking the matches: `n` selected the next one — the camera centres it at the current zoom.
+  // A step unfolds its task's lane once — a lane folded again by hand afterwards stays folded.
+  const walkRevealed = useRef<number | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Only a new step of the walk unfolds a lane.
   useEffect(() => {
     if (!walk) return
+    if (walkRevealed.current !== walk.seq && revealTask(walk.id, false)) {
+      walkRevealed.current = walk.seq
+      if (revealing.current === walk.id) return
+    }
     const pos = targets.current.get(walk.id) ?? (byId.get(walk.id) && targets.current.get(`lane:${laneOf(byId.get(walk.id)!)}`))
     if (pos) camera.centerOn(pos.x + NODE_W / 2, pos.y + NODE_H / 2, reducedRef.current, LENS_RESPONSE)
     // seq ticks on every step, so walking back to the same match still moves the camera.
@@ -695,7 +768,7 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
   const onCanvasClick = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (camera.dragging || suppressClick.current) return
     if ((event.target as HTMLElement).closest('.orc-gnode, .orc-gtools, .orc-gfan, button, a, input, select')) return
-    onSelect(null)
+    pickHere(null)
     const active = document.activeElement as HTMLElement | null
     if (active && canvasRef.current?.contains(active)) active.blur()
   }
@@ -732,6 +805,14 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
   /* ---------------------------------------------------------- node dragging = pinning */
 
   const manualPos = (id: string): ManualPos => overrideRef.current.has(id) ? overrideRef.current.get(id) ?? null : byId.get(id)?.pos ?? null
+  // A pin's `y` is stored relative to its lane's own top (mm1) — this is that top, right now, in
+  // whichever layout is active. Used both to write a drop (absolute → relative) and to read one back
+  // for the fast local render below (relative → absolute), so the two never disagree mid-drag.
+  const laneOriginNow = (laneName: string): number =>
+    (decision.folded.size > 0
+      ? layoutFoldStack(tasksRef.current, decision.folded, laneSequenceRef.current).origins
+      : laneOrigins(tasksRef.current, laneSequenceRef.current)
+    ).get(laneName) ?? 0
   const applyMoves = (moves: Move[], record: boolean, tidy?: string | true) => {
     if (!moves.length) return
     if (record) {
@@ -762,7 +843,8 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
       } else {
         for (const move of moves) {
           const task = byId.get(move.id)
-          const pos = move.after ? { ...move.after, lane: task ? laneOf(task) : '' } : computed.get(move.id)
+          const lane = task ? laneOf(task) : ''
+          const pos = move.after ? { x: move.after.x, y: laneOriginNow(lane) + move.after.y, lane } : computed.get(move.id)
           if (pos) next.set(move.id, pos)
         }
       }
@@ -839,8 +921,9 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
     // The drop is free: a node stays where the hand left it, and the lane band grows around it
     // (`laneBands` derives the band from its nodes). Confining the drop to the band read as the
     // graph fighting the hand; order comes back from tidy controls, not from
-    // a rubber band that undoes the gesture.
-    applyMoves([{ id: d.id, before: manualPos(d.id), after: { x: Math.round(next.x), y: Math.round(next.y) } }], true)
+    // a rubber band that undoes the gesture. The stored `y` is relative to the lane's own top (mm1),
+    // so folding or reordering a lane above this one moves the card with it, not into it.
+    applyMoves([{ id: d.id, before: manualPos(d.id), after: { x: Math.round(next.x), y: Math.round(next.y) - laneOriginNow(next.lane) } }], true)
   }
 
   const onNodePointerDown = (event: ReactPointerEvent<HTMLElement>, id: string) => {
@@ -871,8 +954,9 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
 
   /* ---------------------------------------------------------- keyboard */
 
-  const focusNode = (id: string) => {
-    onSelect(id)
+  const focusNode = (id: string, own = false) => {
+    if (own) pickHere(id)
+    else onSelect(id)
     requestAnimationFrame(() => (els.current.get(id)?.querySelector('.orc-gnode__body') as HTMLElement | null)?.focus())
   }
 
@@ -888,12 +972,12 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
     if (!selectedId) return
     if (direction === 'right') {
       const next = tasks.find((t) => t.deps.includes(selectedId))
-      if (next) focusNode(next.id)
+      if (next) focusNode(next.id, true)
       return
     }
     if (direction === 'left') {
       const dep = byId.get(selectedId)?.deps.find((d) => byId.has(d))
-      if (dep) focusNode(dep)
+      if (dep) focusNode(dep, true)
       return
     }
     const here = targets.current.get(selectedId)
@@ -904,7 +988,7 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
       .map(([id]) => id)
     const index = column.indexOf(selectedId)
     const next = column[index + (direction === 'down' ? 1 : -1)]
-    if (next) focusNode(next)
+    if (next) focusNode(next, true)
   }
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -941,7 +1025,7 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
     }
     if ((key === 's' || key === 'S' || key === '\u044b' || key === '\u042b') && task?.status === 'running') {
       event.preventDefault()
-      onSelect(task.id)
+      pickHere(task.id)
       // The steer field lives in the task panel (Task 3); the graph only hands focus over to it.
       requestAnimationFrame(() => {
         const button = [...(document.querySelectorAll<HTMLButtonElement>('.orc-panel button') ?? [])].find((b) =>
@@ -978,6 +1062,30 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
         return pos ? [{ id: node.id, pos, color: node.task ? taskTone(node.task).color : 'var(--orc-ok)', on: node.id === selectedId, dim: lensOn && !matches }] : []
       }),
     [graph.nodes, nodes, selectedId, lensOn, visibleMatchIds],
+  )
+  // History (finished lanes) and any folded lane dim in the minimap; the rest — the live ones — get a
+  // name. The lane holding the selected task stands out from either, even a dimmed one, so a reader
+  // can still find and jump to it (mm1).
+  const historyLanes = useMemo(() => new Set(laneTree(shown).history.map((row) => row.lane)), [shown])
+  const selectedTaskLane = selectedId ? byId.get(selectedId) : undefined
+  const selectedLane = selectedTaskLane ? laneOf(selectedTaskLane) : null
+  const mapBands = useMemo<MapBand[]>(
+    () =>
+      bands.map((band) => {
+        const names = band.lanes ?? [band.lane]
+        const finished = names.every((name) => historyLanes.has(name))
+        const selected = selectedLane !== null && names.includes(selectedLane)
+        return {
+          lane: band.lane,
+          lanes: band.lanes,
+          top: band.top,
+          height: band.height,
+          label: !finished || selected ? laneTitle(band.lane) || t('graph.unnamedLane') : null,
+          dim: (finished || !!band.folded) && !selected,
+          selected,
+        }
+      }),
+    [bands, historyLanes, selectedLane],
   )
   const now = new Date()
 
@@ -1097,6 +1205,10 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
             const attention = attentionOf.get(task.id)
             const alert = attention?.severity === 'alert'
             const waiting = reviewIds.has(task.id)
+            const checkInProgress = task.status === 'in_review' && isChecking(task.check)
+            // Finished work says what it is and where the check stands, on the card (vc1, B27).
+            const signals = [task.verdict ? verdictText(task.verdict) : '', task.reviewCheck ? checkText(task.reviewCheck) : ''].filter(Boolean).join(' · ')
+            const described = `${tone.label} · ${identityLabel(identity)} · ${fact}${outcome && outcome !== tone.label ? ` · ${outcome}` : ''}${signals ? ` · ${signals}` : ''}`
             return (
               <div
                 key={task.id}
@@ -1116,8 +1228,8 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
                     task.kind === 'decision' || task.kind === 'root' ? ' orc-gnode__body--decision' : ''
                   }`}
                   aria-pressed={selectedId === task.id}
-                  aria-label={`${task.title} · ${tone.label} · ${identityLabel(identity)} · ${fact}${outcome && outcome !== tone.label ? ` · ${outcome}` : ''}`}
-                  title={far ? undefined : `${tone.label} · ${identityLabel(identity)} · ${fact}${outcome && outcome !== tone.label ? ` · ${outcome}` : ''}`}
+                  aria-label={`${task.title} · ${described}`}
+                  title={far ? undefined : described}
                   aria-describedby={far && hovered === task.id ? 'orc-gtip' : undefined}
                   tabIndex={selectedId === task.id || (!selectedId && tasks[0]?.id === task.id) ? 0 : -1}
                   onPointerDown={(event) => onNodePointerDown(event, task.id)}
@@ -1131,7 +1243,7 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
                     }
                     // A block in the far view is too small to read: the click flies to the task first.
                     if (farRef.current) camera.zoomTo({ minX: pos.x, minY: pos.y, maxX: pos.x + NODE_W, maxY: pos.y + NODE_H }, reducedRef.current)
-                    onSelect(task.id)
+                    pickHere(task.id)
                   }}
                   onDoubleClick={() => (task.pos ? unpin(task.id) : focusNeighbours(task.id))}
                 >
@@ -1145,7 +1257,9 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
                   <span className="orc-gnode__meta">
                     {task.kind === 'root' ? null : <VendorMark identity={identity} />}
                     <span className="orc-gnode__model">{identityLabel(identity)}</span>
-                    <span className="orc-gnode__fact">{outcome ?? ((task.status === 'in_review' && isChecking(task.check)) || task.byOrchestrator || task.preparing ? tone.label : fact)}</span>
+                    {!outcome && task.verdict ? <span className={`orc-gnode__fact orc-gnode__verdict orc-verdict--${verdictTone(task.verdict)}`}><span className="orc-verdict__mark" aria-hidden="true">{verdictMark(task.verdict)}</span>{t(`verdict.${task.verdict.kind}`)}</span>
+                      : <span className="orc-gnode__fact">{outcome ?? (task.byOrchestrator || task.preparing ? tone.label : fact)}</span>}
+                    {!checkInProgress && task.reviewCheck ? <span className={`orc-gnode__check orc-signal--check-${task.reviewCheck.state}`} aria-hidden="true" title={checkText(task.reviewCheck)}>{checkMark(task.reviewCheck)}</span> : null}
                     {isHandPicked(task) ? <span className="orc-gnode__hand" role="img" aria-label={t('graph.handPicked')} title={t('graph.handPickedTitle')}>⚑</span> : null}
                   </span>
                   {task.pos ? (
@@ -1160,6 +1274,7 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
                   ) : null}
                   {negativePredecessor ? <span className="orc-gnode__dep" role="img" aria-label={t('graph.negativePredecessor')} title={t('graph.negativePredecessorTitle')}>!</span> : null}
                 </button>
+                {checkInProgress ? <span className={`orc-gnode__checkstate orc-gnode__checkstate--${task.check}`} aria-hidden="true"><span className="orc-gnode__checkdot" />{t(task.check === 'checking' ? 'graph.check.checking' : 'graph.check.pending')}</span> : null}
                 {waiting ? (
                   // The badge does what it says: the same accept call as the panel, confirmed in the
                   // macOS window. Selecting the task first keeps the panel in context behind it.
@@ -1170,7 +1285,7 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
                     title={t('graph.acceptHint')}
                     disabled={accept.pending}
                     onClick={() => {
-                      onSelect(task.id)
+                      pickHere(task.id)
                       void accept.call(() => api.accept(repo.root, task.id))
                     }}
                   >
@@ -1200,7 +1315,7 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
 
         {searching ? <GraphSearch tasks={tasks} onPick={pickFound} onClose={() => setSearching(false)} /> : null}
 
-        <Minimap box={box} nodes={mapNodes} frameRef={mapFrameRef} onJump={(world, dragging) => camera.centerOn(world.x, world.y, dragging)} />
+        <Minimap box={box} nodes={mapNodes} bands={mapBands} frameRef={mapFrameRef} onJump={(world, dragging) => camera.centerOn(world.x, world.y, dragging)} onLaneClick={revealLane} />
 
         <div className="orc-gtools">
           <button type="button" className="orc-chip" onClick={() => tidy()} disabled={!tasks.some((task) => manualPos(task.id))}>{t('graph.tidyAll')}</button>

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
-import { loadProfileStore, loadSidebarOrder, profileStorePath, setSidebarOrder } from '../src/routing/profile-store.js'
+import { importPorchConfig, loadProfileStore, loadSidebarOrder, profileStorePath, setSidebarOrder } from '../src/routing/profile-store.js'
 import { resolveRouting } from '../src/routing/presets.js'
 import { removeWorker } from '../src/routing/delete.js'
 import { registryPath } from '../src/routing/registry.js'
@@ -84,6 +84,39 @@ it('saves, merges and resets the manual sidebar order without touching repo flag
   await setSidebarOrder(env, home, null)
   expect(await loadSidebarOrder(env, home)).toEqual({})
   expect(JSON.parse(await readFile(profileStorePath(env, home), 'utf8'))).not.toHaveProperty('order')
+})
+
+// rq1: the automatic migration only ever reads this HOME's own default location.
+it('ignores PORCH_CONFIG for the automatic migration: a stray env var imports nothing', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'orch-profile-no-porch-'))
+  const stray = join(home, 'elsewhere', 'config.json')
+  await mkdir(join(home, 'elsewhere'), { recursive: true })
+  await writeFile(stray, JSON.stringify({ agents: { codex: { backend: 'codex-cli', model: 'gpt-6-astra', label: 'Codex' } } }))
+  const env = { HOME: home, PORCH_CONFIG: stray }
+  expect(olderConfigPath(env, home)).toBe(join(home, '.config', 'porch', 'config.json'))
+  const store = await loadProfileStore(env, home)
+  expect(store.profiles).toEqual({})
+})
+
+it('workers import-porch: imports on request, tags origin porch-import, and never overwrites a saved id', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'orch-profile-import-'))
+  const source = join(home, 'my-old-tool.json')
+  await writeFile(source, JSON.stringify({ agents: {
+    codex: { backend: 'codex-cli', model: 'gpt-6-astra', label: 'Old Codex', enabled: true },
+    devin: { backend: 'devin-cli', model: 'swe-2-high', label: 'Old Devin', enabled: true },
+  } }))
+  const env = { HOME: home }
+  // A profile already saved for `devin` keeps the person's own settings; only `codex` is new.
+  await loadProfileStore(env, home)
+  const { updateProfileStore } = await import('../src/routing/profile-store.js')
+  await updateProfileStore(env, home, (store) => ({ ...store, profiles: { ...store.profiles, devin: { model: 'swe-2-high', transport: 'devin-acp', displayName: 'My Devin', enabled: true } } }))
+
+  const { imported } = await importPorchConfig(env, home, source)
+  expect(imported).toEqual(['codex'])
+  const store = await loadProfileStore(env, home)
+  expect(store.profiles.codex).toMatchObject({ transport: 'codex-cli', origin: 'porch-import' })
+  expect(store.profiles.devin).toMatchObject({ displayName: 'My Devin' })
+  expect(store.profiles.devin).not.toHaveProperty('origin')
 })
 
 it('serializes concurrent routing writes without losing unrelated changes', async () => {

@@ -4,11 +4,13 @@ import { dirname, join } from 'node:path'
 import { TASK_CLASSES, type TaskClass } from '../plan/schema.js'
 import { loadPlan, updatePlan, PLAN_ID } from '../plan/store.js'
 import { planIds } from '../plan/plans.js'
+import { isRunnableAgent } from '../backend/types.js'
 import { canonicalWorkerId, workerAliases } from './identity.js'
 import { DEFAULT_WORKERS, registryPath, type WorkerRegistry } from './registry.js'
 import { loadRouting, profileStorePath } from './routing.js'
-import { loadProfileStore } from './profile-store.js'
+import { loadProfileStore, updateProfileStore } from './profile-store.js'
 import { crewboardEnv } from '../env.js'
+import { isDshAgent } from '../backend/types.js'
 
 export type WorkerPreset = { id: string; label: string; routing: Record<TaskClass, string[]>; builtin?: true }
 export type RoutingSource = 'plan' | 'repository' | 'builtin'
@@ -19,9 +21,17 @@ export type EffectiveRouting = {
   dropped: { id: string; reason: 'disabled' | 'unknown' }[]
   /** Machine prohibition map, for explicit worker requests outside ordered lists. */
   disabled: Record<string, string>
+  /**
+   * The built-in preset only (nb1): every other known worker, tried after the class order. The preset runs
+   * the first one that passes its checks, so it uses the workers this machine actually has. Empty for a
+   * saved preset: that list is the owner's, exactly.
+   */
+  fallback?: string[]
 }
 
 export const BUILTIN_PRESET_ID = 'all-workers'
+/** The built-in preset's stored name; screens and the CLI name it in the reader's language. */
+export const BUILTIN_PRESET_LABEL = 'Default: workers that pass checks'
 export const presetsPath = (env: NodeJS.ProcessEnv = process.env, home = env.HOME ?? homedir()) => crewboardEnv(env, 'PRESETS_FILE') ?? join(home, '.config', 'crewboard', 'presets.json')
 export const repositoryPresetPath = (root: string) => join(root, '.orchestration', 'preset.json')
 const pending = new Map<string, Promise<unknown>>()
@@ -84,6 +94,30 @@ export async function savePreset(preset: WorkerPreset, env: NodeJS.ProcessEnv = 
   })
 }
 
+/**
+ * Removes an id nothing defines any more (wo1: a stale entry of «Other / imported») from the routing, its
+ * switches and every saved preset. A worker that still exists is removed with `removeWorker` instead.
+ */
+export async function forgetWorkerId(id: string, env: NodeJS.ProcessEnv = process.env, home = env.HOME ?? homedir()): Promise<{ routing: boolean; presets: string[] }> {
+  let routing = false
+  await updateProfileStore(env, home, (store) => {
+    const classes = Object.fromEntries(TASK_CLASSES.map((cls) => [cls, store.routing.classes[cls].filter((entry) => entry !== id)])) as Record<TaskClass, string[]>
+    const disabled = Object.fromEntries(Object.entries(store.routing.disabled).filter(([entry]) => entry !== id))
+    routing = TASK_CLASSES.some((cls) => classes[cls].length !== store.routing.classes[cls].length) || Object.keys(disabled).length !== Object.keys(store.routing.disabled).length
+    return routing ? { ...store, routing: { classes, disabled } } : store
+  })
+  const path = presetsPath({ ...env, HOME: home })
+  const presets = await serialized(path, async () => {
+    const list = await listPresets({ ...env, HOME: home })
+    const touched = list.filter((preset) => TASK_CLASSES.some((cls) => preset.routing[cls]?.includes(id))).map((preset) => preset.id)
+    if (touched.length === 0) return touched
+    const next = list.map((preset) => (touched.includes(preset.id) ? { ...preset, routing: Object.fromEntries(TASK_CLASSES.map((cls) => [cls, (preset.routing[cls] ?? []).filter((entry) => entry !== id)])) as Record<TaskClass, string[]> } : preset))
+    await atomicJson(path, { version: 1, presets: next, roots: await trackedRoots({ ...env, HOME: home }) })
+    return touched
+  })
+  return { routing, presets }
+}
+
 async function requirePreset(id: string, env: NodeJS.ProcessEnv): Promise<void> {
   if (id !== BUILTIN_PRESET_ID && !(await listPresets(env)).some((p) => p.id === id)) throw new TypeError(`Unknown preset: ${id}`)
 }
@@ -115,7 +149,7 @@ export async function resolveRouting(root: string, planId?: string, env: NodeJS.
   const plan = await loadPlan(root, planId).catch((error: NodeJS.ErrnoException) => { if (error.name === 'PlanNotFoundError') return undefined; throw error })
   const references: Array<[RoutingSource, string | undefined]> = [['plan', plan?.preset], ['repository', await getRepositoryPreset(root)]]
   const dropped: EffectiveRouting['dropped'] = []
-  let preset: WorkerPreset = { id: BUILTIN_PRESET_ID, label: 'All workers', routing: machine.classes, builtin: true }
+  let preset: WorkerPreset = { id: BUILTIN_PRESET_ID, label: BUILTIN_PRESET_LABEL, routing: machine.classes, builtin: true }
   let source: RoutingSource = 'builtin'
   for (const [candidateSource, id] of references) {
     if (!id) continue
@@ -141,11 +175,24 @@ export async function resolveRouting(root: string, planId?: string, env: NodeJS.
     for (const id of preset.routing[cls]) {
       const disabled = aliasesOf(canonical(id)).some((alias) => alias in machine.disabled)
       if (disabled) { if (!dropped.some((d) => d.id === id)) dropped.push({ id, reason: 'disabled' }); continue }
-      if (!known.has(id)) { if (!dropped.some((d) => d.id === id)) dropped.push({ id, reason: 'unknown' }); continue }
+      // A dsh model is known by its id alone (pv1): dsh serves it, and one removed there fails its run, not this list.
+      if (!known.has(id) && !isDshAgent(id)) { if (!dropped.some((d) => d.id === id)) dropped.push({ id, reason: 'unknown' }); continue }
       result[cls].push(id)
     }
   }
-  return { preset, source, routing: result, dropped, disabled: machine.disabled }
+  const fallback: string[] = []
+  if (preset.builtin) {
+    for (const id of [...registry.workers.map((w) => w.id), ...Object.keys(store.profiles)]) {
+      if (aliasesOf(canonical(id)).some((alias) => alias in machine.disabled)) continue
+      // rq1: a profile imported from an older tool is never auto-picked, and neither is an id whose
+      // backend this repository cannot actually launch (opencode/grok-build/gemini-cli today) — both
+      // preflight clean in isolation and then fail the run with "no backend" (nb1's own promise broken).
+      if (store.profiles[id]?.origin === 'porch-import') continue
+      if (!isRunnableAgent(canonical(id))) continue
+      if (!fallback.some((other) => canonical(other) === canonical(id))) fallback.push(id)
+    }
+  }
+  return { preset, source, routing: result, dropped, disabled: machine.disabled, fallback }
 }
 
 export async function deletePreset(id: string, roots: string[], env: NodeJS.ProcessEnv = process.env): Promise<{ usedIn: string[] }> {

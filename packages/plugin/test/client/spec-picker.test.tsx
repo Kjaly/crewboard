@@ -75,3 +75,33 @@ it('searches repository files, including saved specs, and drafts the selected on
   fireEvent.keyDown(document, { key: 'Escape' })
   expect(onClose).toHaveBeenCalled()
 })
+
+it('names the worker that will write the draft, why the first one was skipped, and sends a person’s choice', async () => {
+  const calls = installFetch((url) => {
+    if (url.includes('/draft-worker?')) return jsonOk({ agent: 'dsh/deepseek-flash', skipped: [{ id: 'devin', reason: '✗ binary: not found → brew install --cask devin-cli\n✗ auth: logged out' }], options: ['devin', 'dsh/deepseek-flash', 'claude/opus'] })
+    if (url.endsWith('/spec-upload')) return jsonOk({ path: '.orchestration/specs/x.md', job })
+    return jsonOk([])
+  })
+  const onDraft = vi.fn()
+  render(<SpecPicker root="/repo" initial={{ mode: 'paste' }} onDraft={onDraft} onClose={() => {}} />)
+  const user = userEvent.setup()
+  const worker = await screen.findByRole('combobox', { name: /The draft will be written by/ })
+  expect(screen.getByRole('option', { name: 'dsh/deepseek-flash (automatic)' })).toBeTruthy()
+  expect(screen.getByText('Skipped devin: binary: not found → brew install --cask devin-cli')).toBeTruthy()
+  expect(screen.getByText(/only reads the repository/)).toBeTruthy()
+  await user.selectOptions(worker, 'claude/opus')
+  expect(screen.queryByText(/Skipped devin/)).toBeNull()
+  await user.type(screen.getByRole('textbox', { name: /Spec text/ }), 'Build it')
+  await user.click(screen.getByRole('button', { name: 'Draft plan' }))
+  await waitFor(() => expect(onDraft).toHaveBeenCalledWith('dj-1'))
+  expect(calls.find((call) => call.url.endsWith('/spec-upload'))?.body).toEqual({ repo: '/repo', text: 'Build it', agent: 'claude/opus' })
+})
+
+it('does not start an automatic draft when no worker is ready, and says why', async () => {
+  installFetch((url) => url.includes('/draft-worker?') ? jsonOk({ agent: null, skipped: [], options: ['devin'], message: 'No worker is available for “Research”.' }) : jsonOk([]))
+  render(<SpecPicker root="/repo" initial={{ mode: 'paste' }} onDraft={() => {}} onClose={() => {}} />)
+  const user = userEvent.setup()
+  expect(await screen.findByText('No worker is available for “Research”.')).toBeTruthy()
+  await user.type(screen.getByRole('textbox', { name: /Spec text/ }), 'Build it')
+  expect((screen.getByRole('button', { name: 'Draft plan' }) as HTMLButtonElement).disabled).toBe(true)
+})

@@ -2,7 +2,7 @@ import { getLang, t, useLang } from './i18n.js'
 import { useEffect, useState } from 'react'
 import type { GcCandidate, WorktreePolicy } from '@crewboard/core'
 import type { WorktreesInfo } from '../shared/types.js'
-import { api } from './api.js'
+import { api, shared } from './api.js'
 import { WORKTREE_POLICIES } from './worktree-copy.js'
 
 const gigabytes = (bytes: number) => (bytes / 1_000_000_000).toLocaleString(getLang() === 'ru' ? 'ru-RU' : 'en-US', { maximumFractionDigits: 2, minimumFractionDigits: 2 })
@@ -25,7 +25,7 @@ export function WorktreeSettings({ repo }: { repo: string }) {
   }
   useEffect(() => {
     let alive = true
-    void api.worktrees(repo).then((result) => {
+    void shared.worktrees(repo).then((result) => {
       if (!alive) return
       if (result.ok) setInfo(result.value)
       else setError(t('settings.worktrees.loadError'))

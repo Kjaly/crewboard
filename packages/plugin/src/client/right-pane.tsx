@@ -1,4 +1,4 @@
-import { t, useLang } from './i18n.js'
+import { shellLabel, t, useLang } from './i18n.js'
 // (body and live chip title into the keyed `sidebar.right.pane.tab[.title]` seats, under the type's
 // `id`). The body is the workspace panel from `right-panel.tsx`; the wiring is the minimal,
 // optional registration researched in docs/notes/2026-09-22-dsh-right-pane.md. The registry is
@@ -63,9 +63,11 @@ function registerOn(raw: RightPaneContext, slots: SlotsFace): void {
   tabs.register({
     id: ORCHESTRA_TAB_ID,
     kind: ORCHESTRA_TAB_KIND,
-    title: () => t('panel.tab'),
+    // Captured once, outside React, when the tab opens — before the live title slot below has
+    // necessarily mounted, so it uses the same never-blank lookup as the sidebar entry (lb1).
+    title: () => shellLabel('panel.tab'),
     // A page type claims no address; the guide capsule is how a human opens it by hand.
-    guide: [{ order: 30, title: () => t('panel.tab'), description: () => t('panel.guide') }],
+    guide: [{ order: 30, title: () => shellLabel('panel.tab'), description: () => t('panel.guide') }],
   })
   slots.inject('sidebar.right.pane.tab', () =>
     slots.register({ name: 'sidebar.right.pane.tab', key: ORCHESTRA_TAB_ID }, OrchestraTabBody),

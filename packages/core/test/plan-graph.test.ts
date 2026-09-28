@@ -34,6 +34,11 @@ describe('findCycle', () => {
 })
 
 describe('deriveViews', () => {
+  it('does not let accepted negative implementation satisfy a positive-work dependency', () => {
+    const negative = t('neg', { status: 'accepted', notes: [{ at: '2026-09-28T00:00:00Z', type: 'accept', text: 'verdict: negative; accepted by a person', verdict: { kind: 'negative', why: 'negative' } }] })
+    const view = deriveViews(plan([negative, t('next', { deps: ['neg'] })])).find((item) => item.task.id === 'next')
+    expect(view).toMatchObject({ status: 'blocked', blockedBy: ['neg'] })
+  })
   it('computes blocked, ready, running, in_review, accepted and decisions', () => {
     const p = plan([
       t('plan', { kind: 'decision' }),
@@ -78,8 +83,16 @@ describe('deriveViews', () => {
 
 describe('readySet and criticalPath', () => {
   it('excludes decisions from the ready set', () => {
-    const p = plan([t('d', { kind: 'decision' }), t('a')])
+    const p = plan([t('d', { kind: 'decision' }), t('a', { contract: 'a.md' })])
     expect(readySet(deriveViews(p))).toEqual(['a'])
+  })
+
+  // ct1: open worker tasks without a contract say so and are not ready to start; own work needs none.
+  it('marks open worker tasks without a contract as needing one', () => {
+    const p = plan([t('a'), t('b', { contract: 'b.md' }), t('c', { status: 'backlog' }), t('d', { kind: 'decision' }), t('r', { kind: 'root' }), t('x', { status: 'accepted' })])
+    const views = deriveViews(p)
+    expect(views.filter((v) => v.needsContract).map((v) => v.task.id)).toEqual(['a', 'c'])
+    expect(readySet(views)).toEqual(['b'])
   })
 
   it('returns the longest open chain', () => {

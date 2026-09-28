@@ -45,9 +45,20 @@ it('V-B01/now-rate-limit shows a rate limit with its reset time and a retry-afte
   const task = repo().tasks[0]!
   const limited = [{ kind: 'failed' as const, severity: 'alert' as const, taskId: 'a', runId: 'r', message: 'Лимит Claude исчерпан', hint: 'crewboard run a', reason: { code: 'rate_limited' as const, resetsAt: '2026-09-24T19:00:00' } }]
   setLang('en')
-  expect(nowPhrase(task, limited)).toEqual({ text: 'Claude usage limit reached — resets at 19:00', hint: 'Start the task again after the reset.', tone: 'alert' })
+  expect(nowPhrase(task, limited)).toEqual({ text: 'Usage limit reached — resets at 19:00', hint: 'Start the task again after the reset.', tone: 'alert' })
   setLang('ru')
-  expect(nowPhrase(task, limited).text).toBe('Лимит Claude исчерпан — сброс в 19:00')
+  expect(nowPhrase(task, limited).text).toBe('Лимит исчерпан — сброс в 19:00')
   const orphan = [{ ...limited[0]!, reason: { code: 'interrupted' as const, workerPid: 42, workerStopped: true } }]
   expect(nowPhrase(task, orphan).text).toBe('Супервизор запуска исчез; его воркер (pid 42) остановлен.')
+})
+
+it('shows a full or read-only disk as the host\'s sentence in the reader\'s language, path included (sf1)', async () => {
+  const { StateFileError } = await import('@crewboard/core')
+  const { describeApiError } = await import('../src/client/actions.js')
+  const disk = new StateFileError('no_space', '/r/.orchestration/plan.json')
+  setLang('en')
+  expect(repoHeadline(repo({ degraded: true, error: disk.message }))).toBe('⚠ No space left on the disk for /r/.orchestration/plan.json; free some space and try again.')
+  expect(describeApiError('state_file', disk.message)).toBe('No space left on the disk for /r/.orchestration/plan.json; free some space and try again.')
+  setLang('ru')
+  expect(describeApiError('state_file', disk.message)).toBe('На диске нет места для /r/.orchestration/plan.json; освободите место и повторите.')
 })

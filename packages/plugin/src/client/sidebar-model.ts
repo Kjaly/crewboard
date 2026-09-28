@@ -1,5 +1,5 @@
 import type { OrchestraPlanSummary, OrchestraRepoSnapshot, OrchestraSnapshot, SidebarOrder } from '../shared/types.js'
-import { type NeedsYouItem, type NeedsYouOpen, needsYou, needsYouCount } from '../../../core/src/orchestration/needs-you.js'
+import { type NeedsYouGroup, type NeedsYouItem, type NeedsYouOpen, needsYou, needsYouGroups, waitingCounts } from '../../../core/src/orchestration/needs-you.js'
 import { plansOf, type PlanItem } from './plans.js'
 import { repoName } from './review.js'
 
@@ -32,19 +32,24 @@ export type RepoEntry = {
 export function repoEntry(repo: OrchestraRepoSnapshot): RepoEntry {
   const plans = sidePlans(repo)
   const sum = (pick: (plan: SidePlan) => number) => plans.reduce((n, plan) => n + (plan.example ? 0 : pick(plan)), 0)
-  return { repo, plans, running: sum((p) => p.running), attention: sum((p) => p.attention.length), waiting: sum((p) => p.waitingHuman), inReview: sum((p) => p.inReview) }
+  // What waits or alarms leaves out archived plans, even the current one (ny1): the badge agrees with «Needs you».
+  const live = (pick: (plan: SidePlan) => number) => sum((plan) => (plan.archived ? 0 : pick(plan)))
+  return { repo, plans, running: sum((p) => p.running), attention: live((p) => p.attention.length), waiting: live((p) => p.waitingHuman), inReview: live((p) => p.inReview) }
 }
 
 export const displayName = (repo: OrchestraRepoSnapshot): string => repo.title || repoName(repo.root)
 
 /**
- * Quiet = no plan and nothing recorded for a week (no timestamp counts as no activity). A listed
- * folder that is gone is never quiet: it stays in view, marked missing, until someone removes it.
+ * Quiet = no plan now, some history, and nothing recorded for a week. A repository without any history
+ * — one just added — is where a first task starts, so it stays in view (nb1). History is a recorded
+ * activity or a plan kept in the list (archived); a plan list without a time counts as long ago. A
+ * listed folder that is gone is never quiet: it stays in view, marked missing, until someone removes it.
  */
 export function isQuietRepo(repo: OrchestraRepoSnapshot, now: number): boolean {
   if (repo.hasPlan !== false || repo.missing) return false
   const last = Date.parse(repo.lastActivityAt ?? '')
-  return !Number.isFinite(last) || now - last > QUIET_AFTER_MS
+  if (Number.isFinite(last)) return now - last > QUIET_AFTER_MS
+  return (repo.plans?.length ?? 0) > 0
 }
 
 const activityAt = (entry: RepoEntry): number => Date.parse(entry.repo.lastActivityAt ?? entry.repo.updatedAt) || 0
@@ -143,8 +148,9 @@ export function rowState(counts: { running: number; waiting: number; failed: num
  */
 export const planCounts = (plan: SidePlan): { running: number; waiting: number; failed: number } => ({
   running: plan.running,
-  waiting: plan.waitingHuman,
-  failed: plan.attention.length,
+  // An archived plan waits on nobody (ny1).
+  waiting: plan.archived ? 0 : plan.waitingHuman,
+  failed: plan.archived ? 0 : plan.attention.length,
 })
 
 /** The collapsed repository row aggregates its members (current-plan tasks included). */
@@ -271,8 +277,18 @@ export function inboxItems(snapshot: OrchestraSnapshot, open?: NeedsYouOpen): In
   }))
 }
 
-/** Real waiting rows only: the number the heading and the collapsed-rail dot show. */
-export const inboxCount = needsYouCount
+/**
+ * The one waiting number (at2): what the heading and the collapsed-rail dot show — real work only, a background
+ * plan counted by the tasks it stands for, so it matches the tab title, the toasts, the chip and Review.
+ */
+export const inboxCount = (items: readonly NeedsYouItem[]): number => waitingCounts(items).all
+
+/** How many rows a group shows before «N more» (at2). */
+export const INBOX_TOP = 5
+
+/** «Needs you» grouped by repository and plan, each group with its reason summary (at2). */
+export type InboxGroup = NeedsYouGroup<InboxItem>
+export const inboxGroups = (items: readonly InboxItem[]): InboxGroup[] => needsYouGroups(items)
 
 /** Real rows first, then the example rows the sidebar sets apart under a divider. */
 export function splitInbox(items: readonly InboxItem[]): { real: InboxItem[]; example: InboxItem[] } {

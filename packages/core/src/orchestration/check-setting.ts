@@ -13,15 +13,26 @@ export type CheckSetting = { enabled: boolean; source: CheckSettingSource; plan?
 
 export const repositorySettingsPath = (root: string) => join(root, CREWBOARD_DIR, 'settings.json')
 
-type RepositorySettings = { orchestratorCheck?: boolean }
+/** The repository's own `settings.json` (bs1: also read by `worktree/default-base.js`). */
+export type RepositorySettings = { orchestratorCheck?: boolean; defaultBase?: string }
 
-async function readRepositorySettings(root: string): Promise<RepositorySettings> {
+export async function readRepositorySettings(root: string): Promise<RepositorySettings> {
   try {
     const parsed: unknown = JSON.parse(await readFile(repositorySettingsPath(root), 'utf8'))
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as RepositorySettings : {}
   } catch {
     return {}
   }
+}
+
+/** Reads, applies `update`, and atomically rewrites `settings.json`; shared by every repository-level setting. */
+export async function writeRepositorySettings(root: string, update: (current: RepositorySettings) => RepositorySettings): Promise<void> {
+  const file = repositorySettingsPath(root)
+  const next = update(await readRepositorySettings(root))
+  await mkdir(dirname(file), { recursive: true })
+  const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`
+  await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`)
+  await rename(tmp, file)
 }
 
 async function hasChat(root: string, planId: string): Promise<boolean> {
@@ -45,15 +56,12 @@ export async function resolveOrchestratorCheck(root: string, planId: string = cu
 
 /** `undefined` clears the repository setting (back to «on while the plan has a chat»). */
 export async function setRepositoryOrchestratorCheck(root: string, value: boolean | undefined): Promise<void> {
-  const file = repositorySettingsPath(root)
-  const current = await readRepositorySettings(root)
-  const next: RepositorySettings = { ...current }
-  if (value === undefined) delete next.orchestratorCheck
-  else next.orchestratorCheck = value
-  await mkdir(dirname(file), { recursive: true })
-  const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`
-  await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`)
-  await rename(tmp, file)
+  await writeRepositorySettings(root, (current) => {
+    const next = { ...current }
+    if (value === undefined) delete next.orchestratorCheck
+    else next.orchestratorCheck = value
+    return next
+  })
   for (const planId of await planIds(root).catch(() => [] as string[])) await releaseChecks(root, planId)
 }
 

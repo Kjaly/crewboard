@@ -4,6 +4,7 @@ export function makeHarness(opts: { cwd: string; env?: NodeJS.ProcessEnv; isTTY?
   let out = ''
   let err = ''
   const answers = [...(opts.answers ?? [])]
+  const questions: string[] = []
   let now = opts.now ?? new Date('2026-09-22T11:00:00Z')
   const io: Io = {
     cwd: opts.cwd,
@@ -15,13 +16,18 @@ export function makeHarness(opts: { cwd: string; env?: NodeJS.ProcessEnv; isTTY?
       err += s
     },
     isTTY: opts.isTTY ?? false,
-    prompt: async () => answers.shift() ?? '',
+    prompt: async (question: string) => {
+      questions.push(question)
+      return answers.shift() ?? ''
+    },
     now: () => now,
   }
   return {
     io,
     out: () => out,
     err: () => err,
+    /** Every question a confirmation asked, in order. */
+    questions: () => questions,
     reset: () => {
       out = ''
       err = ''

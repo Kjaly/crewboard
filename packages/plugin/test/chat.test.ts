@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
-import { type Attention, type AttentionKind, type Backends, type RepoSnapshot, initPlan, newTask, updatePlan } from '@crewboard/core'
+import { type Attention, type AttentionKind, type Backends, type RepoSnapshot, initPlan, loadPlan, newTask, updatePlan } from '@crewboard/core'
 import { CLIENT_HEADER, actionRoutes } from '../src/host/actions.js'
 import { type ChatDeps, bindChat, createChatWaker, openChat, readChats, writeChats } from '../src/host/chat.js'
 import type { SessionControllerFace } from '../src/host/dsh.js'
@@ -66,9 +66,11 @@ async function emptyRepo(goal = 'Собрать оркестр'): Promise<string
   return root
 }
 
-const attention = (taskId: string, kind: AttentionKind): Attention => ({
+// 'running'/'stalled' at 'warn' are information (st2, bg1) and never wake the chat; every other kind here
+// stands for an actual alarm, so it gets 'alert' — matching the severity Needs you would show it at.
+const attention = (taskId: string, kind: AttentionKind, severity: Attention['severity'] = kind === 'failed' || kind === 'running' || kind === 'stalled' ? 'alert' : 'warn'): Attention => ({
   kind,
-  severity: kind === 'failed' ? 'alert' : 'warn',
+  severity,
   taskId,
   runId: `run_${taskId}`,
   message: `сообщение ${taskId}`,
@@ -117,7 +119,7 @@ describe('openChat', () => {
     expect(await readChats(root)).toMatchObject({ main: { sessionId: 'sess-1', wake: true } })
     expect(prompts).toHaveLength(1)
     expect(prompts[0]).toMatchObject({ sessionId: 'sess-1', mode: 'queue', content: [{ type: 'text' }] })
-    expect(prompts[0]?.content[0]?.text).toContain('You are the orchestrator for plan')
+    expect(prompts[0]?.content[0]?.text).toContain('Crewboard instruction envelope v1')
     expect(prompts[0]?.content[0]?.text).toContain('Собрать оркестр')
     const again = await openChat(deps(sessions), { root, planId: 'main' })
     expect(again).toEqual({ sessionId: 'sess-1', created: false })
@@ -153,7 +155,7 @@ describe('openChat', () => {
     expect(brief).toContain('t1')
     expect(brief).toContain('docs/t1.contract.md')
     expect(brief).toContain('awaiting review')
-    expect(brief).toContain('Suggest what to do and ask the user')
+    expect(brief).toContain('Use current task and contract as authoritative.')
   })
 
   it('sends the briefing and then a task brief when opening a chat for a task', async () => {
@@ -165,7 +167,7 @@ describe('openChat', () => {
     })
     await openChat(deps(sessions), { root, planId: 'main', taskId: 't9' })
     expect(prompts).toHaveLength(2)
-    expect(prompts[0]?.content[0]?.text).toContain('You are the orchestrator for plan')
+    expect(prompts[0]?.content[0]?.text).toContain('Crewboard instruction envelope v1')
     const brief = prompts[1]?.content[0]?.text ?? ''
     expect(brief).toContain('t9')
     expect(brief).toContain('docs/t9.md')
@@ -182,7 +184,7 @@ describe('bindChat', () => {
     expect(await readChats(root)).toMatchObject({ main: { sessionId: 'sess-live', wake: true } })
     expect(prompts).toHaveLength(1)
     expect(prompts[0]).toMatchObject({ sessionId: 'sess-live', mode: 'queue' })
-    expect(prompts[0]?.content[0]?.text).toContain('You are the orchestrator for plan')
+    expect(prompts[0]?.content[0]?.text).toContain('Crewboard instruction envelope v1')
   })
 
   it('rebinds a plan that already had a chat', async () => {
@@ -225,7 +227,21 @@ describe('createChatWaker', () => {
     expect(text).toContain('[crewboard] Orchestrator action needed')
     expect(text).toContain('t1')
     expect(text).toContain('t2')
-    expect(text).toContain('never accept it yourself')
+    expect(text).toContain('On every wake, freshly read orchestra_plan and orchestra_task')
+  })
+
+  // st2: a command in flight, or a short quiet spell, is information — it never wakes the orchestrator,
+  // the same way it never reaches Needs you.
+  it('does not wake the orchestrator over a command still running, or a short quiet spell', async () => {
+    const root = await emptyRepo()
+    await writeChats(root, { main: { sessionId: 'sess-1', wake: true, boundAt: 't' } })
+    const { sessions, prompts } = makeSessions()
+    const sched = manualSchedule()
+    const waker = createChatWaker({ ...deps(sessions), windowMs: 5000, schedule: sched.schedule })
+    waker(snapshot(root, []))
+    waker(snapshot(root, [attention('t1', 'running', 'warn'), attention('t2', 'stalled', 'warn')]))
+    await sched.run()
+    expect(prompts).toHaveLength(0)
   })
 
   it('does not wake a plan whose chat is muted', async () => {
@@ -285,7 +301,7 @@ describe('createChatWaker and the orchestrator check (vr1)', () => {
     const repo = base.repos[0]!
     return { ...base, repos: [{ ...repo, tasks: [{ id: 't1', title: 'Первая', kind: 'implement', status: 'running', deps: [], blockedBy: [], needsHuman: false, runs: 1, lastRunId: 'run_1', ...task }] }] }
   }
-  it('wakes the orchestrator to check finished work, and says nothing more once it has checked it', async () => {
+  it('wakes the orchestrator first to check and then to close finished work', async () => {
     const root = await emptyRepo()
     await writeChats(root, { main: { sessionId: 'sess-1', wake: true, boundAt: 't' } })
     const { sessions, prompts } = makeSessions()
@@ -295,11 +311,54 @@ describe('createChatWaker and the orchestrator check (vr1)', () => {
     waker(withTask(root, { status: 'in_review', check: 'pending' }))
     await sched.run()
     expect(prompts).toHaveLength(1)
-    expect(prompts[0]?.content[0]?.text).toContain('t1 «Первая» — check_due: Run finished — check it: orch verify t1')
+    expect(prompts[0]?.content[0]?.text).toContain('t1 «Первая» — check_due: Run finished — check it: orchestra_verify action=done')
     waker(withTask(root, { status: 'in_review', check: 'checking' }))
     waker(withTask(root, { status: 'in_review', check: 'checked' }))
     await sched.run()
+    expect(prompts).toHaveLength(2)
+    expect(prompts[1]?.content[0]?.text).toContain('t1 «Первая» — close_due: Your check is recorded')
+  })
+
+  it('recovers a checked task on the first snapshot after a host restart', async () => {
+    const root = await emptyRepo()
+    await writeChats(root, { main: { sessionId: 'sess-1', wake: true, boundAt: 't' } })
+    const { sessions, prompts } = makeSessions()
+    const sched = manualSchedule()
+    const checked = withTask(root, { status: 'in_review', check: 'checked' })
+    const first = createChatWaker({ ...deps(sessions), windowMs: 5000, schedule: sched.schedule })
+    first(checked)
+    await sched.run()
     expect(prompts).toHaveLength(1)
+    const second = createChatWaker({ ...deps(sessions), windowMs: 5000, schedule: sched.schedule })
+    second(checked)
+    await sched.run()
+    expect(prompts).toHaveLength(1)
+  })
+
+  it('wakes the orchestrator for an accepted task still waiting for merge', async () => {
+    const root = await emptyRepo()
+    await writeChats(root, { main: { sessionId: 'sess-1', wake: true, boundAt: 't' } })
+    const { sessions, prompts } = makeSessions()
+    const sched = manualSchedule()
+    const waker = createChatWaker({ ...deps(sessions), windowMs: 5000, schedule: sched.schedule })
+    waker(withTask(root, { status: 'accepted', check: 'checked', unmerged: true }))
+    await sched.run()
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]?.content[0]?.text).toContain('merge_due: Accepted work is still outside its base branch')
+  })
+
+  it('an archived plan, even the current one, wakes nobody (ny1)', async () => {
+    const root = await emptyRepo()
+    await writeChats(root, { main: { sessionId: 'sess-1', wake: true, boundAt: 't' } })
+    const { sessions, prompts } = makeSessions()
+    const sched = manualSchedule()
+    const waker = createChatWaker({ ...deps(sessions), windowMs: 5000, schedule: sched.schedule })
+    const archived = (s: OrchestraSnapshot): OrchestraSnapshot => ({ ...s, repos: s.repos.map((repo) => ({ ...repo, archived: true as const })) })
+    waker(archived(withTask(root, {})))
+    const waiting = withTask(root, { status: 'in_review', check: 'pending' })
+    waker(archived({ ...waiting, repos: waiting.repos.map((repo) => ({ ...repo, attention: [attention('t1', 'failed')] })) }))
+    await sched.run()
+    expect(prompts).toHaveLength(0)
   })
 })
 
@@ -356,6 +415,19 @@ describe('chat routes', () => {
     await wake.handler(fakeReq({ repo: root, plan: 'main', wake: false }), toggled as unknown as ServerResponse)
     expect(toggled.status).toBe(200)
     expect(JSON.parse(toggled.body)).toMatchObject({ ok: true, value: { sessionId: 'sess-1', wake: false } })
+  })
+
+  it('creates the plan with the goal the person named before the chat opens (nb1)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'orch-chat-goal-'))
+    const fake = makeSessions()
+    const service = new OrchestraService({ config: { repos: [root], refreshMs: 60_000 }, backendsFor: () => idle, now, chatsFor: readChats })
+    const routes = actionRoutes({ service, repos: [root], backendsFor: () => idle, native: native(), env: {}, home: root, now, sessions: () => fake.sessions, newId })
+    const open = routes.find((r) => r.path === `${API_PREFIX}/chat-open`)
+    if (!open) throw new Error('no chat-open route')
+    const opened = fakeRes()
+    await open.handler(fakeReq({ repo: root, prompt: 'Draft a plan', goal: 'A faster checkout' }), opened as unknown as ServerResponse)
+    expect(opened.status).toBe(200)
+    expect((await loadPlan(root)).goal).toBe('A faster checkout')
   })
 
   it('binds the panel session through chat-bind and shows it on the plan summary', async () => {

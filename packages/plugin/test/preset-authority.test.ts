@@ -81,11 +81,14 @@ describe('chat tools under the preset', () => {
     expect(launched).toEqual([])
   })
 
-  it('tells the model not to pass a worker and to ask the person', async () => {
+  // op1 (B36): the rule is stated once, in the prompt; the parameters only say the preset decides.
+  it('tells the model once to leave the worker to the preset and to ask the person', async () => {
     const { tool } = await setup()
-    expect(tool('orchestra_run').description).toMatch(/Do not pass `agent`/)
-    expect(JSON.stringify(tool('orchestra_task_upsert').parameters)).toMatch(/ask the person/)
-    expect(ORCHESTRA_PROMPT).toMatch(/Do not pass a worker to orchestra_task_upsert or orchestra_run.*ask the person/)
+    expect(ORCHESTRA_PROMPT).toMatch(/leave `worker` and `agent` empty and the preset decides\. A worker outside the preset is refused; .*ask the person/)
+    expect(ORCHESTRA_PROMPT.match(/outside the preset/g)).toHaveLength(1)
+    const texts = [tool('orchestra_run'), tool('orchestra_task_upsert')].map((t) => `${t.description} ${JSON.stringify(t.parameters)}`).join(' ')
+    expect(texts).toMatch(/the preset decides/)
+    expect(texts).not.toMatch(/ask the person|outside the preset|anything else is refused/)
   })
 })
 

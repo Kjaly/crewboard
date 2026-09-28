@@ -6,6 +6,7 @@ import { eventNote } from '../plan/notes.js'
 import { currentPlanId, loadPlan, updatePlan } from '../plan/store.js'
 import { listPlans } from '../plan/plans.js'
 import { crewboardEnv } from '../env.js'
+import { removeOutput } from './output.js'
 import { type BaselineRecord, readWorktreeState } from './state.js'
 
 export type WorktreeInfo = {
@@ -110,6 +111,7 @@ export async function removeWorktree(
   if (r.code !== 0) throw new Error(`git worktree remove failed: ${r.stderr.trim()}`)
   // `-d` refuses unmerged branches, so unmerged work stays reachable.
   const b = await exec('git', ['-C', repoRoot, 'branch', '-d', info.branch])
+  await removeOutput(repoRoot, info.taskId)
   return { branchDeleted: b.code === 0 }
 }
 
@@ -190,7 +192,8 @@ async function inspect(root: string, task: Task, main: string, now: Date, exec: 
     task,
     exists,
     dirty,
-    merged: await isMerged(root, task.worktree!.branch, main, exec),
+    // A merge Crewboard recorded (a squash too, which ancestry does not show) counts as merged (mg1).
+    merged: !!task.merged || await isMerged(root, task.worktree!.branch, main, exec),
     running: isRunning(task),
     accepted: task.status === 'accepted',
     acceptedAt: acceptedAt(task, now),
@@ -312,7 +315,8 @@ export async function gcRecheckAccepted(root: string, deps: { exec: Exec; now: (
  * Removes the requested copies. A copy goes only when the task is accepted, its branch is merged into
  * the main line and the copy is clean; everything else lands in `failed` with the reason and does not
  * stop the rest. `git worktree remove` is always called without `--force`, and the branch only with
- * `-d`, so unmerged work stays reachable. This never removes anything by `rm`.
+ * `-d`, so unmerged work stays reachable. A copy is never removed by `rm`; only its saved command output in
+ * `.orchestration/output/<task>` is.
  */
 export async function gcRemove(root: string, ids: string[], deps: { exec: Exec; now?: () => Date }): Promise<GcResult> {
   const plans = await listPlans(root)
@@ -352,7 +356,7 @@ export async function gcRemove(root: string, ids: string[], deps: { exec: Exec; 
       failed.push({ taskId: id, reason: KEEP_REASON.rejected })
       continue
     }
-    if (!(await isMerged(root, branch, main, deps.exec))) {
+    if (!task.merged && !(await isMerged(root, branch, main, deps.exec))) {
       failed.push({ taskId: id, reason: KEEP_REASON.unmerged })
       continue
     }
@@ -366,6 +370,8 @@ export async function gcRemove(root: string, ids: string[], deps: { exec: Exec; 
       continue
     }
     await deps.exec('git', ['-C', root, 'branch', '-d', branch])
+    // The copy's saved command output (prepare, baseline, refresh) goes with it.
+    await removeOutput(root, requestedTask)
     removed.push(requestedTask)
   }
   if (removed.length > 0) await deps.exec('git', ['-C', root, 'worktree', 'prune'])

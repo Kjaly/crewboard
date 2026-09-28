@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { checkState, verdictOf } from '../src/orchestration/verdict.js'
+import { attestedVerdict, checkState, projectWorkerCheckClaims, verdictOf } from '../src/orchestration/verdict.js'
 import type { TaskDetail } from '../src/orchestration/detail.js'
 import { extractReport } from '../src/runs/report.js'
 import type { RunEvidence } from '../src/runs/evidence.js'
@@ -30,6 +30,25 @@ const tuple = (detail: Omit<TaskDetail, 'verdict'>) => {
 const prose = Array.from({ length: 12 }, (_, i) => `Шаг ${i + 1}: правка модуля.`).join('\n')
 
 describe('golden table: claim in RU/EN reports → {verdict, reason}', () => {
+  it('keeps an explicit attested result despite historical blocked wording and surfaces a declared deviation', () => {
+    expect(attestedVerdict('result', 'Result: заблокирован historically; this is the old worker report.\nDeviation: browser check not run.')).toMatchObject({
+      kind: 'result', claim: 'result', caution: 'deviation', facts: [{ code: 'deviation', tone: 'warn' }],
+    })
+  })
+  it('scopes check claims to each command so a browser NOT RUN line cannot taint git diff --check', () => {
+    const report = '- Typecheck — **PASS**, exit 0.\n- `git diff --check` — **PASS**.\n- Worker browser — **NOT RUN**, EPERM'
+    const required = ['pnpm --filter @crewboard/core typecheck', 'git diff --check']
+    expect(projectWorkerCheckClaims(report, '2026-09-28T10:00:00Z', required)).toEqual({ version: 1, source: 'finalAnswer', capturedAt: '2026-09-28T10:00:00Z', checks: [
+      { command: required[0], state: 'run' }, { command: required[1], state: 'run' },
+    ], workerBrowserClaim: { state: 'not_run', line: '- Worker browser — **NOT RUN**, EPERM', sourceLine: 2 } })
+  })
+
+  it('does not map an abbreviated Typecheck line to multiple required typecheck commands', () => {
+    const report = '- Typecheck — **PASS**, exit 0.'
+    const required = ['pnpm --filter @crewboard/core typecheck', 'pnpm --filter crewboard typecheck']
+    expect(required.map((check) => checkState(report, check, required))).toEqual(['unreported', 'unreported'])
+    expect(checkState('- pnpm --filter @crewboard/core typecheck — PASS', required[0]!, required)).toBe('run')
+  })
   it.each([
     ['EN claim on the first line', 'Result: received\nDone.', 'result', undefined],
     ['RU claim on the first line', 'Результат: получен\nСделано.', 'result', undefined],
@@ -69,6 +88,49 @@ describe('golden table: claim in RU/EN reports → {verdict, reason}', () => {
     ['a positive word with a failure in the same sentence', 'Result: done, but two tests failed', 'disputed', 'claim_missing'],
     ['a free-text line with no positive word', 'Result: see below', 'disputed', 'claim_missing'],
     ['a positive word that is only in progress', 'Результат: готовлю каркас', 'disputed', 'claim_missing'],
+    // vr2: the verbatim first lines of honest reports read as disputed on 2026-09-24/25, and their negated counterparts.
+    ['a negation that describes the feature (dr2)', 'Результат: черновик теперь не может писать в рабочую копию, а воркер для него выбирается так же, как для запуска задачи.', 'result', undefined],
+    ['dr2 negated: the draft is not ready', 'Результат: черновик теперь не готов, а воркер для него выбирается так же, как для запуска задачи.', 'disputed', 'claim_missing'],
+    ['dr2 negated: the draft still writes to the copy', 'Результат: черновик всё ещё может писать в рабочую копию, но воркер не выбирается.', 'disputed', 'claim_missing'],
+    ['a «Готово:» label (p5j)', 'Готово: tool host поддерживает протокол 1.1, …', 'result', undefined],
+    ['p5j negated: «Готово:» over a failure', 'Готово: tool host не поддерживает протокол 1.1, …', 'disputed', 'claim_missing'],
+    ['«Готово.» as a sentence of its own, then an outcome negation (ny1)', 'Готово. Архивный план больше не попадает ни в «Needs you», ни в какой счётчик, даже если он единственный и текущий в репозитории. Если открыть его на экране, задачи и их статусы видны как раньше. Все проверки прошли, кроме `pnpm test` целиком: в core он упал по таймаутам (подробности ниже).', 'result', undefined],
+    ['ny1 negated: not done', 'Не готово. Архивный план всё ещё попадает в «Needs you».', 'disputed', 'claim_missing'],
+    ['ny1 negated: «Готово.» over a caveat', 'Готово. Архивный план больше не попадает в счётчик, но всё ещё попадает в «Needs you».', 'disputed', 'claim_missing'],
+    ['«Готово» without a colon or a full stop is a preface, not a label', 'Готово, ниже отчёт.', 'disputed', 'claim_missing'],
+    ['RU «больше не падает»', 'Результат: сборка больше не падает на пустом плане', 'result', undefined],
+    ['EN «no longer fails»', 'Result: the sync no longer fails on an empty plan', 'result', undefined],
+    ['EN «never writes»', 'Result: the draft never writes to the working copy', 'result', undefined],
+    ['RU «не готово» still denies', 'Результат: не готово', 'disputed', 'claim_missing'],
+    ['RU «не удалось» still denies', 'Результат: не удалось собрать пакет', 'disputed', 'claim_missing'],
+    ['EN «not done» still denies', 'Result: not done', 'disputed', 'claim_missing'],
+    ['EN «tests do not pass» still denies', 'Result: the scaffold is done, tests do not pass', 'disputed', 'claim_missing'],
+    ['an outcome negation that falls on the result', 'Result: the build no longer passes', 'disputed', 'claim_missing'],
+    ['RU «больше не проходит» still denies', 'Результат: каркас готов, тесты больше не проходят', 'disputed', 'claim_missing'],
+    ['a caveat after an outcome negation', 'Результат: сборка больше не падает, но линтер красный', 'disputed', 'claim_missing'],
+    ['a hedge after «Готово:»', 'Готово: частично, остался экспорт', 'disputed', 'claim_missing'],
+    ['a failure after «Done:»', 'Done: scaffold, but two tests failed', 'disputed', 'claim_missing'],
+    ['a first-person done verb (mk1)', 'Результат: сделал все четыре пункта mk1. Все запрошенные проверки прошли: pnpm build, typecheck, lint, lint:i18n, test и release:check.', 'result', undefined],
+    ['mk1 negated: «не сделал»', 'Результат: не сделал все четыре пункта mk1. Все запрошенные проверки прошли: pnpm build, typecheck, lint, lint:i18n, test и release:check.', 'disputed', 'claim_missing'],
+    ['mk1 negated: «сделал не всё»', 'Результат: сделал не всё из четырёх пунктов mk1. Все запрошенные проверки прошли: pnpm build, typecheck, lint, lint:i18n, test и release:check.', 'disputed', 'claim_missing'],
+    ['mk1 negated: «сделал частично»', 'Результат: сделал частично четыре пункта mk1. Все запрошенные проверки прошли: pnpm build, typecheck, lint, lint:i18n, test и release:check.', 'disputed', 'claim_missing'],
+    ['RU «выполнила»', 'Результат: выполнила задачу целиком', 'result', undefined],
+    ['RU «добавил»', 'Результат: добавил экспорт в CSV', 'result', undefined],
+    ['EN «implemented»', 'Result: implemented the CSV export', 'result', undefined],
+    ['EN «did»', 'Result: did all four items', 'result', undefined],
+    ['EN «did not»', 'Result: did not finish the export', 'disputed', 'claim_missing'],
+    ['EN «added» with a hedge', 'Result: added most of the export, partially', 'disputed', 'claim_missing'],
+    ['DE «umgesetzt»', 'Ergebnis: Export nach CSV umgesetzt', 'result', undefined],
+    ['FR «ajouté»', 'Résultat : export CSV ajouté', 'result', undefined],
+    ['ES «implementé»', 'Resultado: implementé la exportación', 'result', undefined],
+    ['PL «zrobiłem»', 'Wynik: zrobiłem eksport do CSV', 'result', undefined],
+    ['PL «nie zrobiłem»', 'Wynik: nie zrobiłem eksportu', 'disputed', 'claim_missing'],
+    ['«Сделано:»', 'Сделано: экспорт отчёта в CSV', 'result', undefined],
+    ['«Done:»', 'Done: the export writes CSV', 'result', undefined],
+    ['«Fertig:»', 'Fertig: Export nach CSV', 'result', undefined],
+    ['«Terminé :»', 'Terminé : export CSV', 'result', undefined],
+    ['«Hecho:»', 'Hecho: exportación a CSV', 'result', undefined],
+    ['«Gotowe:»', '**Gotowe:** eksport do CSV', 'result', undefined],
   ] as const)('%s', (_name, answer, verdict, reason) => {
     expect(tuple(detailOf(answer))).toEqual({ verdict, reason })
   })

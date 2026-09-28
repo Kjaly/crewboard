@@ -5,7 +5,7 @@ import { TASK_CLASSES, type TaskClass } from '../plan/schema.js'
 import { DEFAULT_ROUTING, type Routing } from './routing.js'
 import { PROFILE_ALIASES } from './identity.js'
 import { crewboardEnv } from '../env.js'
-import type { WorkerEntry } from './registry.js'
+import { WORKER_KINDS, type WorkerEntry, type WorkerKind } from './registry.js'
 
 const migrateConfigDirectory = async (home: string): Promise<void> => {
   const oldDir = join(home, '.config', 'dsh-orchestra')
@@ -22,8 +22,9 @@ const migrateConfigDirectory = async (home: string): Promise<void> => {
   }
 }
 
-export type Transport = 'dsh' | 'claude-cli' | 'codex-cli' | 'devin-acp' | 'opencode' | 'grok-build' | 'gemini-cli'
-export type WorkerProfile = { model: string; transport: Transport; displayName: string; effort?: string; enabled: boolean }
+export type Transport = 'dsh' | 'claude-cli' | 'codex-cli' | 'devin-acp' | 'opencode' | 'cursor-agent' | 'grok-build' | 'gemini-cli'
+/** `origin: 'porch-import'` (rq1): came from an older tool's config, by the one-time migration or `workers import-porch`. Never picked by the default preset's automatic fallback — a person chooses it by id on purpose. */
+export type WorkerProfile = { model: string; transport: Transport; displayName: string; effort?: string; enabled: boolean; origin?: 'porch-import' }
 /** Per-repository sidebar preferences; a key is absent when both flags are false. */
 export type RepoPreference = { pinned?: boolean; hidden?: boolean }
 export type RepoPreferenceMap = Record<string, RepoPreference>
@@ -36,10 +37,20 @@ export type RepoPreferenceMap = Record<string, RepoPreference>
 export type SidebarOrder = { repos?: string[]; plans?: Record<string, string[]> }
 export type ProfileStore = { version: 1; routing: Routing; aliases: Record<string, string>; profiles: Record<string, WorkerProfile>; repos?: RepoPreferenceMap; order?: SidebarOrder }
 export const profileStorePath = (env: NodeJS.ProcessEnv, home: string): string => crewboardEnv(env, 'PROFILES_FILE') ?? join(home, '.config', 'crewboard', 'profiles.json')
-export const olderConfigPath = (env: NodeJS.ProcessEnv, home: string): string => env.PORCH_CONFIG ?? join(home, '.config', 'porch', 'config.json')
+/**
+ * The older tool's config, for the one-time automatic import only: always this HOME's own file (rq1).
+ * `PORCH_CONFIG` no longer redirects it — a stray environment variable inherited from another shell
+ * must not pull a stranger's profiles into a fresh HOME; point `workers import-porch <path>` at a
+ * specific file instead, on purpose, whenever the source is not this HOME's default location.
+ */
+export const olderConfigPath = (_env: NodeJS.ProcessEnv, home: string): string => join(home, '.config', 'porch', 'config.json')
 
-const transportOf = (backend: string): Transport | undefined => ({ dsh: 'dsh', 'claude-code': 'claude-cli', 'codex-cli': 'codex-cli', 'devin-cli': 'devin-acp', opencode: 'opencode', 'grok-build': 'grok-build', 'gemini-cli': 'gemini-cli' })[backend] as Transport | undefined
-export const backendForTransport = (transport: Transport): Backend => ({ dsh: 'dsh', 'claude-cli': 'claude-code', 'codex-cli': 'codex-cli', 'devin-acp': 'devin-cli', opencode: 'opencode', 'grok-build': 'grok-build', 'gemini-cli': 'gemini-cli' })[transport] as Backend
+const transportOf = (backend: string): Transport | undefined =>
+  ({ dsh: 'dsh', 'claude-code': 'claude-cli', 'codex-cli': 'codex-cli', 'devin-cli': 'devin-acp', opencode: 'opencode', 'cursor-agent': 'cursor-agent', 'grok-build': 'grok-build', 'gemini-cli': 'gemini-cli' })[backend] as
+    | Transport
+    | undefined
+export const backendForTransport = (transport: Transport): Backend =>
+  ({ dsh: 'dsh', 'claude-cli': 'claude-code', 'codex-cli': 'codex-cli', 'devin-acp': 'devin-cli', opencode: 'opencode', 'cursor-agent': 'cursor-agent', 'grok-build': 'grok-build', 'gemini-cli': 'gemini-cli' })[transport] as Backend
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 const isStringList = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === 'string' && item.trim())
 const pending = new Map<string, Promise<ProfileStore>>()
@@ -66,6 +77,7 @@ function fromLegacy(value: unknown): ProfileStore {
       displayName: typeof input.label === 'string' && input.label.trim() ? input.label : id,
       ...(typeof input.effort === 'string' ? { effort: input.effort } : {}),
       enabled: input.enabled === true,
+      origin: 'porch-import',
     }
   }
   const aliases = { ...PROFILE_ALIASES }
@@ -116,7 +128,7 @@ export async function loadProfileStore(env: NodeJS.ProcessEnv, home: string): Pr
   if (path === join(home, '.config', 'crewboard', 'profiles.json')) await migrateConfigDirectory(home)
   try {
     const raw = JSON.parse(await readFile(path, 'utf8')) as ProfileStore
-    if (raw.version !== 1 || !isRecord(raw.profiles) || !isRecord(raw.aliases) || !isRecord(raw.routing)) throw new TypeError('Invalid Orchestra profile store')
+    if (raw.version !== 1 || !isRecord(raw.profiles) || !isRecord(raw.aliases) || !isRecord(raw.routing)) throw new TypeError('Invalid Crewboard profile store')
     // A hand-edited routing missing a class falls back to that class's defaults (workerSettingsProblem names it).
     return { ...raw, routing: routingFrom(raw.routing), repos: repoPreferencesFrom(raw.repos), order: sidebarOrderFrom(raw.order) }
   } catch (error) {
@@ -159,7 +171,7 @@ export async function workerSettingsProblem(env: NodeJS.ProcessEnv, home: string
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
     return { code: 'unreadable', path, detail: error instanceof Error ? error.message : String(error) }
   }
-  if (!isRecord(raw) || raw.version !== 1 || !isRecord(raw.profiles) || !isRecord(raw.aliases) || !isRecord(raw.routing)) return { code: 'unreadable', path, detail: 'Invalid Orchestra profile store' }
+  if (!isRecord(raw) || raw.version !== 1 || !isRecord(raw.profiles) || !isRecord(raw.aliases) || !isRecord(raw.routing)) return { code: 'unreadable', path, detail: 'Invalid Crewboard profile store' }
   const classes = isRecord(raw.routing.classes) ? raw.routing.classes : {}
   const broken = TASK_CLASSES.filter((cls) => !isStringList(classes[cls]))
   return broken.length ? { code: 'incomplete', path, classes: broken } : undefined
@@ -177,12 +189,66 @@ export async function updateProfileStore(env: NodeJS.ProcessEnv, home: string, u
   try { return await operation } finally { if (updates.get(path) === operation) updates.delete(path) }
 }
 
-/** Keep the profile model in sync when the existing workers API saves a worker. */
-export async function saveWorkerProfile(env: NodeJS.ProcessEnv, home: string, entry: WorkerEntry): Promise<void> {
-  if (!entry.id?.trim() || !entry.label?.trim() || !['dsh', 'claude', 'codex', 'devin'].includes(entry.kind)) throw new TypeError('Invalid worker entry')
-  if (entry.transport && !['dsh', 'claude-cli', 'codex-cli', 'devin-acp', 'opencode', 'grok-build', 'gemini-cli'].includes(entry.transport)) throw new TypeError('Invalid worker transport')
+export class PorchImportError extends Error {
+  constructor(readonly path: string, message: string) {
+    super(message)
+    this.name = 'PorchImportError'
+  }
+}
+
+/**
+ * `workers import-porch <path>` (rq1): the person names an older tool's config on purpose, anywhere —
+ * unlike the one-time automatic migration, which only ever reads this HOME's own default location.
+ * An id already saved keeps the person's own settings; only new ids are added, every one tagged
+ * `origin: 'porch-import'` so the default preset never picks it on its own.
+ */
+export async function importPorchConfig(env: NodeJS.ProcessEnv, home: string, sourcePath: string): Promise<{ imported: string[] }> {
+  let legacy: unknown
+  try {
+    legacy = JSON.parse(await readFile(sourcePath, 'utf8')) as unknown
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new PorchImportError(sourcePath, `No such file: ${sourcePath}`)
+    throw error
+  }
+  const parsed = fromLegacy(legacy)
+  const imported: string[] = []
   await updateProfileStore(env, home, (store) => {
-    const transport = entry.transport ?? ({ dsh: 'dsh', claude: 'claude-cli', codex: 'codex-cli', devin: 'devin-acp' } as const)[entry.kind as 'dsh' | 'claude' | 'codex' | 'devin'] ?? store.profiles[entry.id]?.transport
+    const profiles = { ...store.profiles }
+    for (const [id, profile] of Object.entries(parsed.profiles)) {
+      if (id in profiles) continue
+      profiles[id] = profile
+      imported.push(id)
+    }
+    return { ...store, profiles, aliases: { ...parsed.aliases, ...store.aliases } }
+  })
+  return { imported }
+}
+
+/**
+ * «Add as worker» (wo1): an older tool's profile becomes the person's own — the `porch-import` tag goes, so it
+ * leaves «Other / imported» for its CLI's section and the default preset may pick it like any other worker.
+ */
+export async function adoptImportedProfile(env: NodeJS.ProcessEnv, home: string, id: string): Promise<boolean> {
+  let adopted = false
+  await updateProfileStore(env, home, (store) => {
+    const profile = store.profiles[id]
+    if (!profile || profile.origin !== 'porch-import') return store
+    adopted = true
+    const { origin: _origin, ...rest } = profile
+    return { ...store, profiles: { ...store.profiles, [id]: rest } }
+  })
+  return adopted
+}
+
+/** Keep the profile model in sync when the existing workers API saves a worker. */
+const KIND_TRANSPORT: Partial<Record<WorkerKind, Transport>> = { dsh: 'dsh', claude: 'claude-cli', codex: 'codex-cli', devin: 'devin-acp', opencode: 'opencode', cursor: 'cursor-agent', gemini: 'gemini-cli', grok: 'grok-build' }
+const TRANSPORTS: readonly Transport[] = ['dsh', 'claude-cli', 'codex-cli', 'devin-acp', 'opencode', 'cursor-agent', 'grok-build', 'gemini-cli']
+
+export async function saveWorkerProfile(env: NodeJS.ProcessEnv, home: string, entry: WorkerEntry): Promise<void> {
+  if (!entry.id?.trim() || !entry.label?.trim() || !WORKER_KINDS.includes(entry.kind)) throw new TypeError('Invalid worker entry')
+  if (entry.transport && !TRANSPORTS.includes(entry.transport)) throw new TypeError('Invalid worker transport')
+  await updateProfileStore(env, home, (store) => {
+    const transport = entry.transport ?? KIND_TRANSPORT[entry.kind] ?? store.profiles[entry.id]?.transport
     if (!transport) throw new TypeError(`Transport is required for worker ${entry.id}`)
     const previous = store.profiles[entry.id]
     return { ...store, profiles: { ...store.profiles, [entry.id]: {

@@ -61,8 +61,8 @@ describe('orch run lifecycle', () => {
     expect(task1).toMatchObject({ worker: 'devin', worktree: { branch: 'orch/t1-write-tests' } })
     const rpc = (await readFile(join(task1!.worktree!.path, 'rpc.jsonl'), 'utf8')).trim().split('\n').map(l => JSON.parse(l))
     expect(rpc.find(m => m.method === 'session/new').params.cwd).toBe(task1?.worktree?.path)
-    // The contract, then the rules every worker gets (bg1).
-    expect(rpc.find(m => m.method === 'session/prompt').params.prompt[0].text).toBe(`<task>write tests</task>\n\n${WORKER_RULES}`)
+    // The rules every worker gets (bg1) come first, then the contract: the steady part leads (tk1).
+    expect(rpc.find(m => m.method === 'session/prompt').params.prompt[0].text).toBe(`${WORKER_RULES}\n<task>write tests</task>\n`)
 
     // 2. running status and a second run is refused
     h.reset()
@@ -141,8 +141,10 @@ describe('orch run lifecycle', () => {
     h.reset()
     expect(await run(['steer', 't1', '--file', retained, '--relaunch', '--skip-preflight'], h.io), h.err()).toBe(0)
     expect((await loadPlan(root)).tasks[0]?.runs).toHaveLength(2)
-    const prompts = await readdir(join(root, '.orchestration/relaunch'))
-    expect(await readFile(join(root, '.orchestration/relaunch', prompts[0] as string), 'utf8')).toContain('Указание человека: keep the original text')
+    // Every run's prompt is in .orchestration/prompts: both runs' prompts are kept, even started in the same millisecond (tk1).
+    const prompts = await Promise.all((await readdir(join(root, '.orchestration/prompts'))).map((name) => readFile(join(root, '.orchestration/prompts', name), 'utf8')))
+    expect(prompts).toHaveLength(2)
+    expect(prompts.find((text) => text.includes('<previous_run>'))).toContain('Указание человека: keep the original text')
   })
 
   // vr1: finished work goes to the orchestrator first; --return relaunches with the findings.
@@ -152,10 +154,12 @@ describe('orch run lifecycle', () => {
     await run(['task', 'add', 't1', '--title', 'Write tests', '--contract', 'task-t1.md'], h.io)
     await writeFile(join(root, '.orchestration/settings.json'), JSON.stringify({ orchestratorCheck: true }))
     expect(await run(['run', 't1', '-a', 'devin', '--skip-preflight'], h.io)).toBe(0)
+    // The check is on: `run` has nothing to say about it (vc1).
+    expect(h.out()).not.toContain('orchestrator check is off')
     await finishRun((await loadPlan(root)).tasks[0]?.runs[0]?.runId as string)
     h.reset()
     await run(['status', '--json'], h.io)
-    expect(JSON.parse(h.out()).views[0]).toMatchObject({ status: 'in_review', check: 'pending' })
+    expect(JSON.parse(h.out()).views[0]).toMatchObject({ status: 'in_review', check: { state: 'pending', source: 'repository' } })
     expect(await run(['verify', 't1'], h.io)).toBe(0)
     expect((await loadPlan(root)).tasks[0]?.check).toMatchObject({ state: 'checking', by: 'orchestrator' })
     h.reset()
@@ -163,14 +167,18 @@ describe('orch run lifecycle', () => {
     const plan = await loadPlan(root)
     expect(plan.tasks[0]?.runs).toHaveLength(2)
     expect(plan.tasks[0]?.check).toBeUndefined()
-    const prompts = await readdir(join(root, '.orchestration/relaunch'))
-    expect(await readFile(join(root, '.orchestration/relaunch', prompts[0] as string), 'utf8')).toContain('Замечания оркестратора по проверке: the empty-string case is untested')
+    // Every run's prompt is in .orchestration/prompts: both runs' prompts are kept, even started in the same millisecond (tk1).
+    const prompts = await Promise.all((await readdir(join(root, '.orchestration/prompts'))).map((name) => readFile(join(root, '.orchestration/prompts', name), 'utf8')))
+    expect(prompts).toHaveLength(2)
+    expect(prompts.find((text) => text.includes('<previous_run>'))).toContain('Замечания оркестратора по проверке: the empty-string case is untested')
     await finishRun(plan.tasks[0]?.runs[1]?.runId as string)
     await run(['status'], h.io)
     expect(await run(['verify', 't1', '--done'], h.io)).toBe(2)
     expect(await run(['verify', 't1', '--done', '--note', 'tests green, stand ok'], h.io)).toBe(0)
     const human = makeHarness({ cwd: root, env, isTTY: true, answers: ['y'] })
     expect(await run(['accept', 't1'], human.io)).toBe(0)
+    // One line on the check, then the question (vc1).
+    expect(human.questions()[0]).toMatch(/^Checked by the orchestrator — tests green, stand ok\.\n/)
     expect((await loadPlan(root)).tasks[0]?.notes.find((n) => n.type === 'accept')).toMatchObject({ check: 'checked' })
     expect(await run(['verify', 't1'], h.io)).toBe(1)
   })
@@ -194,6 +202,8 @@ describe('orch run lifecycle', () => {
     expect(await run(['run', 't1', '-a', 'devin', '--skip-preflight'], h.io), h.err()).toBe(0)
     expect(h.out()).toMatch(/t1: devin started \(run_devin-/)
     expect(h.out()).not.toContain('reused')
+    // No chat and no setting: the check is off, and `run` says so once, with the command that turns it on (vc1).
+    expect(h.out()).toContain('The orchestrator check is off for this plan (no orchestrator chat); `crewboard verify --setting on` turns it on.')
     const task = (await loadPlan(root)).tasks.find((t) => t.id === 't1')
     expect(task?.runs).toHaveLength(1)
     await ready(task?.runs[0]?.runId as string)
@@ -211,6 +221,7 @@ describe('orch run lifecycle', () => {
     expect(lines.at(-1)).toBe('')
     expect(lines.at(-2)).toBe('✗ t2 was not started: The baseline run is red — the task is not sent to a worker.')
     expect(h.err()).toContain('Test Files  1 failed')
+    expect(h.err()).toMatch(/Full output \(\d+ B\): .*\.orchestration\/output\/t2\/\d+-baseline\.log/)
     expect((await loadPlan(root)).tasks.find((t) => t.id === 't2')?.runs).toEqual([])
     const ru = makeHarness({ cwd: root, env: { ...env, LC_ALL: 'ru_RU.UTF-8' } })
     expect(await run(['--lang', 'ru', 'run', 't2', '-a', 'devin', '--skip-preflight'], ru.io)).toBe(1)

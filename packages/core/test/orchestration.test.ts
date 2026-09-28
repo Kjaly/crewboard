@@ -49,6 +49,14 @@ describe('orchestration', () => {
     expect((await b.forAgent('dsh/deepseek-flash')).id).toBe('dsh')
     await expect(b.forAgent('unknown')).rejects.toMatchObject({ code: 'backend_unavailable' })
     expect((await b.forAgent('devin')).id).toBe('devin')
+    // pv1: a catalog model of any dsh provider, and a Devin worker added for one model.
+    expect((await b.forAgent('dsh/openrouter/anthropic/claude-x')).id).toBe('dsh')
+    expect((await b.forAgent('devin/swe-2-medium')).id).toBe('devin')
+  })
+
+  it('V-pv1/dsh-id resolves a dsh catalog id to its provider-qualified model without registering it', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'orch-home-'))
+    expect(await resolveProfile({}, home, 'dsh/openrouter/anthropic/claude-x')).toMatchObject({ backend: 'dsh', model: 'openrouter/anthropic/claude-x' })
   })
 
   it('resolves profiles', async () => {

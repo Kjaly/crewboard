@@ -30,12 +30,12 @@ describe('main button by status', () => {
     ['running', makeTask({ id: 'a', status: 'running' }), 'Поправить…'],
     ['in_review', makeTask({ id: 'a', status: 'in_review' }), 'Принять'],
     ['blocked', makeTask({ id: 'a', status: 'blocked', deps: ['z'], blockedBy: ['z'] }), 'Что блокирует'],
-    ['decision', makeTask({ id: 'a', status: 'ready', kind: 'decision', needsHuman: true }), 'Принять решение'],
+    ['decision', makeTask({ id: 'a', status: 'ready', kind: 'decision', needsHuman: true }), 'Подтвердить решение'],
   ]
   for (const [status, task, label] of cases) {
-    it(`offers «${label}» for ${status}`, () => {
+    it(`offers «${label}» for ${status}`, async () => {
       mount(task)
-      expect(screen.getByRole('button', { name: label })).toBeTruthy()
+      expect(await screen.findByRole('button', { name: label })).toBeTruthy()
     })
   }
 })
@@ -97,20 +97,20 @@ it('shows the renamed registry worker in the task panel', () => {
 it('accepts through the guarded POST and reports a declined dialog', async () => {
   const user = userEvent.setup()
   mount(makeTask({ id: 'a', status: 'in_review' }), () => jsonFail('declined'))
-  await user.click(screen.getByRole('button', { name: 'Принять' }))
+  await user.click(await screen.findByRole('button', { name: 'Принять' }))
   await waitFor(() => expect(screen.getByText('Отменено в окне подтверждения')).toBeTruthy())
   const [call] = posts('accept')
   expect(call?.url).toBe('/crewboard/api/accept')
   expect(call?.headers['x-orchestra-client']).toBe('1')
   expect(call?.headers['content-type']).toBe('application/json')
   expect(call?.body).toEqual({ repo: ROOT, task: 'a' })
-  expect(screen.getByText('Подтвердите в окне macOS')).toBeTruthy()
+  expect(screen.queryByText('Подтвердите в окне macOS')).toBeNull()
 })
 
 it('never returns a task without a reason', async () => {
   const user = userEvent.setup()
   mount(makeTask({ id: 'a', status: 'in_review' }))
-  await user.click(screen.getByRole('button', { name: 'Вернуть…' }))
+  await user.click(await screen.findByRole('button', { name: 'Вернуть…' }))
   await user.click(screen.getByRole('button', { name: 'Вернуть' }))
   expect(posts('reject')).toHaveLength(0)
   await user.type(screen.getByRole('textbox', { name: 'Причина возврата' }), 'нет тестов')

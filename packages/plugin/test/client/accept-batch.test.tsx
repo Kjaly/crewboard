@@ -3,7 +3,7 @@ import { setLang } from '../../src/client/i18n.js'
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import { userEvent } from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { AcceptBatch, acceptableTasks } from '../../src/client/views/accept-batch.js'
+import { AcceptBatch, acceptableTasks, batchableTasks } from '../../src/client/views/accept-batch.js'
 import type { TaskDetail } from '../../src/shared/types.js'
 import { ROOT, installFetch, jsonFail, jsonOk, makeDetail, makeRepo, makeTask } from './helpers.js'
 
@@ -31,7 +31,7 @@ const cost = {
 type Verdicts = Record<string, TaskDetail['verdict']>
 const clean: Verdicts = { a: { kind: 'result', facts: [] }, b: { kind: 'result', facts: [] }, d: undefined }
 
-function mount(r = repo, answer: unknown = jsonOk({ accepted: ['a', 'b', 'd'] }), verdicts: Verdicts = clean) {
+function mount(r = repo, answer: unknown = jsonOk({ accepted: ['a', 'b'] }), verdicts: Verdicts = clean) {
   const calls = installFetch((url) => {
     if (url.includes('/cost')) return jsonOk(cost)
     if (url.includes('/task?')) {
@@ -48,11 +48,16 @@ function mount(r = repo, answer: unknown = jsonOk({ accepted: ['a', 'b', 'd'] })
 const sheet = () => within(screen.getByRole('dialog', { name: /Принять задачи/ }))
 const loaded = () => waitFor(() => expect(sheet().queryByText('Читаю вердикты…')).toBeNull())
 
-it('counts tasks waiting for review together with human decisions, and hides itself when there are none', () => {
+it('counts the tasks a batch may take — decisions wait but are confirmed one by one (dc1)', () => {
   setLang('ru')
+  // The waiting list still holds the decision — the queue and the counters show it; the batch does not take it.
   expect(acceptableTasks(repo).map((t) => t.id)).toEqual(['a', 'b', 'd'])
+  expect(batchableTasks(repo).map((t) => t.id)).toEqual(['a', 'b'])
   mount()
-  expect(screen.getByRole('button', { name: 'Принять пакетом · 3' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Принять пакетом · 2' })).toBeTruthy()
+  cleanup()
+  mount(makeRepo([makeTask({ id: 'd', title: 'Решение', kind: 'decision', status: 'ready', needsHuman: true, check: 'checked' })]))
+  expect(screen.queryByRole('button', { name: /Принять пакетом/ })).toBeNull()
   cleanup()
   mount(makeRepo([makeTask({ id: 'go', status: 'ready' }), makeTask({ id: 'run', status: 'running' })]))
   expect(screen.queryByRole('button', { name: /Принять пакетом/ })).toBeNull()
@@ -61,17 +66,19 @@ it('counts tasks waiting for review together with human decisions, and hides its
 it('sends the checked ids to the guarded batch route', async () => {
   setLang('ru')
   const { calls, user } = mount()
-  await user.click(screen.getByRole('button', { name: 'Принять пакетом · 3' }))
+  await user.click(screen.getByRole('button', { name: 'Принять пакетом · 2' }))
   await loaded()
-  expect(sheet().getByRole('button', { name: 'Принять выбранные · 3' })).toBeTruthy()
+  expect(sheet().getByRole('button', { name: 'Принять выбранные · 2' })).toBeTruthy()
   expect(sheet().getByText(/Подтвердите в окне macOS/)).toBeTruthy()
+  // dc1: the decision waits with the rest but is not a row in the batch sheet.
+  expect(sheet().queryByText('Выбрать движок')).toBeNull()
 
   await user.click(sheet().getByRole('checkbox', { name: /Тоже на приёмке/ }))
-  const accept = sheet().getByRole('button', { name: 'Принять выбранные · 2' })
+  const accept = sheet().getByRole('button', { name: 'Принять выбранные · 1' })
   await user.click(accept)
 
   const post = calls.find((c) => c.url.endsWith('/accept-batch'))
-  expect(post).toMatchObject({ method: 'POST', body: { repo: ROOT, tasks: ['a', 'd'] } })
+  expect(post).toMatchObject({ method: 'POST', body: { repo: ROOT, tasks: ['a'] } })
   expect(post?.headers['x-orchestra-client']).toBe('1')
   expect(screen.queryByRole('dialog', { name: /Принять задачи/ })).toBeNull()
 })
@@ -79,26 +86,26 @@ it('sends the checked ids to the guarded batch route', async () => {
 it('keeps the sheet open and explains a refusal', async () => {
   setLang('ru')
   const { user } = mount(repo, jsonFail('declined'))
-  await user.click(screen.getByRole('button', { name: 'Принять пакетом · 3' }))
+  await user.click(screen.getByRole('button', { name: 'Принять пакетом · 2' }))
   await loaded()
-  await user.click(sheet().getByRole('button', { name: 'Принять выбранные · 3' }))
+  await user.click(sheet().getByRole('button', { name: 'Принять выбранные · 2' }))
   expect(sheet().getByText('Отменено в окне подтверждения')).toBeTruthy()
   cleanup()
 
   const second = mount(repo, jsonFail('not_reviewable'))
-  await second.user.click(screen.getByRole('button', { name: 'Принять пакетом · 3' }))
+  await second.user.click(screen.getByRole('button', { name: 'Принять пакетом · 2' }))
   await loaded()
-  await second.user.click(sheet().getByRole('button', { name: 'Принять выбранные · 3' }))
+  await second.user.click(sheet().getByRole('button', { name: 'Принять выбранные · 2' }))
   expect(sheet().getByText('Часть задач уже не ждёт приёмки — обновите выбор')).toBeTruthy()
 })
 
 it('shows how long each task has been waiting and opens one in the panel', async () => {
   setLang('ru')
   const { onSelect, user } = mount()
-  await user.click(screen.getByRole('button', { name: 'Принять пакетом · 3' }))
+  await user.click(screen.getByRole('button', { name: 'Принять пакетом · 2' }))
   expect(sheet().getByRole('checkbox', { name: /Готова к приёмке/ })).toBeTruthy()
+  expect(sheet().getByRole('checkbox', { name: /Тоже на приёмке/ })).toBeTruthy()
   expect(sheet().getByText(/^a · dsh · ждёт /)).toBeTruthy()
-  expect(sheet().getByText('d')).toBeTruthy()
   await loaded()
   await user.click(sheet().getAllByRole('button', { name: 'Открыть' })[0] as HTMLElement)
   expect(onSelect).toHaveBeenCalledWith('a')
@@ -116,12 +123,12 @@ it('selects nothing until the verdicts are read', async () => {
   })
   const user = userEvent.setup()
   render(<AcceptBatch repo={repo} onSelect={() => {}} />)
-  await user.click(screen.getByRole('button', { name: 'Принять пакетом · 3' }))
+  await user.click(screen.getByRole('button', { name: 'Принять пакетом · 2' }))
   expect(sheet().getByText('Читаю вердикты…')).toBeTruthy()
   expect(sheet().getByRole('button', { name: 'Принять выбранные · 0' })).toHaveProperty('disabled', true)
   release()
   await loaded()
-  expect(sheet().getByRole('button', { name: 'Принять выбранные · 3' })).toBeTruthy()
+  expect(sheet().getByRole('button', { name: 'Принять выбранные · 2' })).toBeTruthy()
 })
 
 const risky: Verdicts = {
@@ -142,15 +149,17 @@ const mixed = makeRepo([
 it.each(['ru', 'en'] as const)('pre-selects only clean results and groups risky work without ticks in the %s sheet (w1b, B03)', async (lang) => {
   setLang(lang)
   const { calls, user } = mount(mixed, jsonOk({ accepted: ['c'] }), risky)
-  await user.click(screen.getByRole('button', { name: lang === 'ru' ? 'Принять пакетом · 5' : 'Accept in batch · 5' }))
+  await user.click(screen.getByRole('button', { name: lang === 'ru' ? 'Принять пакетом · 4' : 'Accept in batch · 4' }))
   const dialog = screen.getByRole('dialog')
   await waitFor(() => expect(within(dialog).getByRole('region', { name: lang === 'ru' ? 'Чистые · 1' : 'Clean · 1' })).toBeTruthy())
   const cleanGroup = within(within(dialog).getByRole('region', { name: lang === 'ru' ? 'Чистые · 1' : 'Clean · 1' }))
-  const riskyGroup = within(within(dialog).getByRole('region', { name: lang === 'ru' ? 'Сначала открыть · 4' : 'Open first · 4' }))
+  const riskyGroup = within(within(dialog).getByRole('region', { name: lang === 'ru' ? 'Сначала открыть · 3' : 'Open first · 3' }))
   expect(cleanGroup.getByRole('checkbox', { name: /Чистый результат/ })).toHaveProperty('checked', true)
-  for (const title of [/Готова к приёмке/, /Тоже на приёмке/, /Своя работа без проверки/, /Выбрать движок/]) {
+  for (const title of [/Готова к приёмке/, /Тоже на приёмке/, /Своя работа без проверки/]) {
     expect(riskyGroup.getByRole('checkbox', { name: title })).toHaveProperty('checked', false)
   }
+  // dc1: a decision is never a row in the batch.
+  expect(within(dialog).queryByText(/Выбрать движок/)).toBeNull()
   expect(dialog.textContent).toContain(lang === 'ru' ? 'работа заблокирована' : 'work is blocked')
   expect(dialog.textContent).toContain(lang === 'ru' ? 'изменённых файлов нет' : 'no files changed')
   expect(dialog.textContent).toContain(lang === 'ru' ? 'Выбрано: чистых 1, с риском 0' : 'Selected: 1 clean, 0 at risk')
@@ -165,7 +174,7 @@ it.each(['ru', 'en'] as const)('pre-selects only clean results and groups risky 
 it('treats a verdict that could not be read as risk', async () => {
   setLang('en')
   const { user } = mount(repo, jsonOk({ accepted: [] }), { a: { kind: 'result', facts: [] }, d: undefined })
-  await user.click(screen.getByRole('button', { name: 'Accept in batch · 3' }))
+  await user.click(screen.getByRole('button', { name: 'Accept in batch · 2' }))
   const dialog = screen.getByRole('dialog')
   await waitFor(() => expect(within(dialog).getByRole('checkbox', { name: /Тоже на приёмке/ })).toHaveProperty('checked', false))
   expect(dialog.textContent).toContain('Verdict unavailable')

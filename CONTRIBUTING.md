@@ -62,7 +62,7 @@ Open `http://127.0.0.1:4640/` for the main screen or `http://127.0.0.1:4640/?scr
 
 ## Working on this repository with Crewboard
 
-This repository manages many of its own changes with Crewboard. A person or an orchestrating agent writes a task contract with the desired result and checks, adds the task to a plan in `.orchestration/`, and runs a worker in a separate worktree. `crewboard wait` pauses supervision until a run finishes or a decision is needed. A person reviews the evidence and accepts, returns with a reason, or supersedes the task; agents do not make those decisions.
+This repository manages many of its own changes with Crewboard. A person or an orchestrating agent writes a task contract with the desired result and checks, adds the task to a plan in `.orchestration/`, and runs a worker in a separate worktree. `crewboard wait` pauses supervision until a run finishes or a decision is needed. A person reviews the evidence and can accept, return with a reason, supersede, or drop a task. The orchestrator may also auto-accept and auto-merge routine checked work (`crewboard accept <id> --auto`, `crewboard merge <id> --auto`, or `orchestra_close`) while the core gates hold: a positive verdict, a clean copy, no conflicts, current check receipts, and no `<human_review>`. The orchestrator investigates repairable failures and can independently attest a corrected result. Decisions, unresolved judgment, and contracts marked `<human_review>` stay with a person, and agents have no tool for `reject`, `supersede`, `drop`, or `mark-merged`.
 
 [Architecture](docs/architecture.md) explains the package boundaries, data flow, and dsh integration. Tests live next to each package under `test/`.
 

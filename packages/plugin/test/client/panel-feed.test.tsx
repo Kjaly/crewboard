@@ -65,5 +65,5 @@ it('V-B01/feed-reason says a named failure in the reader\'s language', () => {
   const events = [{ ts: '2026-09-22T12:00:00Z', kind: 'problem' as const, text: 'Лимит Claude исчерпан', reason: { code: 'rate_limited' as const, resetsAt: '2026-09-22T19:00:00' } }]
   setLang('en')
   render(<FeedTab detail={makeDetail({ id: 'a', events })} />)
-  expect(screen.getByText('Claude usage limit reached — resets at 19:00')).toBeTruthy()
+  expect(screen.getByText('Usage limit reached — resets at 19:00')).toBeTruthy()
 })

@@ -1,11 +1,15 @@
-import type { AgentTotals, Note, EffectiveRouting, GcCandidate, GcResult, PlanSummary, RepoFamily, RepoSnapshot, RepoSource, Routing, RunCost, SidebarOrder, TaskClass, WorktreePolicy } from '@crewboard/core'
+import type { AgentTotals, Note, EffectiveRouting, GcCandidate, GcResult, PlanSummary, RepoFamily, RepoSnapshot, RepoSource, Routing, RunCost, SidebarOrder, TaskClass, WorktreePolicy, OrchestratorUsage } from '@crewboard/core'
 import type { SplitSuggestion } from '@crewboard/core'
+import type { OtherReason, SubscriptionCli, Transport, WorkerSection } from '@crewboard/core'
 export { PROFILE_ALIASES, canonicalWorkerId } from '../../../core/src/routing/identity.js'
+export { entryEffort, workerLabel } from '../../../core/src/routing/effort.js'
 
+export type { OtherReason, SubscriptionCli, Transport, WorkerSection }
 export type {
   AgentTotals,
   CheckSetting,
   CheckState,
+  DefaultBaseSetting,
   Attention,
   EffectiveRouting,
   WorkerPreset,
@@ -97,6 +101,8 @@ export type PlanCost = {
   tasks?: TaskReviewSummary[]
   coverage?: ReviewCoverage
   accountingByKindAndWindow?: Array<{ kind: 'cash' | 'apiEquivalent' | 'quota'; key: string; value: number; coverage: { known: number; eligible: number; pending: number } }>
+  /** Separate dsh chat usage. Session lifetime scope; never included in worker totals. */
+  orchestrator?: OrchestratorUsage
 }
 
 export type TaskReviewSummary = { taskId: string; title: string; taskClass?: TaskClass; currentClassFallback?: boolean; state: string; runIds: string[]; attemptIndexes: number[]; elapsedSec?: number; workerSec: number; reviewWaitMs: number; reviewIntervals: Array<{ id: string; from: string; to?: string; runId?: string; decisionId?: string; association: string }>; executionOutcomes: Array<{ runId: string; outcome: string }>; decisions: Array<{ id?: string; at: string; kind: string; verdict?: string; check?: 'checked' | 'unchecked'; reason?: string }>; accounting: { cashUsd?: number; apiEquivalentUsd?: number; quotaMeasurements: number; knownRuns: number; cashEligibleRuns?: number; equivalentKnownRuns?: number; pendingRuns: number; unavailableRuns: number } }
@@ -118,13 +124,41 @@ export type WorkerInfo = {
   id: string
   label: string
   provider: 'DeepSeek' | 'Claude' | 'Codex' | 'Devin' | 'Другие'
-  billing: 'API' | 'подписка' | 'промо'
+  billing: 'API' | 'подписка' | 'промо' | 'другое'
   main: boolean
   usedIn: Array<{ class: TaskClass; position: number }>
+  /**
+   * A model dsh serves (pv1): its dsh provider (`providerName` is how dsh names it) and model. `missing`: dsh's
+   * catalog no longer lists it, while a routing, a preset or a switch still names it. `builtin`: the model name of
+   * crewboard's own default dsh route (wo1) — with no dsh models at all it is a waiting line, not a blocked row.
+   */
+  dsh?: { provider: string; providerName: string; model: string; missing?: true; builtin?: string }
+  /**
+   * wo1: where Settings → Workers lists it, decided by its transport (`placeWorkers`): a subscription CLI's
+   * block (`cli`), dsh, or «Other / imported» (`other` says why; a duplicate names the copy that stays).
+   */
+  section?: WorkerSection
+  cli?: SubscriptionCli
+  /** wo2: `false` when Crewboard has no runner for its CLI — listed for reference, never offered in a picker. */
+  runs?: false
+  other?: OtherReason
+  duplicateOf?: string
+  transport?: Transport
+  model?: string
+  effort?: string
+  /** The name without the effort: one row per model, its efforts as chips. */
+  name?: string
 }
 
 /** GET /api/workers: the routing document, class labels, and the workers the settings editor shows. */
-export type WorkersInfo = { routing: Routing; classes: Array<{ id: TaskClass; label: string }>; known: string[]; workers: WorkerInfo[] }
+export type WorkersInfo = {
+  routing: Routing
+  classes: Array<{ id: TaskClass; label: string }>
+  known: string[]
+  workers: WorkerInfo[]
+  /** wo2: the subscription CLIs Crewboard has a runner backend for (`cliRuns` in core); absent from an older host. */
+  runnableClis?: SubscriptionCli[]
+}
 
 export type WorktreesInfo = { candidates: GcCandidate[]; totalBytes: number; policy: WorktreePolicy }
 export type WorktreeGcResult = GcResult

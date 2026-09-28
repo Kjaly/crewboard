@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Entry point of the detached Claude/Codex/Devin run supervisor: `node cli-runner-main.js '<CliRunnerArgs JSON>'`.
+// Entry point of the detached CLI/Devin run supervisor: `node cli-runner-main.js '<CliRunnerArgs JSON>'`.
 import { type CliRunnerArgs, runCliRun } from './cli-runner.js'
 
 import { type DevinRunnerArgs, runDevinRun } from './devin-runner.js'

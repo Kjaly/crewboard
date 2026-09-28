@@ -2,7 +2,7 @@ import { type KeyboardEvent, type MouseEvent, useEffect, useMemo, useState } fro
 import type { RepoSnapshot } from '../shared/types.js'
 import { t } from './i18n.js'
 import { type LaneCounts, type LaneGroups, type LaneRow, laneTree, readLaneGroups, writeLaneGroups } from './lane-tree.js'
-import { laneTitle } from './views/graph/layout.js'
+import { laneOf, laneTitle } from './views/graph/layout.js'
 
 /**
  * The third level of the sidebar tree, under the open plan: its lanes, live first. «Now» holds every
@@ -37,6 +37,8 @@ export function PlanLanes(props: {
   parentKey: string
   /** The lane the graph looks at (or the lane Work and Review filter to). */
   highlight: string | null
+  /** The selected task: going to it opens the group (and the «… N more» tail) that holds its lane. */
+  selected?: string | null
   onPick(lane: string): void
   onMenu(event: MouseEvent<HTMLElement>, lane: string): void
 }) {
@@ -53,6 +55,23 @@ export function PlanLanes(props: {
     setGroups(next)
     writeLaneGroups(repo.root, repo.planId, next)
   }
+  // Only a new selection opens a group: folding it again by hand keeps the task selected.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: The selection alone drives this reveal.
+  useEffect(() => {
+    const task = props.selected ? repo.tasks.find((item) => item.id === props.selected) : undefined
+    if (!task) return
+    const lane = laneOf(task)
+    const past = tree.history.findIndex((row) => row.lane === lane)
+    const key: keyof LaneGroups = past >= 0 ? 'history' : 'now'
+    // Read from storage, not state: on a plan switch the state still holds the previous plan's groups.
+    const stored = readLaneGroups(repo.root, repo.planId)
+    if (!stored[key]) {
+      const next = { ...stored, [key]: true }
+      setGroups(next)
+      writeLaneGroups(repo.root, repo.planId, next)
+    }
+    if (past >= HISTORY_SHOWN) setShowAll(true)
+  }, [props.selected, repo.root, repo.planId])
   const scope = `${repo.root}/${repo.planId ?? ''}`
   const groupKey = (group: keyof LaneGroups) => `lanes:${group}:${scope}`
   const rowKey = (lane: string) => `lane:${scope}:${lane}`

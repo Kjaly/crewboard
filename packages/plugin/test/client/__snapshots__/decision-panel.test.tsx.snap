@@ -47,24 +47,45 @@ exports[`keeps the ordinary task panel snapshot 1`] = `
           · ждёт приёмки
         </span>
       </div>
-      <p
-        class="orc-meta orc-panel__choice"
+      <details
+        class="orc-panel__context"
       >
-        Воркер: Codex GPT-6 Sol — выбран пресетом
-      </p>
-      <div
-        class="orc-panel__chips"
-      >
-        <span
-          class="orc-panel__chip"
+        <summary>
+          Контекст задачи
+        </summary>
+        <p
+          class="orc-meta orc-panel__choice"
         >
-          По готовому коду
-        </span>
-      </div>
+          Воркер: Codex GPT-6 Sol — выбран пресетом
+        </p>
+        <div
+          class="orc-panel__chips"
+        >
+          <span
+            class="orc-panel__chip"
+          >
+            По готовому коду
+          </span>
+        </div>
+      </details>
     </div>
     <div
       class="orc-sec orc-sec--actions"
     >
+      <div
+        class="orc-verdict orc-verdict--result"
+        role="status"
+      >
+        <span
+          aria-hidden="true"
+          class="orc-verdict__mark"
+        >
+          ✓
+        </span>
+        <strong>
+          Результат получен
+        </strong>
+      </div>
       <div
         class="orc-actions"
       >
@@ -82,11 +103,6 @@ exports[`keeps the ordinary task panel snapshot 1`] = `
           Вернуть…
         </button>
       </div>
-      <p
-        class="orc-hint"
-      >
-        Подтвердите в окне macOS
-      </p>
     </div>
   </div>
   <div
@@ -134,59 +150,52 @@ exports[`keeps the ordinary task panel snapshot 1`] = `
       class="orc-tabpanel"
       role="tabpanel"
     >
-      <div
-        class="orc-verdict orc-verdict--result"
-        role="status"
+      <details
+        class="orc-panel__history"
       >
-        <span
-          aria-hidden="true"
-          class="orc-verdict__mark"
+        <summary>
+          История и зависимости
+        </summary>
+        <section
+          class="orc-overview-section"
         >
-          ✓
-        </span>
-        <strong>
-          Результат получен
-        </strong>
-      </div>
-      <section
-        class="orc-overview-section"
-      >
-        <h3>
-          Ваши действия
-        </h3>
-        <p
-          class="orc-meta"
+          <h3>
+            Заметки и решения
+          </h3>
+          <p
+            class="orc-meta"
+          >
+            Поправок и решений пока нет.
+          </p>
+        </section>
+        <section
+          class="orc-overview-section"
         >
-          Поправок и решений пока нет.
-        </p>
-      </section>
-      <section
-        class="orc-overview-section"
-      >
-        <h3>
-          Связи
-        </h3>
-        <p
-          class="orc-meta"
-        >
-          До этой задачи
-        </p>
-        <p
-          class="orc-meta"
-        >
-          ни от чего не зависит
-        </p>
-        <p
-          class="orc-meta"
-        >
-          После этой задачи
-        </p>
-        <p
-          class="orc-meta"
-        >
-          от неё ничего не зависит
-        </p>
-      </section>
+          <h3>
+            Зависимости
+          </h3>
+          <p
+            class="orc-meta"
+          >
+            До этой задачи
+          </p>
+          <p
+            class="orc-meta"
+          >
+            ни от чего не зависит
+          </p>
+          <p
+            class="orc-meta"
+          >
+            После этой задачи
+          </p>
+          <p
+            class="orc-meta"
+          >
+            от неё ничего не зависит
+          </p>
+        </section>
+      </details>
     </div>
   </div>
 </aside>

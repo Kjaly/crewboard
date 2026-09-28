@@ -31,6 +31,13 @@ const whenTurnStarted = async (runDir: string, fn: () => Promise<unknown>) => {
 }
 
 describe('runDshRun', () => {
+  it('refuses a direct Anthropic runner before any ACP process starts', async () => {
+    const { args, log, runDir } = await setup('work', { model: 'anthropic/claude-opus' })
+    expect(await runDshRun(args)).toMatchObject({ status: 'failed', exitCode: 1, reason: { code: 'setup_failed', step: 'anthropic-automation-policy' } })
+    expect(await readFile(log, 'utf8').catch(() => '')).toBe('')
+    expect((await readRunState(runDir))?.error).toContain('Crewboard')
+  })
+
   it('completes a run and writes state and events', async () => {
     const { runDir, args } = await setup('write tests')
     const final = await runDshRun(args)
@@ -63,6 +70,13 @@ describe('runDshRun', () => {
     await runDshRun(args)
     const call = (await logOf(log)).find((e) => e.method === 'session/set_config_option')
     expect(call?.params).toMatchObject({ sessionId: 'sess-1', configId: 'model', value: '["deepseek-official","deepseek-flash"]' })
+  })
+
+  it('V-pv1/provider selects a model of another dsh provider', async () => {
+    const { log, args } = await setup('x', { model: 'openrouter/openai/gpt-x' })
+    await runDshRun(args)
+    const call = (await logOf(log)).find((e) => e.method === 'session/set_config_option')
+    expect(call?.params).toMatchObject({ configId: 'model', value: '["openrouter","openai/gpt-x"]' })
   })
 
   it('steers by interrupting the turn and continuing in the same session', async () => {

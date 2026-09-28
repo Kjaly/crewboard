@@ -14,7 +14,11 @@ function withProgram(text: string): string {
     .replaceAll(MARK, name)
 }
 
-export const help = (lang: Lang): string => {
+/** The full command reference (`{prog} help all`): every command, once a newcomer no longer needs the short page (cl2). */
+export const helpAll = (lang: Lang): string => {
   const mark = { prog: MARK }
-  return withProgram(`${cliT(lang, 'help.body', mark)}\n${cliT(lang, 'presets.help', mark)}\n${cliT(lang, 'repo.help', mark)}\n${cliT(lang, 'draft.usage', mark)}\n`)
+  return withProgram(`${cliT(lang, 'help.body', mark)}\n${cliT(lang, 'presets.help', mark)}\n${cliT(lang, 'repo.help', mark)}\n${cliT(lang, 'defaultBase.help', mark)}\n${cliT(lang, 'draft.usage', mark)}\n`)
 }
+
+/** The short «start here» page (`{prog}`, `{prog} --help`, `{prog} help`): the five commands a newcomer needs first (cl2). */
+export const helpShort = (lang: Lang): string => withProgram(cliT(lang, 'help.short', { prog: MARK }))

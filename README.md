@@ -5,7 +5,7 @@
 [![CI](https://github.com/Kjaly/crewboard/actions/workflows/ci.yml/badge.svg)](https://github.com/Kjaly/crewboard/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-**Status:** 0.4.0 · install from source (not on npm yet) · Node.js 24+ · used on macOS with dsh 0.1.5 release candidates · Linux and Windows untested
+**Status:** 0.4.0 (version from the package manifests; both packages prepared for npm) · Node.js 24+ · used on macOS with dsh 0.1.5 release candidates · Linux and Windows untested
 
 **See your coding agents at work, across projects.**\
 One board for plans, runs, costs, and decisions.
@@ -19,10 +19,10 @@ Crewboard is a plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deep
 ## How it works
 
 1. **A goal becomes a plan.** In dsh, the chat that runs the plan (the orchestrator) drafts tasks and contracts from your goal. In a terminal, `crewboard init` and `crewboard task add` do it by hand.
-2. **Workers chosen by the preset take tasks.** Codex, Claude Code, DeepSeek through dsh, and Devin work in one plan. The preset decides which worker takes each class of task; a person may pick another, an agent may not. Each run gets its own working copy (a Git worktree).
-3. **The orchestrator checks first.** When a worker finishes, the orchestrator takes the result for checking (`crewboard verify`). It hands the task to you with a note, or returns it to the worker with findings. This is on while the plan has a chat; otherwise finished work comes straight to you. Work too risky to hand to a worker (integration on a stand, the owner's database) is a `root` task the orchestrator does itself (`crewboard start`, then `crewboard verify --done --report`), and a decision reaches you only once the orchestrator has prepared its options.
-4. **You accept or send back.** Read the report, the verdict, and the changes, then accept or send the task back with a reason (it shows as **Returned** and can run again). Both need a person and a confirmation; agents have no accept tool.
-5. **You merge accepted work.** Accepting does not touch your base branch: the work stays on the task's branch until you merge it. Crewboard does not merge by itself; it shows the task as **Accepted, not merged** in **Needs you**, `crewboard status`, and `crewboard attention`, and gives the exact `git` commands. Tasks that depend on it wait until the branch is merged, so they start from code that contains it.
+2. **Workers chosen by the preset take tasks.** Codex, Claude Code, DeepSeek through dsh, and Devin work in one plan. The preset decides which worker takes each class of task, at the effort you registered it with (how hard its model thinks); a person may pick another, an agent may not. Each run gets its own working copy (a Git worktree).
+3. **The orchestrator checks first.** When a worker finishes, the orchestrator takes the result for checking (`crewboard verify`) — it can also run the contract's own checks itself, next to the worker's claim. It hands the task to you with a note, or returns it to the worker with findings. This is on while the plan has a chat; otherwise finished work comes straight to you. Work too risky to hand to a worker (integration on a stand, the owner's database) is a `root` task the orchestrator does itself (`crewboard start`, then `crewboard verify --done --report`), and a decision reaches you only once the orchestrator has prepared its options.
+4. **The orchestrator closes routine work.** After a positive verdict, its check and green contract checks, it can accept and merge with `orchestra_close`. You decide explicit decision tasks, disputed results and contracts marked `<human_review>`. You can still accept or send work back yourself.
+5. **Accepted work is merged into its plan branch.** Acceptance leaves the task branch separate. `orchestra_close` can perform the merge after checking the base and conflicts; the screen and `crewboard merge` remain available to you. Until the merge lands, Crewboard shows **Accepted, not merged**, and dependent tasks wait.
 
 ## Is it for you
 
@@ -38,43 +38,53 @@ I run several repositories through coding agents and could not see what each age
 - **The plan is a graph.** Tasks have dependencies, a class, and a contract that states the result and the checks. You see each task's state and the critical path.
 - **A run ledger for every run.** What the run did and what it claims: events, changed files, the worker's report, and which contract checks it says it ran.
 - **Costs kept apart.** Money charged, an estimate at API prices, and "no data" never look the same. See [what each number means](docs/en/costs.md).
-- **The last word is yours.** The orchestrator checks finished work first; accepting it, sending it back, or superseding it is up to a person.
+- **Judgment stays yours.** The orchestrator can accept and merge routine checked work; decisions, disputed results and explicit human review remain with you.
 
 ## Install
 
-> [!IMPORTANT]
-> Crewboard is not on npm yet: install it from source for now. This section is the one install path; the other guides link here.
+**Current install: from a source checkout.** The npm release is not published yet, so the commands below are the install path today; `npm install -g crewboard` and `dsh plugin --profile web add dsh-crewboard` become available only after a maintainer publishes the release (see [releasing](docs/releasing.md)).
 
 ### Prerequisites
 
-- **To build:** Node.js 24 or newer, Git, and pnpm 11.5.2.
+- **To install:** Node.js 24 or newer, pnpm 11.5.2, and Git.
 - **For the screen:** dsh (DeepSeek Harness): `npm install -g @deepseek-ai/dsh`. The CLI works without it.
 - **For the orchestrator chat** (Quick start A, **From chat**): a DeepSeek API key. The chat runs on DeepSeek inside dsh; add the key in dsh under **Settings → Models**, or export `DEEPSEEK_API_KEY`. dsh workers use the same key.
-- **For each worker:** its CLI installed and signed in: `claude auth login`, `codex login`, `devin auth login`; a dsh worker needs the DeepSeek key above. `crewboard preflight` checks all of them, and the screen marks a worker **ready** only after that check passed.
+- **For each worker:** its CLI installed and ready: `codex login`, `devin auth login`, or a dsh worker with the DeepSeek key above. Automated Claude Code needs an explicit `ANTHROPIC_API_KEY` against the official Anthropic endpoint instead of a subscription login (see [the API-only policy](docs/notes/2026-09-28-anthropic-automation-policy.md)). `crewboard preflight` checks all of them, and the screen marks a worker **ready** only after that check passed.
 - **To accept on the screen:** dsh running on a macOS host. **Accept** asks for confirmation in a macOS dialog; elsewhere, accept in a terminal with `crewboard accept <id>`.
 
-Build and link the CLI; you get both `crewboard` and `orch`:
+Build the CLI from a checkout; you get both `crewboard` and `orch`:
 
 ```sh
 git clone https://github.com/Kjaly/crewboard.git
 cd crewboard
 pnpm install --frozen-lockfile
 pnpm build
-npm install -g ./packages/cli     # a link to this build; rebuild, no reinstall
-crewboard --help
+node packages/cli/dist/main.js --help
 ```
 
-Only want the terminal? Stop here: the CLI works without dsh. dsh adds the screen, notifications, the orchestrator chat, and dsh workers.
+The quick-start examples below write `crewboard` (and `orch`). From a checkout without a global install, run them as `node packages/cli/dist/main.js …`, or define shell functions that use the absolute path (for this shell session):
 
-To add the screen, install the plugin from the same checkout into dsh's `web` profile:
+```sh
+CREWBOARD_CLI="$PWD/packages/cli/dist/main.js"
+crewboard() { node "$CREWBOARD_CLI" "$@"; }
+orch() { crewboard "$@"; }
+```
+
+Only want the terminal? Stop here: the CLI works without dsh and has no private runtime dependency. dsh adds the screen, notifications, the orchestrator chat, and dsh workers.
+
+To add the screen, install the plugin from the same checkout into dsh's `web` profile by path:
 
 ```sh
 dsh plugin --profile web add "$PWD/packages/plugin"
 ```
 
+After publication these two steps become `npm install -g crewboard` and `dsh plugin --profile web add dsh-crewboard`.
+
 Then add the repositories to show: press **+** next to **Repositories** on the screen and paste a folder path, or run `crewboard init` (or `crewboard repo add`) inside a repository. dsh workspaces appear on their own; the plugin's `repos` setting and `CREWBOARD_REPOS` still work. Details and what to check in your dsh are in [plugin setup](docs/en/plugin-setup.md#connect-repositories).
 
-Checked on macOS (Node.js 24.16, pnpm 11.5.2) in a separate npm prefix and throwaway dsh profile. Not checked: the screen in every dsh version, a clean machine, Linux, Windows.
+[CONTRIBUTING.md](CONTRIBUTING.md) has the full source-build steps, the checks, and how to run the plugin stand.
+
+Checked on macOS (Node.js 24.16, pnpm 11.5.2) from a source checkout and a throwaway dsh profile. Not checked: the screen in every dsh version, a clean machine, Linux, Windows.
 
 ## Quick start A: from the dsh chat
 
@@ -89,24 +99,32 @@ Checked on macOS (Node.js 24.16, pnpm 11.5.2) in a separate npm prefix and throw
 
 ## Quick start B: CLI only
 
-In a Git repository, write a contract, for example `docs/tasks/api.md`:
+In a Git repository, create a plan and a task, and get a contract skeleton to fill in:
+
+```sh
+crewboard init --goal "Split the API into modules"
+crewboard task add api --title "Extract the API" --class code --template
+```
+
+`--template` writes the skeleton to `.orchestration/contracts/main/api.md`. Open it and fill in what must be true when the work is done (the **Result** section) and the commands a reviewer runs, one per line, between `<checks>` and `</checks>`:
 
 ```markdown
-# Extract the API module
+## Result
 
 Move the HTTP handlers from src/server.ts into src/api/ without changing behaviour.
-Start your final answer with `Result: received`, `Result: negative`, or `Result: blocked`.
+
+## Checks
+
+…
 
 <checks>
 - pnpm test
 </checks>
 ```
 
-Create a plan and a task, and start the worker the preset chooses:
+`run` refuses to start it while it still reads like the unfilled skeleton (`--force` overrides). Then:
 
 ```sh
-crewboard init --goal "Split the API into modules"
-crewboard task add api --title "Extract the API" --class code --contract docs/tasks/api.md
 crewboard status          # what is ready, what waits, the critical path
 crewboard workers         # registered workers and their order per task class
 crewboard run api         # the preset's worker for "code", in its own working copy
@@ -124,7 +142,7 @@ crewboard reject api --reason "Route compatibility is not verified"   # send bac
 `accept` prints the next step: the work is on the branch `orch/api-…` until you merge it, and tasks that depend on `api` wait for that:
 
 ```sh
-git merge --no-ff orch/api-extract-the-api   # in the main checkout, on the base branch
+crewboard merge api                            # or manually: git merge --no-ff orch/api-extract-the-api, in the main checkout on the base branch
 crewboard status                               # api is no longer "accepted, not merged"
 ```
 
@@ -148,6 +166,7 @@ The sidebar, the task panel, the Work view, and settings are in [getting started
 - **Costs are only as good as their source.** Some runs report money, some tokens or quota, some nothing.
 - **Plans stay in the repository.** They live in `.orchestration/`, excluded through `.git/info/exclude`; worker profiles and presets in `~/.config/crewboard/`. Unaccepted or dirty working copies are never removed automatically.
 - **macOS only, so far.** Confirmation dialogs are macOS dialogs, and I check the dsh integration only against the dsh versions I run.
+- **Claude automation uses a conservative API-only policy.** The guard is implemented; update Crewboard to activate it; see the [dated policy and implementation status](docs/notes/2026-09-28-anthropic-automation-policy.md). Subscription sign-in is excluded from Crewboard automation; this is stricter than some officially permitted workflows. Interactive Claude outside Crewboard is unaffected, and a guarded Claude run records no API charge — only a client-side estimate kept separate from subscription quota.
 
 The [architecture notes](docs/architecture.md) describe the packages and data flow.
 

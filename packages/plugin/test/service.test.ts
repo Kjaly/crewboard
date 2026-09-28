@@ -79,6 +79,23 @@ describe('OrchestraService', () => {
     }
   })
 
+  it('gives the screen a quick first paint of a new repository; notifications hear only the full snapshot (pf1)', async () => {
+    const [a, b] = [await repo('A'), await repo('B')]
+    const svc = new OrchestraService({ config: { repos: [a, b], refreshMs: 60_000 }, backendsFor: () => idle, now: () => NOW })
+    const screen: OrchestraSnapshot[] = []
+    const plain: OrchestraSnapshot[] = []
+    svc.subscribe((s) => screen.push(s), { partial: true })
+    svc.subscribe((s) => plain.push(s))
+    await svc.refresh()
+    expect(screen.map((s) => s.repos.map((r) => [r.goal, r.partial ?? false]))).toEqual([[['A', true], ['B', true]], [['A', false], ['B', false]]])
+    expect(plain.map((s) => s.repos.map((r) => r.partial ?? false))).toEqual([[false, false]])
+    expect(screen[0]?.repos[0]?.tasks.map((t) => t.id)).toEqual(['t1'])
+    // A repository already served is refreshed in full only: no second quick paint.
+    await svc.refresh()
+    expect(screen).toHaveLength(3)
+    expect(plain).toHaveLength(2)
+  })
+
   it('keeps a missing plan as an expected repo snapshot', async () => {
     const empty = await mkdtemp(join(tmpdir(), 'orch-svc-empty-'))
     const svc = new OrchestraService({ config: { repos: [empty], refreshMs: 60_000 }, backendsFor: () => idle, now: () => NOW })

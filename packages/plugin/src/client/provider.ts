@@ -62,7 +62,11 @@ export function runDuration(from: string | undefined, now: Date = new Date()): s
 export function runFact(task: TaskSnapshot, now: Date = new Date()): string {
   if (task.runs === 0 && task.status !== 'running') return '—'
   const from = task.status === 'running' ? task.activeSince : task.acceptedAt
-  if (task.status === 'running') return runDuration(from, now) ?? '—'
+  // A running task says its command, still going, or a quiet spell — never both (st2, fo1).
+  if (task.status === 'running') {
+    const info = task.runningMin !== undefined ? t('card.running', { count: task.runningMin, command: task.command ?? '' }) : task.stalledMin !== undefined ? t('card.stalled', { count: task.stalledMin }) : undefined
+    return [runDuration(from, now) ?? '—', info].filter(Boolean).join(' · ')
+  }
   if (!from || !Number.isFinite(Date.parse(from)) || Date.parse(from) > now.getTime()) return '—'
   return relativeTime(new Date(from), now)
 }

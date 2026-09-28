@@ -3,11 +3,13 @@ import type { RepoSnapshot, TaskDetail, TaskSnapshot } from '../shared/types.js'
 import { useAction } from './actions.js'
 import { api } from './api.js'
 import { t, useLang } from './i18n.js'
+import { ReviewSignals, verdictMark, verdictTone } from './review-signals.js'
 import { usePlanCost } from './insight.js'
 import { reportLine } from './panel/report.js'
 import type { PlanItem } from './plans.js'
 import { acceptableTasks, backgroundReview } from './review.js'
 import { taskTone } from './styles.js'
+import { conflictLabel } from './conflicts.js'
 import { orchestraStore } from './store.js'
 import { AcceptBatch, waitLabels } from './views/accept-batch.js'
 
@@ -56,7 +58,7 @@ function QueueRow({
   const report = detail?.report?.text.trim() ? reportLine(detail.report.text) : undefined
   // w1b (B03): the verdict next to the title, so a risky result is visible before Accept; a decision has none (B05).
   const verdict = detail?.verdict
-  const verdictReason = verdict?.why ? t(`verdict.why.${verdict.why}`) : verdict?.mismatch ? t(`verdict.mismatch.${verdict.mismatch}`).replace(/\.$/, '') : ''
+  const verdictReason = verdict?.caution ? t(`verdict.caution.${verdict.caution}`) : verdict?.why ? t(`verdict.why.${verdict.why}`) : verdict?.mismatch ? t(`verdict.mismatch.${verdict.mismatch}`).replace(/\.$/, '') : ''
   const meta = [decision ? t('queue.decisionYours') : (task.worker ?? '—'), wait, open && files ? t('queue.files', { count: files.length }) : undefined]
     .filter(Boolean)
     .join(' · ')
@@ -73,7 +75,8 @@ function QueueRow({
           {open ? '▾' : '▸'}
         </span>
       </button>
-      {verdict ? <span className={`orc-qrow__verdict orc-verdict--${verdict.kind}`} title={verdictReason || undefined}><span className="orc-verdict__mark" aria-hidden="true">{verdict.kind === 'result' ? '✓' : verdict.kind === 'negative' ? '−' : '?'}</span>{t(`verdict.${verdict.kind}`)}{verdictReason ? ` · ${verdictReason}` : ''}</span> : null}
+      {verdict ? <><span className={`orc-qrow__verdict orc-verdict--${verdictTone(verdict)}`} title={verdictReason || undefined}><span className="orc-verdict__mark" aria-hidden="true">{verdictMark(verdict)}</span>{t(`verdict.${verdict.kind}`)}{verdictReason ? ` · ${verdictReason}` : ''}</span>{task.reviewCheck ? <ReviewSignals check={task.reviewCheck} /> : null}</> : task.reviewCheck ? <ReviewSignals check={task.reviewCheck} /> : null}
+      {task.conflicts?.length ? <span className="orc-qrow__conflicts" title={task.conflicts.map(conflictLabel).join('\n')}>⚠ {t('queue.conflicts')} · {task.conflicts.map(conflictLabel)[0]}{task.conflicts.length > 1 ? ` (+${task.conflicts.length - 1})` : ''}</span> : null}
       {report ? <span className="orc-qrow__report">{report}</span> : null}
       <span className="orc-meta">{meta}</span>
 
@@ -97,12 +100,21 @@ function QueueRow({
       ) : null}
 
       <div className="orc-qrow__acts">
-        <button type="button" className="orc-btn orc-btn--ghost" onClick={() => onOpenTask(task.id, !decision)}>
-          {decision ? t('queue.open') : t('queue.changes')}
-        </button>
-        <button type="button" className="orc-btn" disabled={action.pending} onClick={() => action.call(() => api.accept(root, task.id))}>
-          {t('queue.accept')}
-        </button>
+        {decision ? (
+          // dc1: no blind Accept for a decision — the concrete proposal is confirmed in the task panel.
+          <button type="button" className="orc-btn" onClick={() => onOpenTask(task.id, false)}>
+            {t('queue.openDecision')}
+          </button>
+        ) : (
+          <>
+            <button type="button" className="orc-btn orc-btn--ghost" onClick={() => onOpenTask(task.id, true)}>
+              {t('queue.changes')}
+            </button>
+            <button type="button" className="orc-btn" disabled={action.pending} onClick={() => action.call(() => api.accept(root, task.id))}>
+              {t('queue.accept')}
+            </button>
+          </>
+        )}
         <button type="button" className="orc-btn orc-btn--ghost" aria-expanded={rejecting} onClick={() => setRejecting(!rejecting)}>
           {t('queue.sendBackMore')}
         </button>
@@ -185,6 +197,9 @@ function OtherPlanRow({ root, plan }: { root: string; plan: PlanItem }) {
 export function ReviewQueue({ repo, onOpenTask, onClose }: { repo: RepoSnapshot; onOpenTask(id: string, changes?: boolean): void; onClose(): void }) {
   const lang = useLang()
   const tasks = useMemo(() => acceptableTasks(repo), [repo])
+  // dc1: the decisions sit in a group of their own — each is opened and confirmed for what it proposes.
+  const decisions = useMemo(() => tasks.filter((t) => t.kind === 'decision'), [tasks])
+  const work = useMemo(() => tasks.filter((t) => t.kind !== 'decision'), [tasks])
   const others = useMemo(() => backgroundReview(repo), [repo])
   const otherCount = others.reduce((n, p) => n + p.waitingHuman, 0)
   const { cost } = usePlanCost(repo.root, repo.rev)
@@ -218,7 +233,16 @@ export function ReviewQueue({ repo, onOpenTask, onClose }: { repo: RepoSnapshot;
         ) : null}
 
         <ul className="orc-queue__list">
-          {tasks.map((task) => (
+          {decisions.length > 0 ? (
+            <>
+              <li className="orc-queue__section">{t('queue.decisions')}</li>
+              {decisions.map((task) => (
+                <QueueRow key={task.id} root={repo.root} task={task} wait={waits.get(task.id)} onOpenTask={onOpenTask} />
+              ))}
+              {work.length > 0 ? <li className="orc-queue__section">{t('queue.work')}</li> : null}
+            </>
+          ) : null}
+          {work.map((task) => (
             <QueueRow key={task.id} root={repo.root} task={task} wait={waits.get(task.id)} onOpenTask={onOpenTask} />
           ))}
         </ul>

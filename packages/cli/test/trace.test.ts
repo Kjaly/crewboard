@@ -1,11 +1,13 @@
 import { expect, it } from 'vitest'
 import { type RawEvent, buildTrajectory } from '@crewboard/core'
 import { renderTrace } from '../src/commands/trace.js'
+import { loadLang } from '../src/i18n.js'
 
 const T0 = Date.parse('2026-09-22T12:00:00Z')
 const at = (sec: number) => new Date(T0 + sec * 1000).toISOString()
 
-it('renders totals, lanes and a span list', () => {
+it('renders totals, lanes and a span list', async () => {
+  await loadLang('ru')
   const events: RawEvent[] = [
     { ts: at(0), type: 'turn_started', data: { turn: 1, text: 'write tests' } },
     { ts: at(2), type: 'tool_started', data: { tool: 'bash', status: 'running', input: { command: 'node --test' }, callId: 'c1' } },

@@ -21,7 +21,8 @@ export type SystemPromptFace = { section(section: { name: string; order: number;
 
 /** `ctx.sessionController` (@deepseek-ai/dsh-api-session-controller), the face the plan chat uses. */
 export type SessionControllerFace = {
-  modelCatalog?(): Promise<{ groups: unknown[]; failures: unknown[] }>
+  /** dsh's model catalog (`{ default, routableProviders, groups, failures }`); read through core `readDshCatalog`. */
+  modelCatalog?(): Promise<unknown>
   create(request: { cwd?: string; agentPreset?: string }): Promise<{ sessionId: string }>
   prompt(request: { requestId: string; sessionId: string; mode: 'queue' | 'steer'; content: ContentBlock[] }, signal: AbortSignal): Promise<{ accepted: true }>
   inspect(sessionId: string, signal?: AbortSignal): Promise<unknown>

@@ -30,12 +30,13 @@ it('shows the welcome frame for no plan and empty plan, then leaves it when task
   expect(screen.getByRole('heading', { name: 'Break work into tasks and hand them to workers' })).toBeTruthy()
   expect(screen.queryByText(/plan not found:/)).toBeNull()
   expect(screen.queryByText('0 tasks')).toBeNull()
+  // nb1: an empty plan asks for its first task instead of repeating the ways to start.
   const empty = makeSnapshot(makeRepo([], [], { hasPlan: true }))
   await act(async () => FakeEventSource.last?.emit('snapshot', empty))
-  expect(screen.getByRole('heading', { name: 'How to start' })).toBeTruthy()
+  expect(screen.getByRole('heading', { name: 'Add the first task' })).toBeTruthy()
   const active = makeSnapshot(makeRepo([makeTask({ id: 'a' })], [], { hasPlan: true }))
   await act(async () => FakeEventSource.last?.emit('snapshot', active))
-  expect(screen.queryByRole('heading', { name: 'How to start' })).toBeNull()
+  expect(screen.queryByRole('heading', { name: 'Add the first task' })).toBeNull()
 })
 
 it('uses worker and recipe data and saves the detected recipe from the form', async () => {
@@ -60,7 +61,7 @@ it('uses Russian throughout the welcome and sends the active language when creat
   const calls = fetches(snap)
   render(<App />)
   await act(async () => FakeEventSource.last?.emit('snapshot', snap))
-  expect(screen.getByText('Все воркеры · встроенный')).toBeTruthy()
+  expect(screen.getByText('По умолчанию: воркеры, прошедшие проверку · встроенный')).toBeTruthy()
   await userEvent.setup().click(screen.getByRole('button', { name: /Посмотреть пример/ }))
   await waitFor(() => expect(calls.find((call) => call.url.endsWith('/example-create'))?.body).toMatchObject({ lang: 'ru' }))
 })

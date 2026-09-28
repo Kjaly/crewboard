@@ -61,10 +61,10 @@ describe('plan store', () => {
     expect(await readFile(planPath(root), 'utf8')).toBe('{ not json')
   })
 
-  it('leaves no temp or lock files behind', async () => {
+  it('leaves no temp or lock files behind, only the previous version', async () => {
     await initPlan(root, 'g')
     await updatePlan(root, (p) => p)
-    expect((await readdir(join(root, '.orchestration'))).sort()).toEqual(['plan.json'])
+    expect((await readdir(join(root, '.orchestration'))).sort()).toEqual(['plan.json', 'plan.json.prev'])
   })
 })
 

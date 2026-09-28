@@ -21,7 +21,7 @@ it('keeps final-only usage unattributed and switches independent units', async (
   expect(screen.getByText('No step-level usage recorded')).toBeTruthy()
   expect(screen.getAllByText('USD 0.2')).toHaveLength(2)
   await user.click(screen.getByRole('button', { name: 'Equivalent' }))
-  expect(screen.getByText('Estimate, not charged')).toBeTruthy()
+  expect(screen.getByText('Estimate, not an invoice')).toBeTruthy()
   expect(screen.getAllByText('USD 1')).toHaveLength(2)
   await user.click(screen.getByRole('button', { name: 'Quota' }))
   expect(screen.getByText('Account window measurements')).toBeTruthy()

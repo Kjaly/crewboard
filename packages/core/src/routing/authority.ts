@@ -30,8 +30,15 @@ export function callerOf(channel: CallerChannel): Caller {
 export const AUTO_WORKER = 'auto'
 export const isAutoWorker = (worker: string | undefined): boolean => worker?.trim().toLowerCase() === AUTO_WORKER
 
-/** The workers an agent may choose for a class: the effective preset's list after machine prohibitions. */
-export const presetWorkers = (routing: EffectiveRouting, cls: TaskClass): string[] => routing.routing[cls]
+/**
+ * The workers an agent may choose for a class, in launch order: the effective preset's list after machine
+ * prohibitions, then — for the built-in preset — every other known worker (`fallback`).
+ */
+export function presetWorkers(routing: EffectiveRouting, cls: TaskClass): string[] {
+  const listed = routing.routing[cls]
+  const extra = (routing.fallback ?? []).filter((id) => !listed.some((other) => canonicalWorkerId(other) === canonicalWorkerId(id)))
+  return [...listed, ...extra]
+}
 
 export function presetAllows(routing: EffectiveRouting, cls: TaskClass, worker: string, aliases: Record<string, string> = {}): boolean {
   const canonical = (id: string) => canonicalWorkerId(canonicalWorkerId(id, aliases))
@@ -39,7 +46,9 @@ export function presetAllows(routing: EffectiveRouting, cls: TaskClass, worker: 
 }
 
 type Lang = 'en' | 'ru'
-export const presetName = (routing: EffectiveRouting, lang: Lang): string => (routing.preset.builtin ? (lang === 'ru' ? 'Все воркеры' : 'All workers') : routing.preset.label)
+/** The built-in preset's name says what it is: the workers that pass their checks (nb1). */
+export const builtinPresetName = (lang: Lang): string => (lang === 'ru' ? 'По умолчанию: воркеры, прошедшие проверку' : 'Default: workers that pass checks')
+export const presetName = (routing: EffectiveRouting, lang: Lang): string => (routing.preset.builtin ? builtinPresetName(lang) : routing.preset.label)
 
 export class PresetAuthorityError extends Error {
   readonly code = 'outside_preset'

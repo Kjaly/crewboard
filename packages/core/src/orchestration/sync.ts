@@ -11,18 +11,23 @@ import { resolveOrchestratorCheck } from './check-setting.js'
 import { claimOf } from './verdict.js'
 import { nodeExec } from '../exec.js'
 import { recordMerges } from '../worktree/merged.js'
+import { stateFileError } from '../util/state-file.js'
 
 /**
  * bg1: a clean finish that hands nothing in — the worker's copy has uncommitted changes and its answer carries
  * no result claim (neither in its first lines nor on the report's first line — verdict.ts:claimLineOf). Typically a worker that ended its turn
- * «waiting» for work it had started in the background. Unreadable evidence or git state is not a verdict.
+ * «waiting» for work it had started in the background.
+ * cm1: a claimed result is not enough either, once the runner already asked the worker to commit before its final
+ * report (`evidence.commitNudged`) and the copy is still dirty — the worker reported again without committing.
+ * Unreadable evidence or git state is not a verdict.
  */
 export async function incompleteRun(task: Pick<Task, 'worktree'>, evidence: RunEvidence | undefined): Promise<Run['incomplete']> {
   if (!evidence || !task.worktree || evidence.finalAnswerState === 'unreadable') return undefined
-  if (claimOf(evidence.finalAnswer) || claimOf(evidence.claimLine) || claimOf(evidence.report?.text)) return undefined
+  const claimed = !!(claimOf(evidence.finalAnswer) || claimOf(evidence.claimLine) || claimOf(evidence.report?.text))
+  if (claimed && !evidence.commitNudged) return undefined
   const uncommitted = await uncommittedFiles(task.worktree.path)
   if (!uncommitted) return undefined
-  return { reason: evidence.finalAnswer ? 'no_claim' : 'no_report', uncommitted }
+  return claimed ? { reason: 'left_uncommitted', uncommitted } : { reason: evidence.finalAnswer ? 'no_claim' : 'no_report', uncommitted }
 }
 
 async function collectRunStates(plan: Plan, backends: Backends): Promise<{ states: RunStateMap; degraded: boolean }> {
@@ -43,8 +48,16 @@ async function collectRunStates(plan: Plan, backends: Backends): Promise<{ state
 }
 
 /**
+ * `readOnly` (pf1): the plan as stored with its runs' current states, in memory — no merge detection (no git), nothing
+ * written. The screen's first paint uses it; the full sync that follows records and persists.
+ */
+export type SyncOptions = { readOnly?: boolean }
+
+/**
  * Reads the plan, records accepted work that was merged, asks each run's backend about unfinished runs and
- * persists newly finished ones.
+ * persists newly finished ones. What it writes — evidence, run bookkeeping — is derived from what it read
+ * (sf1): when that write fails (a full or read-only disk, a busy lock), the reader still gets the plan as
+ * synced in memory, with the failure in `unsaved`; the next sync writes it.
  * Runs that recorded a subscription quota before start get the quota after finish: Codex from app-server,
  * Claude from the status line log (weekly window).
  */
@@ -54,10 +67,15 @@ export async function syncPlan(
   now: Date,
   claudeLimitsFile: string = claudeLimitsPath(process.env, homedir()),
   asked?: string,
-): Promise<{ plan: Plan; states: RunStateMap; degraded: boolean }> {
+  options: SyncOptions = {},
+): Promise<{ plan: Plan; states: RunStateMap; degraded: boolean; unsaved?: Error }> {
   // Bookkeeping names the plan it read: finished runs land in an archived plan too (B22).
   const planId = asked ?? currentPlanId(root)
   const loaded = await loadPlan(root, planId)
+  if (options.readOnly && !loaded.example) {
+    const { states, degraded } = await collectRunStates(loaded, backends)
+    return { plan: syncRuns(loaded, states, now).plan, states, degraded }
+  }
   // Accepted work that reached the base branch becomes `merged` (w1d); a plan this build may not write stays as read.
   const plan = loaded.example ? loaded : await recordMerges(root, loaded, nodeExec, now, planId).catch(() => loaded)
   if (plan.example) {
@@ -74,7 +92,16 @@ export async function syncPlan(
     return task.status === 'in_review' && last?.outcome === 'completed' && !!last.finishedAt && task.check?.runId !== last.runId
   })
   if (finished.length === 0 && !unchecked) return { plan, states, degraded }
+  try {
+    return { plan: await persistSync(root, plan, planId, states, finished, checking, backends, now, claudeLimitsFile), states, degraded }
+  } catch (err) {
+    // Nothing is written when any part fails: a run recorded as finished without its evidence would never get it.
+    const unsaved = stateFileError(err) ?? (err instanceof Error ? err : new Error(String(err)))
+    return { plan: syncRuns(plan, states, now).plan, states, degraded, unsaved }
+  }
+}
 
+async function persistSync(root: string, plan: Plan, planId: string, states: RunStateMap, finished: string[], checking: boolean, backends: Backends, now: Date, claudeLimitsFile: string): Promise<Plan> {
   const references = new Map<string, string>()
   for (const task of plan.tasks) {
     for (const run of task.runs) {
@@ -122,5 +149,5 @@ export async function syncPlan(
     }
     return next
   }, 5, planId)
-  return { plan: saved, states, degraded }
+  return saved
 }

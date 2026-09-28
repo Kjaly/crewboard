@@ -1,3 +1,7 @@
+import { claimOf } from '../orchestration/verdict.js'
+import type { RawEvent } from './raw-event.js'
+import { writesFile } from './normalize.js'
+
 /**
  * A human-readable report taken from the worker's own final answer (plan 2j). `orchestrator` (rt1): the
  * report of a root task or a decision the orchestrator stored with `verify --done` — `runId` is empty.
@@ -48,6 +52,37 @@ export function finalMessage(raw: unknown[]): string | undefined {
   }
   const text = parts.join('')
   return text.trim() ? text : undefined
+}
+
+/** The answer that carries the worker's report, and the worker's last answer when it came after the report (vr2). */
+export type ReportedAnswer = { text?: string; followUp?: string }
+
+const CANCEL_STEER = 'остановка по запросу'
+
+/**
+ * The answer the verdict reads (vr2, ny1). A direction queued after the report makes the worker answer again, and that
+ * answer is the run's last message; it is not the report. Turns (split at `turn_started`) that answer a direction and
+ * write no file are set aside, and the last answer with a result line before them is the report. When a later turn
+ * writes files, the last answer with a result line anywhere is read. Either way the run's last answer, when it is
+ * another one, is kept as the follow-up. Without a result line in any turn the last answer is the report, as before.
+ */
+export function reportedAnswer(raw: unknown[]): ReportedAnswer {
+  const events = raw.filter(isEvent)
+  const last = finalMessage(events)
+  const starts = events.flatMap((ev, i) => (ev.type === 'turn_started' ? [i] : []))
+  const bounds = [0, ...starts.filter((i) => i > 0), events.length]
+  const segments = bounds.slice(1).map((end, k) => events.slice(bounds[k], end))
+  const turns = segments.map((segment, k) => ({
+    answer: finalMessage(segment),
+    direction: k > 0 && (segments[k - 1] ?? []).some((ev) => ev.type === 'steer' && asText(ev.data) !== CANCEL_STEER),
+    writes: segment.some((ev) => writesFile(ev as RawEvent)),
+  }))
+  let settled = turns.length
+  while (settled > 1 && turns[settled - 1]?.direction && !turns[settled - 1]?.writes) settled--
+  const claimed = (list: typeof turns) => list.findLast((turn) => claimOf(turn.answer))?.answer
+  const text = claimed(turns.slice(0, settled)) ?? claimed(turns) ?? last
+  if (!text) return {}
+  return { text, ...(last && last !== text ? { followUp: last } : {}) }
 }
 
 function truncate(text: string, limit: number): { text: string; truncated: boolean } {

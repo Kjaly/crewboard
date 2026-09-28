@@ -47,6 +47,9 @@ describe('notification settings control', () => {
     expect(notification.requests).toBe(0)
 
     await user.click(screen.getByRole('radio', { name: 'В браузере' }))
+    expect(screen.getByRole('radio', { name: 'В браузере' }).getAttribute('aria-checked')).toBe('true')
+    // The styled segmented control, not bare native radio inputs (wo1).
+    expect(document.querySelector('input[type="radio"]')).toBeNull()
     const allow = screen.getByRole('button', { name: 'Разрешить уведомления в браузере' })
     expect(notification.requests).toBe(0)
 

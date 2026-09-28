@@ -161,6 +161,25 @@ function foldIntoLanes(tasks: TaskSnapshot[], raw: Raw[], order?: readonly strin
   return out
 }
 
+/** The first row of each lane — a pin's `y` is stored as an offset from it, not as a world position. */
+function originsOf(nodes: ReadonlyMap<string, NodePos>): Map<string, number> {
+  const origins = new Map<string, number>()
+  for (const pos of nodes.values()) {
+    const top = origins.get(pos.lane)
+    if (top === undefined || pos.y < top) origins.set(pos.lane, pos.y)
+  }
+  return origins
+}
+
+/**
+ * The lane top a manual pin's `y` is relative to (mm1): the natural stack, as if nothing in the plan
+ * were pinned. Level columns, not ELK — cheap enough to call from a pointer handler, and the small
+ * drift against ELK's own columns rides the same spring reflow every layout already tolerates.
+ */
+export function laneOrigins(tasks: TaskSnapshot[], order?: readonly string[]): Map<string, number> {
+  return originsOf(foldIntoLanes(tasks, localColumns(tasks), order))
+}
+
 /** A free slot next to the dependencies of a brand new task, so it never lands on top of the plan. */
 function placeNear(task: TaskSnapshot, placed: Map<string, NodePos>, fallback: NodePos): NodePos {
   const deps = task.deps.map((d) => placed.get(d)).filter((p): p is NodePos => !!p)
@@ -181,13 +200,16 @@ export async function layoutGraph(tasks: TaskSnapshot[], previous?: Map<string, 
   if (tasks.length === 0) return new Map()
   const raw = (await elkColumns(tasks).catch(() => undefined)) ?? localColumns(tasks)
   const computed = foldIntoLanes(tasks, raw, order)
+  // A pin's `y` is an offset from its lane's own top (mm1): folding or reordering a lane above moves
+  // that top, and the pinned card follows it instead of drifting into whichever band now sits there.
+  const origins = originsOf(computed)
 
   const out = new Map<string, NodePos>()
   const fresh: TaskSnapshot[] = []
   for (const task of tasks) {
     const lane = laneOf(task)
     const prev = previous?.get(task.id)
-    if (task.pos) out.set(task.id, { x: task.pos.x, y: task.pos.y, lane })
+    if (task.pos) out.set(task.id, { x: task.pos.x, y: (origins.get(lane) ?? 0) + task.pos.y, lane })
     else if (prev && prev.lane === lane) out.set(task.id, { x: prev.x, y: prev.y, lane })
     else if (!previous || previous.size === 0) out.set(task.id, computed.get(task.id) ?? { x: 0, y: 0, lane })
     else fresh.push(task)
@@ -227,11 +249,16 @@ export function laneBands(nodes: Map<string, NodePos>): LaneBand[] {
   return out
 }
 
-/** One placement pass for the derived graph. Labels and folded chips own space before nodes move. */
-export function layoutFoldStack(tasks: TaskSnapshot[], folded: Set<string>, lanes?: readonly string[]): { nodes: Map<string, NodePos>; bands: LaneBand[] } {
+/**
+ * One placement pass for the derived graph. Labels and folded chips own space before nodes move.
+ * `origins`: each lane's own top in this pass (mm1) — what an unfolded lane's pinned cards sit
+ * relative to, so a fold above them moves the lane, and the pin follows it.
+ */
+export function layoutFoldStack(tasks: TaskSnapshot[], folded: Set<string>, lanes?: readonly string[]): { nodes: Map<string, NodePos>; bands: LaneBand[]; origins: Map<string, number> } {
   const order = laneOrder(tasks, lanes)
   const nodes = new Map<string, NodePos>()
   const bands: LaneBand[] = []
+  const origins = new Map<string, number>()
   const byId = new Map(tasks.map((task) => [task.id, task]))
   const depth = new Map<string, number>()
   const column = (id: string, visiting = new Set<string>()): number => {
@@ -250,6 +277,7 @@ export function layoutFoldStack(tasks: TaskSnapshot[], folded: Set<string>, lane
     if (folded.has(lane)) {
       const lanes: string[] = []
       while (i < order.length && folded.has(order[i]!)) lanes.push(order[i++]!)
+      for (const name of lanes) origins.set(name, top)
       const members = lanes.flatMap((name) => tasks.filter((task) => laneOf(task) === name))
       const chips = members.filter((task) => task.id === `lane:${laneOf(task)}`)
       const guests = members.filter((task) => task.id !== `lane:${laneOf(task)}`)
@@ -260,21 +288,29 @@ export function layoutFoldStack(tasks: TaskSnapshot[], folded: Set<string>, lane
       top += height + BAND_SEAM
       continue
     }
+    origins.set(lane, top)
     const members = tasks.filter((task) => laneOf(task) === lane)
     const rows = new Map<number, number>()
+    let deepest = 1
+    let pinnedBottom = 0
     for (const task of members) {
+      if (task.pos) {
+        nodes.set(task.id, { x: task.pos.x, y: top + task.pos.y, lane })
+        pinnedBottom = Math.max(pinnedBottom, task.pos.y + NODE_H)
+        continue
+      }
       const col = column(task.id)
       const row = rows.get(col) ?? 0
       rows.set(col, row + 1)
+      deepest = Math.max(deepest, row + 1)
       nodes.set(task.id, { x: (col + 1) * COL_STEP, y: top + BAND_PAD_TOP + row * ROW_STEP, lane })
     }
-    const deepest = Math.max(1, ...rows.values())
-    const height = BAND_PAD_TOP + deepest * NODE_H + (deepest - 1) * ROW_GAP + BAND_PAD_BOTTOM
+    const height = Math.max(BAND_PAD_TOP + deepest * NODE_H + (deepest - 1) * ROW_GAP + BAND_PAD_BOTTOM, pinnedBottom + BAND_PAD_BOTTOM)
     bands.push({ lane, top, height })
     top += height + BAND_SEAM
     i++
   }
-  return { nodes, bands }
+  return { nodes, bands, origins }
 }
 
 /** Bounding box of the laid out plan, used by Fit and by the pan limits. */

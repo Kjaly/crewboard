@@ -50,6 +50,10 @@ it('lists checked reviews, the unchecked one and the decision — not «All clea
     ]),
   )
   expect(items).toHaveLength(6)
+  // The check state and its source (vc1): no chat, no setting — off for this plan, and it says why.
+  expect(items.find((i) => i.taskId === 'r1')?.check).toEqual({ state: 'checked', source: 'default' })
+  expect(items.find((i) => i.taskId === 'r5')?.check).toEqual({ state: 'off', source: 'default' })
+  expect(items.find((i) => i.taskId === 'pick')?.check).toBeUndefined()
   // Still being checked: the orchestrator's, not the person's.
   expect(items.some((i) => i.taskId === 'busy')).toBe(false)
   expect(items.every((i) => i.root === root && i.planId === 'main')).toBe(true)
@@ -59,10 +63,10 @@ it('lists checked reviews, the unchecked one and the decision — not «All clea
   const text = h.out()
   expect(text).not.toContain('All clear')
   expect(text).toContain('Waiting for review (5)')
-  expect(text).toContain('Decisions (1)')
-  expect(text).toMatch(/r1: Task r1 · checked by the orchestrator/)
-  expect(text).toMatch(/r5: Task r5 · not checked by the orchestrator/)
-  expect(text.indexOf('Waiting for review')).toBeLessThan(text.indexOf('Decisions'))
+  expect(text).toContain('Open questions to you (1)')
+  expect(text).toMatch(/r1: Task r1 · Checked by the orchestrator/)
+  expect(text).toMatch(/r5: Task r5 · No orchestrator check — off for this plan \(no orchestrator chat\)/)
+  expect(text.indexOf('Waiting for review')).toBeLessThan(text.indexOf('Open questions to you'))
 })
 
 it('says «All clear» only when nothing waits, and keeps the old run alarms behind --alarms', async () => {
@@ -124,4 +128,27 @@ it('lists the example only when its plan is the one asked about', async () => {
   h.reset()
   expect(await run(['attention'], h.io)).toBe(0)
   expect(h.out()).not.toContain('Example — not counted')
+})
+
+// vc1: `status` and `accept` say where the check stands, in the screen's words.
+it('says the check state in status and in the accept question', async () => {
+  const env = await homeEnv()
+  const { root, h } = await reviewPlan(env)
+  expect(await run(['status'], h.io)).toBe(0)
+  expect(h.out()).toMatch(/r1 +Task r1 · Checked by the orchestrator/)
+  expect(h.out()).toMatch(/r5 +Task r5 · No orchestrator check — off for this plan \(no orchestrator chat\)/)
+  expect(h.out()).toMatch(/busy +Task busy · The orchestrator is checking/)
+  h.reset()
+  expect(await run(['status', '--json'], h.io)).toBe(0)
+  const views = JSON.parse(h.out()).views as Array<{ id: string; check?: unknown }>
+  expect(views.find((v) => v.id === 'r5')?.check).toEqual({ state: 'off', source: 'default' })
+  expect(views.find((v) => v.id === 'busy')?.check).toEqual({ state: 'checking', source: 'default' })
+
+  const human = makeHarness({ cwd: root, env, isTTY: true, answers: ['n', 'n', 'n'] })
+  await run(['accept', 'r1'], human.io)
+  await run(['accept', 'busy'], human.io)
+  await run(['accept', 'r5'], human.io)
+  expect(human.questions()[0]).toMatch(/^Checked by the orchestrator — gates green\.\n/)
+  expect(human.questions()[1]).toMatch(/^The orchestrator has not checked busy yet — accept anyway\?\n/)
+  expect(human.questions()[2]).toMatch(/^No orchestrator check for this plan \(no orchestrator chat\)\.\n/)
 })

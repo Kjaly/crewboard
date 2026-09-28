@@ -2,12 +2,13 @@ import { existsSync, watch } from 'node:fs'
 import { homedir } from 'node:os'
 import { BUILD_ID } from '../shared/build.js'
 import { basename, join } from 'node:path'
-import { type Backends, type DshWorkspace, CREWBOARD_DIR, advanceDraftJobs, recoverDraftOrphans, type RepoPreferenceMap, type RepoSnapshot, buildRepoSnapshot, createRepoFamilyResolver, gcRecheckAccepted, loadPlan, mergeWorkspaces, nodeExec, discoverWorktreeRepos, folderKey, type Exec, type RepositoryRef, resolveRouting, splitSuggestion, worktreeConfigPath, loadProfileStore, markOutsidePreset, type SidebarOrder } from '@crewboard/core'
+import { type Backends, type DshWorkspace, CREWBOARD_DIR, advanceDraftJobs, draftsStamp, recoverDraftOrphans, type RepoPreferenceMap, type RepoSnapshot, buildRepoSnapshot, createRepoFamilyResolver, gcRecheckAccepted, loadPlan, mergeWorkspaces, nodeExec, discoverWorktreeRepos, folderKey, type Exec, type RepositoryRef, resolveRouting, splitSuggestion, worktreeConfigPath, loadProfileStore, markOutsidePreset, type SidebarOrder } from '@crewboard/core'
 import type { OrchestraRepoSnapshot, OrchestraSnapshot, WorkerInfo, WorkerSettingsIssue } from '../shared/types.js'
 import type { ChatBindings } from './chat.js'
 import type { OrchestraConfig } from './config.js'
 
-const QUARANTINE_COPY = /\.corrupt-[^/\\]*$/
+/** Files a plan save or a broken read writes beside the plan: no refresh of their own (the save brings one). */
+const QUARANTINE_COPY = /\.(corrupt-[^/\\]*|prev(\.tmp-[^/\\]*)?)$/
 
 export type Watcher = (dir: string, onChange: (file?: string) => void) => () => void
 
@@ -47,6 +48,8 @@ export type ServiceDeps = {
   /** The owner's manual sidebar order from the orchestra profile store; absent means automatic. */
   orderFor?(): Promise<SidebarOrder>
   env?: NodeJS.ProcessEnv
+  /** Told how long each phase of a repository refresh took (pf1): the first-load measurement reads it. */
+  profile?(root: string, phase: string, ms: number): void
 }
 
 /** Extends the core snapshot with the plan chats the client needs; core knows nothing about them. */
@@ -64,6 +67,8 @@ async function withChats(root: string, snapshot: RepoSnapshot, chats: ChatBindin
 export class OrchestraService {
   private readonly snapshots = new Map<string, OrchestraRepoSnapshot>()
   private readonly listeners = new Set<(s: OrchestraSnapshot) => void>()
+  /** Listeners that also take the first paint (pf1): the screen's stream. Notifications and chat wake-ups wait for full snapshots. */
+  private readonly early = new Set<(s: OrchestraSnapshot) => void>()
   private readonly inflight = new Map<string, Promise<void>>()
   /** Resolves a repository's main worktree; the cache is dropped only when the repository list moves. */
   private readonly families = createRepoFamilyResolver(nodeExec)
@@ -112,11 +117,24 @@ export class OrchestraService {
     }
   }
 
-  subscribe(fn: (s: OrchestraSnapshot) => void): () => void {
-    this.listeners.add(fn)
+  /**
+   * `partial` (pf1): also hear the quick snapshot of repositories the host has not served yet — the plan graph and
+   * statuses before merge detection, verdicts and conflicts. Only the screen asks for it: a notification or a chat
+   * wake-up compares a snapshot with the one before, so it hears only full ones.
+   */
+  subscribe(fn: (s: OrchestraSnapshot) => void, options: { partial?: boolean } = {}): () => void {
+    const set = options.partial ? this.early : this.listeners
+    set.add(fn)
     return () => {
-      this.listeners.delete(fn)
+      set.delete(fn)
     }
+  }
+
+  private emit(partial: boolean): void {
+    const snap = this.snapshot()
+    for (const fn of this.early) fn(snap)
+    if (partial) return
+    for (const fn of this.listeners) fn(snap)
   }
 
   refresh(root?: string): Promise<void> {
@@ -147,16 +165,22 @@ export class OrchestraService {
     // Git is asked for a family only when this list changes, not on every tick.
     this.families.refresh(repos.map((r) => r.root))
     const targets = root ? [repos.find((r) => r.root === root) ?? { root }] : repos
+    // pf1: a repository not served yet is first read quickly — its plans without git and without writes — and the
+    // screen gets that at once; the full snapshot (merges, verdicts, conflicts, cleanup) follows.
+    const fresh = targets.filter((r) => !this.snapshots.has(r.root) && !this.inflight.has(r.root))
+    if (fresh.length) {
+      await Promise.allSettled(fresh.map((r) => this.refreshOne(r, true)))
+      this.emit(true)
+    }
     // One repository failing to build must not keep the others (or the listeners) from their update.
     await Promise.allSettled(targets.map((r) => this.refreshOne(r)))
     if (!root) this.syncWatchers()
-    const snap = this.snapshot()
-    for (const fn of this.listeners) fn(snap)
+    this.emit(false)
   }
 
-  private async refreshOne(ref: RepositoryRef): Promise<void> {
+  private async refreshOne(ref: RepositoryRef, quick = false): Promise<void> {
     const { root, title } = ref
-    const running = this.inflight.get(root)
+    const running = quick ? undefined : this.inflight.get(root)
     if (running) return running
     const origin = { ...(ref.sources?.length ? { sources: ref.sources } : {}), ...(ref.worktreeOf ? { worktreeOf: ref.worktreeOf } : {}) }
     // A listed folder that is gone (moved, deleted, an unplugged disk) is shown as missing — no git,
@@ -166,13 +190,26 @@ export class OrchestraService {
       this.snapshots.set(root, { root, goal: '', hasPlan: false, missing: true, rev: -1, updatedAt: now, tasks: [], ready: [], criticalPath: [], attention: [], degraded: false, family: { root, name: basename(root) }, ...origin, ...(title ? { title } : {}) })
       return
     }
-    const p = this.advanceDrafts(root)
-      .then(() => buildRepoSnapshot(root, this.deps.backendsFor(root), this.deps.now()))
+    const profile = this.deps.profile
+    let mark = performance.now()
+    const phase = (name: string): void => {
+      if (!profile) return
+      const at = performance.now()
+      profile(root, name, at - mark)
+      mark = at
+    }
+    const p = (quick ? Promise.resolve() : this.advanceDrafts(root))
+      .then(() => { phase('drafts'); return buildRepoSnapshot(root, this.deps.backendsFor(root), this.deps.now(), undefined, { ...(quick ? { quick } : {}), ...(profile ? { profile: (name: string, ms: number) => { profile(root, name, ms); mark = performance.now() } } : {}) }) })
       .then(async (s) => {
-        const gcEnv = { ...process.env, ...this.deps.env }
-        await gcRecheckAccepted(root, { exec: nodeExec, now: this.deps.now, policyPath: worktreeConfigPath(gcEnv, gcEnv.HOME ?? '') }).catch(() => undefined)
+        if (!quick) {
+          const gcEnv = { ...process.env, ...this.deps.env }
+          await gcRecheckAccepted(root, { exec: nodeExec, now: this.deps.now, policyPath: worktreeConfigPath(gcEnv, gcEnv.HOME ?? '') }).catch(() => undefined)
+          phase('gc')
+        }
+        const stamp = await draftsStamp(root).catch(() => '')
         const chats = this.deps.chatsFor ? await this.deps.chatsFor(root).catch(() => undefined) : undefined
         const enriched = await withChats(root, s, chats)
+        phase('chats')
         const env = this.deps.env ?? process.env
         // Routing that cannot be resolved (an unreadable plan — pq1 — or broken worker settings — B07) leaves
         // the snapshot without it; the repository itself is always served.
@@ -194,13 +231,17 @@ export class OrchestraService {
         const family = { ...resolved, root: this.repositories().find((r) => folderKey(r.root) === familyKey)?.root ?? resolved.root }
         const prefs = this.deps.prefsFor ? await this.deps.prefsFor().catch(() => ({} as RepoPreferenceMap)) : {}
         const flags = prefs[root] ?? {}
-        this.snapshots.set(root, { ...enriched, tasks, family, ...(flags.pinned ? { pinned: true } : {}), ...(flags.hidden ? { hidden: true } : {}), plans, ...(effectiveRouting ? { effectiveRouting } : {}), ...(title ? { title } : {}), ...origin })
+        phase('routing')
+        // A full snapshot that landed while this quick one was read is never replaced by it.
+        if (quick && this.snapshots.has(root) && !this.snapshots.get(root)?.partial) return
+        this.snapshots.set(root, { ...enriched, ...(stamp ? { draftsStamp: stamp } : {}), tasks, family, ...(flags.pinned ? { pinned: true } : {}), ...(flags.hidden ? { hidden: true } : {}), plans, ...(effectiveRouting ? { effectiveRouting } : {}), ...(title ? { title } : {}), ...origin })
       })
-      .finally(() => {
-        this.inflight.delete(root)
-      })
-    this.inflight.set(root, p)
-    return p
+    if (quick) return p
+    const tracked = p.finally(() => {
+      this.inflight.delete(root)
+    })
+    this.inflight.set(root, tracked)
+    return tracked
   }
 
   /**

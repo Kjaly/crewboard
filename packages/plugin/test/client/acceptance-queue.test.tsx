@@ -64,7 +64,7 @@ async function mount(options: { snapshot?: OrchestraSnapshot; answer?: (url: str
 }
 
 const openQueue = async (user: ReturnType<typeof userEvent.setup>) => {
-  await user.click(screen.getByRole('button', { name: /Ждут вас/ }))
+  await user.click(screen.getByRole('button', { name: /Очередь разбора/ }))
   return screen.getByRole('complementary', { name: 'Очередь приёмки' })
 }
 
@@ -80,7 +80,7 @@ it('counts in_review tasks and ready human decisions in the header pill', async 
   const user = userEvent.setup()
   await mount()
   // a and b are in_review, d is a ready human decision — go and run do not count.
-  const pill = screen.getByRole('button', { name: 'Ждут вас · 3' })
+  const pill = screen.getByRole('button', { name: 'Очередь разбора · в этом плане 3 · всего 3' })
   const queue = await openQueue(user)
   expect(pill.getAttribute('aria-pressed')).toBe('true')
   for (const title of ['Готова к приёмке', 'Вторая готовая', 'Решение за человеком']) {
@@ -89,22 +89,23 @@ it('counts in_review tasks and ready human decisions in the header pill', async 
   expect(within(queue).queryByText('Ещё ждёт запуска')).toBeNull()
 })
 
-it('the queue opens the one batch sheet: clean work is pre-selected, disputed work is not (w1b, B03)', async () => {
+// dc1: the batch counts only worker tasks; the decision waits in its own group and opens in the panel.
+it('the queue opens the one batch sheet: clean work is pre-selected, decisions are not in it (w1b, B03)', async () => {
   setLang('ru')
   const user = userEvent.setup()
   const calls = await mount()
   const queue = await openQueue(user)
-  await user.click(within(queue).getByRole('button', { name: 'Принять пакетом · 3' }))
+  await user.click(within(queue).getByRole('button', { name: 'Принять пакетом · 2' }))
   const sheet = within(screen.getByRole('dialog', { name: /Принять задачи/ }))
   await waitFor(() => expect(sheet.getByRole('checkbox', { name: /Готова к приёмке/ })).toHaveProperty('checked', true))
-  expect(sheet.getByRole('checkbox', { name: /Решение за человеком/ })).toHaveProperty('checked', true)
+  expect(sheet.queryByRole('checkbox', { name: /Решение за человеком/ })).toBeNull()
   expect(sheet.getByRole('checkbox', { name: /Вторая готовая/ })).toHaveProperty('checked', false)
-  await user.click(sheet.getByRole('button', { name: 'Принять выбранные · 2' }))
+  await user.click(sheet.getByRole('button', { name: 'Принять выбранные · 1' }))
   const post = calls.find((c) => c.url.endsWith('/accept-batch'))
   expect(post?.method).toBe('POST')
   expect(post?.headers['x-orchestra-client']).toBe('1')
   expect(post?.headers['content-type']).toBe('application/json')
-  expect(post?.body).toMatchObject({ repo: ROOT, tasks: ['a', 'd'] })
+  expect(post?.body).toMatchObject({ repo: ROOT, tasks: ['a'] })
 })
 
 it('a queue row shows its verdict; a decision row has none (w1b, B03, B05)', async () => {
@@ -189,18 +190,18 @@ it('background plans appear as «ещё M» and offer «Перейти»', async
     plans: [plan('main', true, 1), plan('release', false, 2)],
   })
   const calls = await mount({ snapshot: makeSnapshot(repo) })
-  await user.click(screen.getByRole('button', { name: /Ждут вас · 3/ }))
+  await user.click(screen.getByRole('button', { name: /Очередь разбора · в этом плане 1 · всего 3/ }))
   const queue = screen.getByRole('complementary', { name: 'Очередь приёмки' })
   await user.click(within(queue).getByRole('button', { name: 'Перейти' }))
   const post = calls.find((c) => c.url.endsWith('/plan-use'))
   expect(post?.body).toMatchObject({ repo: ROOT, plan: 'release' })
 })
 
-it('an empty queue reads «Ждут вас»', async () => {
+it('an empty queue reads «Очередь разбора»', async () => {
   setLang('ru')
   const user = userEvent.setup()
   await mount({ snapshot: makeSnapshot(makeRepo([makeTask({ id: 'x', title: 'Одна', status: 'running' })])) })
-  await user.click(screen.getByRole('button', { name: 'Ждут вас' }))
+  await user.click(screen.getByRole('button', { name: 'Очередь разбора' }))
   const queue = screen.getByRole('complementary', { name: 'Очередь приёмки' })
   expect(within(queue).queryByRole('button', { name: /Принять пакетом/ })).toBeNull()
 })

@@ -47,6 +47,7 @@ it('shows the report card with a list for an in_review task and never trusts HTM
     report: report({ text: 'Что сделано:\n- пункт **один**\n- `код` два\n- <img src=x onerror=1>' }),
   })
   const card = await mountPanel(detail)
+  await userEvent.setup().click(within(card).getByRole('button', { name: 'Итог работы' }))
 
   const items = within(card).getAllByRole('listitem')
   expect(items).toHaveLength(3)
@@ -96,7 +97,7 @@ it('a queue row carries the first line of the report under the title', async () 
     FakeEventSource.last?.emit('snapshot', snapshot)
   })
   const user = userEvent.setup()
-  await user.click(screen.getByRole('button', { name: /Ждут вас/ }))
+  await user.click(screen.getByRole('button', { name: /Очередь разбора/ }))
   const queue = screen.getByRole('complementary', { name: 'Очередь приёмки' })
   const row = within(queue).getByText('Готова к приёмке').closest('li')!
   expect(await within(row).findByText('Первая строка отчёта')).toBeTruthy()

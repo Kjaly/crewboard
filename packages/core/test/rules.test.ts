@@ -26,11 +26,40 @@ describe('evaluateRun', () => {
     expect(kinds(evaluateRun(input(), at(1, 5)))).toEqual(['not_started:warn'])
   })
 
-  it('warns after 5 idle minutes and alerts after 15', () => {
+  it('is quiet on the card after 5 idle minutes, may be stuck after 20 (st2)', () => {
     const events = [ev(1, 'action', 'Read file')]
     expect(kinds(evaluateRun(input({ events }), at(5)))).toEqual([])
     expect(kinds(evaluateRun(input({ events }), at(6, 1)))).toEqual(['stalled:warn'])
-    expect(kinds(evaluateRun(input({ events }), at(16, 1)))).toEqual(['stalled:alert'])
+    expect(kinds(evaluateRun(input({ events }), at(19, 59)))).toEqual(['stalled:warn'])
+    expect(kinds(evaluateRun(input({ events }), at(21)))).toEqual(['stalled:alert'])
+  })
+
+  // st2: a worker running a long foreground command (WORKER_RULES, bg1) is information, not an alarm — until it
+  // outlasts the «may be stuck» threshold. Only a backend that pairs a start with its result (`callId`) says so.
+  describe('a command in flight', () => {
+    const openEv = (min: number, text: string): NormEvent => ({ ...ev(min, 'action', text), open: true })
+
+    it('is information while it runs, «may be stuck» past 30 minutes', () => {
+      const events = [openEv(1, 'pnpm test')]
+      expect(evaluateRun(input({ events }), at(8))).toMatchObject([{ kind: 'running', severity: 'warn', idleMin: 7, command: 'pnpm test' }])
+      expect(evaluateRun(input({ events }), at(31, 1))).toMatchObject([{ kind: 'running', severity: 'alert', idleMin: 30, command: 'pnpm test' }])
+    })
+
+    it('never counts as not-started: the command itself is the action', () => {
+      const events = [openEv(0, 'pnpm install')]
+      expect(kinds(evaluateRun(input({ events }), at(2)))).toEqual(['running:warn'])
+    })
+
+    it('a closed command (its result arrived) falls back to the quiet rule', () => {
+      const events: NormEvent[] = [ev(1, 'action', 'pnpm test')]
+      expect(kinds(evaluateRun(input({ events }), at(21)))).toEqual(['stalled:alert'])
+    })
+  })
+
+  it('flags a gone worker (B19, st2) instead of reading its last event', () => {
+    const events = [ev(1, 'action', 'pnpm test')]
+    const state = { status: 'running' as const, terminal: false, exitCode: null, orphan: { workerPid: 4242 } }
+    expect(kinds(evaluateRun(input({ events, state }), at(2)))).toEqual(['worker_gone:alert'])
   })
 
   it('detects a loop of identical actions', () => {

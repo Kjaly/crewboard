@@ -58,7 +58,7 @@ describe('lane tree in the sidebar', () => {
   it('marks each lane with its dot and counts, spelled out for the screen reader', () => {
     mount()
     const analysis = screen.getByRole('treeitem', { name: /^Analysis/ })
-    expect(analysis.getAttribute('aria-label')).toBe('Analysis · 1 waiting for you')
+    expect(analysis.getAttribute('aria-label')).toBe('Analysis · 1 in review queue')
     expect(analysis.querySelector('.orc-lanedot--waiting')).toBeTruthy()
     expect(analysis.querySelector('.orc-lanecounts')?.textContent).toBe('◐1')
     const reliability = screen.getByRole('treeitem', { name: /^Reliability/ })
@@ -153,6 +153,6 @@ describe('lane tree in the sidebar', () => {
     expect(screen.getByRole('treeitem', { name: 'Сейчас · 4' })).toBeTruthy()
     expect(screen.getByRole('treeitem', { name: 'История · 1' })).toBeTruthy()
     expect(screen.getByRole('treeitem', { name: /^Без дорожки/ })).toBeTruthy()
-    expect(screen.getByRole('treeitem', { name: /^Analysis/ }).getAttribute('aria-label')).toBe('Analysis · 1 ждёт вас')
+    expect(screen.getByRole('treeitem', { name: /^Analysis/ }).getAttribute('aria-label')).toBe('Analysis · 1 на разборе')
   })
 })

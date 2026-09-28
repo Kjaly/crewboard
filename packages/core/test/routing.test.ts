@@ -88,9 +88,13 @@ describe('launchTask with routing', () => {
   })
 
   it('refuses a disabled worker even when asked explicitly, and says when a class has no worker', async () => {
-    const { base } = await setup({ classes: { design: ['claude/opus'] }, disabled: { 'claude/opus': 'нет лимитов' } })
+    const { root, home, base } = await setup({ classes: { design: ['claude/opus'] }, disabled: { 'claude/opus': 'нет лимитов' } })
     await expect(launchTask({ ...base, taskId: 'ui', agent: 'claude/opus', caller: 'person' })).rejects.toMatchObject({ code: 'disabled' })
-    await expect(launchTask({ ...base, taskId: 'ui' })).rejects.toMatchObject({ code: 'no_worker' })
+    // nb1: the built-in preset goes on to the other installed workers; a saved preset is exactly its list.
+    expect(await launchTask({ ...base, taskId: 'ui' })).toMatchObject({ agent: 'dsh/deepseek-flash' })
+    await savePreset({ id: 'only-opus', label: 'Only Opus', routing: { code: ['claude/opus'], design: ['claude/opus'], review: ['claude/opus'], research: ['claude/opus'] } }, { HOME: home })
+    await setRepositoryPreset(root, 'only-opus', { HOME: home })
+    await expect(launchTask({ ...base, taskId: 'fix' })).rejects.toMatchObject({ code: 'no_worker' })
   })
 
   // A person's explicit enabled worker outside the preset runs, and the feed says it was a hand-picked
@@ -143,10 +147,11 @@ describe('launchTask with routing', () => {
     await updatePlan(root, (p) => { Object.assign(p.tasks.find((t) => t.id === 'ui')!, { worker: 'claude/opus-5-5', workerSource: 'person' }); return p })
     const oldClaude = async (cmd: string, args: string[]) => {
       if (cmd === 'claude' && args[0] === '--version') return { code: 0, stdout: '2.1.216 (Claude Code)', stderr: '', timedOut: false }
+      if (cmd === 'claude' && args[0] === '--help') return { code: 0, stdout: 'Usage: claude [options]\n  --bare  Minimal mode', stderr: '', timedOut: false }
       if (cmd === 'claude' && args[0] === 'auth') return { code: 0, stdout: '{"loggedIn":true}', stderr: '', timedOut: false }
       return nodeExec(cmd, args)
     }
-    await expect(launchTask({ ...base, taskId: 'ui', skipPreflight: false, exec: oldClaude })).rejects.toMatchObject({
+    await expect(launchTask({ ...base, taskId: 'ui', skipPreflight: false, exec: oldClaude, env: { ANTHROPIC_API_KEY: 'sk-ant-api03-test' } })).rejects.toMatchObject({
       code: 'preflight',
       detail: expect.stringContaining('2.1.216'),
     })

@@ -90,6 +90,15 @@ describe('task detail', () => {
     expect(d.runs).toHaveLength(1)
   })
 
+  it('keeps the human review requirement when the contract preview is truncated', async () => {
+    const { root } = await setup()
+    await writeFile(join(root, 'contracts', 't1.md'), `${'x'.repeat(65 * 1024)}\n<human_review>\nOwner checks the final layout\n</human_review>\n`)
+    const detail = await getTaskDetail(root, 't1', fakeBackends(), nodeExec)
+    expect(detail.contract?.truncated).toBe(true)
+    expect(detail.contract?.text).not.toContain('<human_review>')
+    expect(detail.contract?.humanReviewRequired).toBe(true)
+  })
+
   it('does not read contracts outside the repository', async () => {
     const { root } = await setup()
     const d = await getTaskDetail(root, 'evil', fakeBackends(), nodeExec)

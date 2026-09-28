@@ -79,7 +79,7 @@ it('says honestly when there is no contract', async () => {
   expect(await screen.findByText('Оркестратор не оставил списка проверки')).toBeTruthy()
   expect(screen.queryByRole('checkbox')).toBeNull()
   expect(screen.queryByText('Открыть экран')).toBeNull()
-  expect(screen.getByText('Принять решение — вы подтверждаете, что проверили и согласны.')).toBeTruthy()
+  expect(screen.getByText('Подтвердить решение — записывает этот ответ как ваш и разблокирует то, что его ждёт.')).toBeTruthy()
   expect(screen.getByText('Вернуть… — укажите, что именно не так; причина уходит оркестратору.')).toBeTruthy()
 })
 

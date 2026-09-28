@@ -68,13 +68,17 @@ describe('task panel', () => {
   }
   const accepts = () => calls.filter((c) => c.method === 'POST' && c.url.includes('/api/accept'))
 
-  it('shows the calm mark and asks before accepting ahead of the check', async () => {
-    mount(finished('checking'))
-    expect(screen.getByRole('status').textContent).toContain('Orchestrator is checking')
-    await userEvent.click(screen.getByRole('button', { name: 'Accept' }))
+  it('keeps early acceptance behind an explicit disclosure while the orchestrator checks', async () => {
+    mount(finished('checking', { reviewCheck: { state: 'checking', source: 'chat' } }))
+    expect(screen.getByRole('status').textContent).toContain('The orchestrator is checking')
+    expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull()
+    const early = await screen.findByText('Review before check')
+    expect(early.closest('details')?.open).toBe(false)
+    await userEvent.click(early)
+    await userEvent.click(screen.getByRole('button', { name: 'Accept before check' }))
     expect(accepts()).toHaveLength(0)
-    expect(screen.getByText('The orchestrator has not finished checking — accept without it?')).toBeTruthy()
-    await userEvent.click(screen.getByRole('button', { name: 'Accept without the check' }))
+    expect(screen.getByText('The orchestrator has not checked this task yet — accept anyway?')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'Accept anyway' }))
     expect(accepts()).toHaveLength(1)
   })
 
@@ -83,7 +87,7 @@ describe('task panel', () => {
     const note = screen.getByRole('note')
     expect(note.textContent).toContain('Checked by the orchestrator')
     expect(note.textContent).toContain('pnpm test green; stand ok at 1440')
-    expect(note.compareDocumentPosition(screen.getByRole('button', { name: 'Accept' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(note.compareDocumentPosition(await screen.findByRole('button', { name: 'Accept' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: 'Accept' }))
     expect(accepts()).toHaveLength(1)
   })
@@ -91,13 +95,13 @@ describe('task panel', () => {
   it('keeps today\'s panel when there is no check', async () => {
     mount(finished())
     expect(screen.queryByRole('note')).toBeNull()
-    await userEvent.click(screen.getByRole('button', { name: 'Accept' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Accept' }))
     expect(accepts()).toHaveLength(1)
   })
 
   it('reads in Russian', () => {
     setLang('ru')
-    mount(finished('pending'))
-    expect(screen.getByRole('status').textContent).toContain('Проверяет оркестратор')
+    mount(finished('pending', { reviewCheck: { state: 'pending', source: 'chat' } }))
+    expect(screen.getByRole('status').textContent).toContain('Ждёт проверки оркестратора')
   })
 })

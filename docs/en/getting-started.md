@@ -6,11 +6,11 @@ This guide takes one repository from an empty plan to a decision on the first re
 
 ## Before you start
 
-- Node.js 24 or newer, Git, and the `crewboard` CLI. It is not on npm yet: install it from source for now, as in [README: install](../../README.md#install).
-- At least one worker CLI, installed and signed in: Claude Code (`claude`), Codex (`codex`), Devin (`devin`), or dsh (`dsh`). See [workers](workers.md).
+- Node.js 24 or newer, pnpm 11.5.2, and Git, with the CLI built from a source checkout (the npm release is not published yet): `pnpm install --frozen-lockfile && pnpm build`. See [README: install](../../README.md#install).
+- At least one worker CLI, installed and ready: Codex (`codex`), Devin (`devin`), or dsh (`dsh`); for automated Claude Code (`claude`) add an explicit `ANTHROPIC_API_KEY` — its subscription sign-in is not used. See [workers](workers.md).
 - A Git repository with at least one commit. Crewboard creates task worktrees from it.
 
-`crewboard` and `orch` are the same program; the help and messages use whichever name you typed.
+`crewboard` and `orch` are the same program; the help and messages use whichever name you typed. The commands below write `crewboard`; from a source checkout, run them as `node packages/cli/dist/main.js …` or define the alias shown in the [install steps](../../README.md#install).
 
 ## 1. Create a plan
 
@@ -24,21 +24,48 @@ This creates `.orchestration/plan.json` (the `main` plan) and adds `.orchestrati
 
 ## 2. Write a contract
 
-A task can run only with a contract: a file in the repository that states the result you want and how to check it. Keep it short and concrete. Put the commands you expect the worker to run in a `<checks>` block, one per line — the review screen uses this block to tell which checks the worker reported running.
+A task can run only with a contract: a file in the repository that states the result you want and how to check it. Keep it short and concrete.
+
+Every contract Crewboard writes has the same sections, in this order: the title, **Context**, **Result**, **Checks**, **Not in scope**, **Sources**, and **Report**. The same template is used when you approve a plan draft, create a follow-up or a superseding task, run `crewboard task add --template`, or when the orchestrator creates a task. Context, Not in scope and Sources appear only when they have content; Checks and Report are always there:
+
+- **Checks** holds a `<checks>` block with one command per line. The review screen uses it to tell which checks the worker reported running. The block opens at a line that is exactly `<checks>` and closes at a line that is exactly `</checks>`; a tag mentioned inside a sentence, a code span or fenced code is text, not a block. If a contract has several blocks, the last one counts. The same rule applies to `<paths>`.
+- **Report** asks the worker to start its final answer with the line `Result: received`, `Result: negative`, or `Result: blocked` (in Russian, `Результат: получен | отрицательный | заблокирован`). The verdict reads that line; see [review](review.md).
+
+To start from the template, let Crewboard write a skeleton and fill it in:
+
+```sh
+crewboard task add api --title "Extract the API module" --class code --template
+#   contract: .orchestration/contracts/main/api.md — fill in the result and the checks, then crewboard run api
+```
+
+A filled contract looks like this:
 
 ```markdown
 # Extract the API module
 
+## Result
+
 Move the HTTP handlers from src/server.ts into src/api/ without changing behaviour.
-Out of scope: renaming routes.
+
+## Checks
+
+One command per line between the tags. Run each before you report and name every one in the report with its outcome.
 
 <checks>
 - pnpm test
 - pnpm typecheck
 </checks>
+
+## Not in scope
+
+- Renaming routes
+
+## Report
+
+Start your final answer with one line: `Result: received`, `Result: negative` or `Result: blocked` — pick one by the facts. …
 ```
 
-Ask the worker to start its final answer with a result line, for example `Result: received`, `Result: negative`, or `Result: blocked`. The verdict reads that line; see [review](review.md).
+You can also write a contract by hand and attach it with `--contract <file>`. `crewboard run` warns, without refusing, when a contract has no checks or does not ask for the result line.
 
 ## 3. Add tasks
 
@@ -53,7 +80,7 @@ crewboard status
 ```text
 Split the API into modules · rev 3
 
-Preset: All workers (source: builtin)
+Preset: Default: workers that pass checks (source: builtin)
 ○ api   Extract the API
 ⏸ docs  Document the API · waiting for api
 
@@ -71,7 +98,7 @@ crewboard preflight -a codex
 crewboard run api        # or: crewboard run api -a claude/opus
 ```
 
-Without `-a`, Crewboard uses the task's own worker, or the first worker of the task's class that is enabled and passes its preflight check. The run gets its own worktree next to the repository, on an `orch/api-…` branch. [Workers](workers.md) explains the order in detail.
+Without `-a`, Crewboard uses the task's own worker, or the first worker of the task's class that is enabled and passes its preflight check; with the built-in preset it then goes on to any other installed worker that passes. A worker it passed over is named, for example `claude/opus skipped: not logged in → codex/gpt-6-luna`, in the output and in the task's feed. When no worker can run the task, the refusal lists the installed workers that could and the command that routes the class to one, such as `crewboard workers route code codex/gpt-6-luna`. The run gets its own worktree next to the repository, on an `orch/api-…` branch. [Workers](workers.md) explains the order in detail.
 
 ## 5. Watch
 
@@ -100,7 +127,7 @@ crewboard reject api --reason "Route compatibility is not verified"
 crewboard supersede api --by api-v2
 ```
 
-Each command asks for confirmation and refuses to run without an interactive terminal, so an agent cannot accept its own work. [Review](review.md) describes the verdict and evidence.
+`accept`, `reject` and `supersede` ask for confirmation and need an interactive terminal, so an agent cannot make those judgment calls. Routine checked work is different: the orchestrator can auto-accept and auto-merge it with `crewboard accept <id> --auto` then `crewboard merge <id> --auto` (or `orchestra_close`) while the core gates hold. [Review](review.md) describes the verdict, the gates, and evidence.
 
 Accepting does not change your base branch: the work is on the task's branch until you merge it, and tasks that depend on `api` wait for that. `crewboard accept` prints the commands; for example:
 
@@ -113,6 +140,14 @@ After the merge, the worktree is removed if your cleanup policy says so. [After 
 ## The screen
 
 With the [plugin](plugin-setup.md) installed, open **Orchestration** (the graph icon in dsh's left column); the entry also shows how many items wait for you. The screen shows the same plans as the CLI. Its settings are under **Crewboard** in dsh settings.
+
+On the first visit:
+
+- With no repository listed, the screen asks for a folder path: type it and press **Add**. The **+** next to **Repositories** in the sidebar does the same later.
+- A repository without a plan opens on the welcome screen, both right after you add it and when you click it in the sidebar. **Quiet** only collects repositories that had work before and none for a week.
+- On the welcome screen, **From a spec** drafts a plan from a document, **From chat** asks for the plan's goal and then opens a chat with the orchestrator, and **See an example** opens a sample plan with a short tour; its **Done** brings you back to the welcome screen.
+- An empty plan asks for its first task: **Add task** takes a title and, optionally, what is true when it is done, and writes the contract from the template; **Draft from spec** drafts the tasks from a document.
+- The task panel says who will run a task that nobody assigned: «Will run: Codex GPT-6 Luna (by the preset)». A worker you pick yourself outside the preset is marked **hand-picked**, a note rather than a warning.
 
 ![Sidebar with two repositories; one shows a Needs you badge](../assets/sidebar-needs-you.png)
 

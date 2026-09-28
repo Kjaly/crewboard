@@ -202,9 +202,9 @@ it('without --tasks still waits for the next change only', async () => {
   expect(await run(['wait', '--interval', '20ms', '--timeout', '0.12'], h.io)).toBe(2)
 })
 
-it('says in --help that the timeout is 30m by default and what --tasks does', async () => {
+it('says in help all that the timeout is 30m by default and what --tasks does', async () => {
   const { h } = await setup()
-  await run(['--help'], h.io)
+  await run(['help', 'all'], h.io)
   expect(h.out()).toContain('default --timeout 30m')
   expect(h.out()).toContain('already')
 })
@@ -212,5 +212,5 @@ it('says in --help that the timeout is 30m by default and what --tasks does', as
 it('V-w1f/cost-empty says the plan has no runs instead of printing nothing', async () => {
   const { h } = await setup()
   expect(await run(['cost'], h.io)).toBe(0)
-  expect(h.out()).toBe('No runs in plan main.\n')
+  expect(h.out()).toBe('No runs in plan main.\nOrchestrator: unavailable (no bound dsh session)\n')
 })

@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
-import { API_PREFIX, type OrchestraSnapshot, type RepoSnapshot } from '../shared/types.js'
-import { api } from './api.js'
+import type { OrchestraSnapshot, RepoSnapshot } from '../shared/types.js'
+import { api, shared } from './api.js'
+import { hostEvents } from './host-events.js'
 import type { Lens } from './lens.js'
 import { acceptableTasks, firstWaiting, type WaitingTarget } from './review.js'
 import { createRouteController, formatRoute, parseRoute, type OrchestraRoute } from './route.js'
@@ -347,38 +348,33 @@ function createStore() {
       }, STALL_MS)
     }
     armStall()
-    api
+    shared
       .state()
       .then((r) => {
         if (alive && r.ok) receive(r.value)
       })
       .catch(() => {})
-    let es: EventSource | undefined
-    if (typeof EventSource !== 'undefined') {
-      es = new EventSource(`${API_PREFIX}/events`)
-      es.addEventListener('snapshot', (event) => {
-        if (!alive) return
-        let parsed: OrchestraSnapshot
-        try {
-          parsed = JSON.parse((event as MessageEvent<string>).data) as OrchestraSnapshot
-        } catch (error) {
-          // Only a frame that is not JSON is skipped; everything after parsing is receive()'s to guard.
-          report('frame', 'a snapshot frame that is not JSON was skipped', error)
-          return
-        }
-        receive(parsed)
-      })
-      es.onopen = () => {
-        if (alive) set({ connection: 'live' })
+    // The stream is the tab's one (host-events.ts): the screen holds it while mounted, and the host's first frame
+    // on every connection — a reopen after the tab was hidden included — is a full snapshot.
+    const offSnapshot = hostEvents.subscribe('snapshot', (frame) => {
+      if (!alive) return
+      // Only a frame that is not JSON is skipped; everything after parsing is receive()'s to guard.
+      if (!frame.ok) {
+        report('frame', 'a snapshot frame that is not JSON was skipped', frame.error)
+        return
       }
-      es.onerror = () => {
-        if (alive) set({ connection: 'reconnecting' })
-      }
-    }
+      receive(frame.data as OrchestraSnapshot)
+    })
+    const offLink = hostEvents.onLink((link) => {
+      if (!alive) return
+      if (link === 'live') set({ connection: 'live' })
+      else if (link === 'reconnecting') set({ connection: 'reconnecting' })
+    })
     return () => {
       alive = false
       if (stallTimer) clearTimeout(stallTimer)
-      es?.close()
+      offLink()
+      offSnapshot()
     }
   }
 
@@ -574,7 +570,7 @@ function createStore() {
         state = { ...state, selected: { ...state.selected, [scope]: target.taskId } }
       }
       navigate({ repo: target.root, plan: target.planId ?? repo?.planId ?? '_', task: target.taskId, tab: undefined, draft: undefined, run: undefined })
-      set({ repoRoot: target.root, queueOpen: false })
+      set({ repoRoot: target.root, queueOpen: !!target.queue })
       if (target.planId && repo?.planId !== target.planId) {
         void api.planUse(target.root, target.planId)
           .then((result) => { if (!result.ok && pendingWaiting === target) pendingWaiting = undefined })

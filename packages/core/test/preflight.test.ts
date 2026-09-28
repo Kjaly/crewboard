@@ -21,39 +21,59 @@ const profile = (id: string, backend: AgentProfile['backend'], model = 'm'): Age
 const failing = (r: { checks: { name: string; ok: boolean }[] }) => r.checks.filter((c) => !c.ok).map((c) => c.name)
 
 describe('preflightAgent', () => {
-  it('claude: detects a missing login with a fix', async () => {
+  it('claude: requires --bare and a configured API key, never a subscription login', async () => {
     const { exec } = execFrom({
-      'claude --version': { stdout: '2.1.216 (Claude Code)' },
-      'claude auth status': { stdout: '{"loggedIn": false}' },
+      'claude --version': { stdout: '2.1.300 (Claude Code)' },
+      'claude --help': { stdout: 'Usage: claude [options]\n  --bare  Minimal mode' },
     })
-    const r = await preflightAgent(profile('claude-opus', 'claude-code'), { exec })
+    // No key: the channel check is the failure, and `claude auth status` is never run.
+    const missing = await preflightAgent(profile('claude-opus', 'claude-code'), { exec, env: {} })
+    expect(missing.ok).toBe(false)
+    expect(missing.checks.find((c) => c.name === 'channel')).toMatchObject({ ok: false, detail: expect.stringContaining('ANTHROPIC_API_KEY') })
+    expect(missing.checks.some((c) => c.name === 'auth')).toBe(false)
+    // A configured Console API key passes; a subscription token or bearer credential refuses.
+    const key = await preflightAgent(profile('claude-opus', 'claude-code'), { exec, env: { ANTHROPIC_API_KEY: 'sk-ant-api03-test' } })
+    expect(key.ok).toBe(true)
+    expect(key.checks.find((c) => c.name === 'channel')).toMatchObject({ ok: true })
+    const sub = await preflightAgent(profile('claude-opus', 'claude-code'), { exec, env: { CLAUDE_CODE_OAUTH_TOKEN: 'oat' } })
+    expect(sub.checks.find((c) => c.name === 'channel')).toMatchObject({ ok: false, detail: expect.stringContaining('subscription') })
+    const bearer = await preflightAgent(profile('claude-opus', 'claude-code'), { exec, env: { ANTHROPIC_AUTH_TOKEN: 'b' } })
+    expect(bearer.checks.find((c) => c.name === 'channel')).toMatchObject({ ok: false, detail: expect.stringContaining('bearer') })
+  })
+
+  it('claude: refuses a CLI whose --help lacks --bare', async () => {
+    const { exec } = execFrom({
+      'claude --version': { stdout: '2.1.300 (Claude Code)' },
+      'claude --help': { stdout: 'Usage: claude [options]\n  --model  Model' },
+    })
+    const r = await preflightAgent(profile('claude-opus', 'claude-code'), { exec, env: { ANTHROPIC_API_KEY: 'sk-ant-api03-test' } })
     expect(r.ok).toBe(false)
-    expect(r.checks.find((c) => c.name === 'auth')).toMatchObject({ ok: false, fix: 'claude auth login' })
+    expect(r.checks.find((c) => c.name === 'bare')).toMatchObject({ ok: false, detail: expect.stringContaining('--bare') })
   })
 
   it('claude: rejects a CLI older than the model minimum and accepts the minimum', async () => {
     const opus = { id: 'claude/opus-5-5', backend: 'claude-code' as const, model: 'opus-5-5', enabled: true, minCliVersion: '2.1.280' }
-    const auth = { 'claude auth status': { stdout: '{"loggedIn": true}' } }
-    const old = await preflightAgent(opus, { exec: execFrom({ ...auth, 'claude --version': { stdout: '2.1.216 (Claude Code)' } }).exec })
+    const bare = { 'claude --help': { stdout: 'Usage: claude [options]\n  --bare  Minimal mode' } }
+    const env = { ANTHROPIC_API_KEY: 'sk-ant-api03-test' }
+    const old = await preflightAgent(opus, { exec: execFrom({ ...bare, 'claude --version': { stdout: '2.1.216 (Claude Code)' } }).exec, env })
     expect(failing(old)).toEqual(['version'])
     expect(old.checks.find((c) => c.name === 'version')).toMatchObject({ ok: false, detail: expect.stringContaining('2.1.216'), fix: expect.stringContaining('claude update') })
     expect(old.checks.find((c) => c.name === 'version')?.detail).toContain('opus-5-5')
-    const passed = await preflightAgent(opus, { exec: execFrom({ ...auth, 'claude --version': { stdout: '2.1.281 (Claude Code)' } }).exec })
+    const passed = await preflightAgent(opus, { exec: execFrom({ ...bare, 'claude --version': { stdout: '2.1.281 (Claude Code)' } }).exec, env })
     expect(passed.ok).toBe(true)
     // A passing check must not read as a failure.
     expect(passed.checks.find((c) => c.name === 'version')?.detail).not.toContain('older')
-    const ru = await preflightAgent(opus, { exec: execFrom({ ...auth, 'claude --version': { stdout: '2.1.216 (Claude Code)' } }).exec, lang: 'ru' })
+    const ru = await preflightAgent(opus, { exec: execFrom({ ...bare, 'claude --version': { stdout: '2.1.216 (Claude Code)' } }).exec, env, lang: 'ru' })
     expect(ru.checks.find((c) => c.name === 'version')?.detail).toContain('старее')
   })
 
-  it('claude: skips the version check when the model declares no minimum', async () => {
-    const { exec } = execFrom({
-      'claude --version': { stdout: '2.1.100 (Claude Code)' },
-      'claude auth status': { stdout: '{"loggedIn": true}' },
-    })
-    const r = await preflightAgent(profile('claude/opus', 'claude-code'), { exec })
-    expect(r.checks.some((c) => c.name === 'version')).toBe(false)
-    expect(r.ok).toBe(true)
+  it('claude: applies the --bare policy floor when the model declares no minimum', async () => {
+    const bare = { 'claude --help': { stdout: 'Usage: claude [options]\n  --bare  Minimal mode' } }
+    const env = { ANTHROPIC_API_KEY: 'sk-ant-api03-test' }
+    const old = await preflightAgent(profile('claude/opus', 'claude-code'), { exec: execFrom({ ...bare, 'claude --version': { stdout: '2.1.100 (Claude Code)' } }).exec, env })
+    expect(old.checks.find((c) => c.name === 'version')).toMatchObject({ ok: false })
+    const ok = await preflightAgent(profile('claude/opus', 'claude-code'), { exec: execFrom({ ...bare, 'claude --version': { stdout: '2.1.281 (Claude Code)' } }).exec, env })
+    expect(ok.ok).toBe(true)
   })
 
   it('devin: requires 3000.x and a login', async () => {
@@ -86,6 +106,53 @@ describe('preflightAgent', () => {
     expect(r.checks.find((c) => c.name === 'auth')).toMatchObject({ ok: false, fix: 'codex login' })
     const signedIn = execFrom({ 'codex --version': { stdout: 'codex-cli 0.154.0' }, 'codex login status': { stdout: 'Logged in using ChatGPT' } })
     expect((await preflightAgent(profile('codex', 'codex-cli'), { exec: signedIn.exec })).ok).toBe(true)
+  })
+
+  it('gemini: runs no `gemini auth …` (none exists upstream) — a credential in env or ~/.gemini reports as configured, a miss only warns', async () => {
+    const seen: string[] = []
+    const exec: Exec = async (cmd, args) => {
+      seen.push([cmd, ...args].join(' '))
+      return { code: 0, stdout: '1.2.3', stderr: '', timedOut: false }
+    }
+    const home = await mkdtemp(join(tmpdir(), 'pf-gemini-'))
+    const p = profile('gemini/auto', 'gemini-cli', 'auto')
+    // Nothing found: preflight still passes (a keychain-only sign-in cannot be read), but says it is unverified.
+    const unknown = await preflightAgent(p, { exec, env: { HOME: home } })
+    expect(unknown.ok).toBe(true)
+    expect(unknown.checks.find((c) => c.name === 'auth')).toMatchObject({ ok: true, detail: expect.stringContaining('no credential'), fix: expect.stringContaining('gemini') })
+    // The documented stores the CLI itself reads.
+    for (const env of [{ HOME: home, GEMINI_API_KEY: 'k' }, { HOME: home, GOOGLE_APPLICATION_CREDENTIALS: '/x.json' }] as const) {
+      const found = await preflightAgent(p, { exec, env })
+      const expected = 'GEMINI_API_KEY' in env ? 'GEMINI_API_KEY' : 'GOOGLE_APPLICATION_CREDENTIALS'
+      expect(found.checks.find((c) => c.name === 'auth')?.detail).toContain(expected)
+      expect(JSON.stringify(found)).not.toContain('sk-')
+    }
+    const geminiDir = join(home, '.gemini')
+    await mkdir(geminiDir, { recursive: true })
+    await writeFile(join(geminiDir, 'settings.json'), '{"security":{"auth":{"selectedType":"oauth-personal"}}}')
+    expect((await preflightAgent(p, { exec, env: { HOME: home } })).checks.find((c) => c.name === 'auth')?.detail).toContain('settings.json')
+    await writeFile(join(geminiDir, 'oauth_creds.json'), '{}')
+    await writeFile(join(geminiDir, 'settings.json'), '{}')
+    expect((await preflightAgent(p, { exec, env: { HOME: home } })).checks.find((c) => c.name === 'auth')?.detail).toContain('oauth_creds.json')
+    // The checks are version + a read of the credential stores: `auth`/`status`/`login` never reach the CLI.
+    expect(seen).toEqual(Array.from({ length: 5 }, () => 'gemini --version'))
+  })
+
+  it('grok: `grok version` and `grok models` (the documented commands) gate binary and sign-in', async () => {
+    const signedIn = execFrom({ 'grok version': { stdout: 'grok 0.5.0' }, 'grok models': { stdout: 'grok-4.7\ngrok-code-fast-1' } })
+    const ok = await preflightAgent(profile('grok', 'grok-build'), { exec: signedIn.exec })
+    expect(ok.ok).toBe(true)
+    expect(ok.checks.map((c) => [c.name, c.ok])).toEqual([
+      ['binary', true],
+      ['auth', true],
+    ])
+    const signedOut = execFrom({ 'grok version': { stdout: 'grok 0.5.0' }, 'grok models': { code: 1, stderr: 'Please run grok login to sign in' } })
+    const out = await preflightAgent(profile('grok', 'grok-build'), { exec: signedOut.exec })
+    expect(out.ok).toBe(false)
+    expect(out.checks.find((c) => c.name === 'auth')).toMatchObject({ ok: false, fix: 'grok login' })
+    // Auth-looking wording on a zero exit still reads as signed out.
+    const weird = execFrom({ 'grok version': { stdout: 'grok 0.5.0' }, 'grok models': { stdout: 'unauthorized' } })
+    expect((await preflightAgent(profile('grok', 'grok-build'), { exec: weird.exec })).checks.find((c) => c.name === 'auth')?.ok).toBe(false)
   })
 
   it('checks the same binary the launch runs', async () => {
@@ -128,6 +195,14 @@ describe('preflightAgent', () => {
     // The key's value is never shown: only its reference name.
     const found = await preflightAgent(profile('dsh', 'dsh'), { exec, env: { HOME: home, DSH_HOME: other } })
     expect(JSON.stringify(found)).not.toContain('sk-dotenv')
+  })
+
+  it('V-pv1/keys dsh: another provider\'s key is dsh\'s own — no DeepSeek key is asked for and no key file is read', async () => {
+    const { exec } = execFrom({ 'dsh --version': { stdout: '0.1.5-rc.2' }, 'dsh --profile acp --dump-config': { stdout: '- id: acp' } })
+    const env = { HOME: await mkdtemp(join(tmpdir(), 'pf-dsh-other-')) }
+    const result = await preflightAgent(profile('dsh/openrouter/some/model', 'dsh', 'openrouter/some/model'), { exec, env })
+    expect(result.ok).toBe(true)
+    expect(result.checks.map((c) => c.name)).toEqual(['binary', 'profile'])
   })
 
   it('rejects unsupported backends', async () => {

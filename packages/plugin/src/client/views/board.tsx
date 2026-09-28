@@ -2,11 +2,12 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import type { Attention, TaskSnapshot, ViewStatus, WorkerInfo } from '../../shared/types.js'
 import { lensIds, lensTasks } from '../lens.js'
 import { t, useLang } from '../i18n.js'
+import { ReviewSignals } from '../review-signals.js'
 import { decideFolds, foldGraph, readManualFolds, taskCount, writeManualFold } from '../fold.js'
 import { taskTone } from '../styles.js'
 import { identityLabel, runFact, taskIdentity } from '../provider.js'
-import { taskEssence } from '../summary.js'
-import { AcceptBatch, acceptableTasks } from './accept-batch.js'
+import { attentionText, taskEssence } from '../summary.js'
+import { AcceptBatch, batchableTasks } from './accept-batch.js'
 import { laneOf, laneTitle } from './graph/layout.js'
 import type { ViewProps } from './types.js'
 import { VendorMark } from '../vendor-mark.js'
@@ -50,7 +51,7 @@ export function TaskCard({
   const tone = taskTone(task)
   const identity = taskIdentity(task, workers)
   const alert = attention.find((a) => a.severity === 'alert') ?? attention[0]
-  const meta = alert ? alert.message : task.kind === 'decision' || task.kind === 'root' || task.status === 'blocked'
+  const meta = alert ? attentionText(alert) : task.kind === 'decision' || task.kind === 'root' || task.status === 'blocked'
     ? taskEssence(task, now) : [task.returned ? t('welcome.returned') : tone.label, runFact(task, now)].join(' · ')
   const dim = task.status === 'blocked' || task.status === 'backlog'
   return (
@@ -78,6 +79,8 @@ export function TaskCard({
         {alert ? <span className="orc-sr-only">{tone.label}. </span> : null}
         {meta}
       </span>
+      {/* Finished work carries its verdict and the orchestrator's check where the person decides (vc1, B27). */}
+      <ReviewSignals verdict={task.verdict} check={task.reviewCheck} />
       {negativeDeps.length > 0 ? <span className="orc-dep-warning">{t('board.negativeDep')}</span> : null}
     </button>
   )
@@ -195,7 +198,7 @@ export function BoardView({ repo, workers, selectedId, onSelect, density, lens =
   const shared = { attention, workers, selectedId, density, onSelect, now, lensOn, matchIds, rowRef, negativeIds }
   // Everything one confirmation could close, wherever the card itself ended up — attention pulls
   // finished work out of the review column, and the batch must still be reachable from that head.
-  const batch = acceptableTasks(repo).length > 0 ? <AcceptBatch repo={repo} onSelect={onSelect} /> : null
+  const batch = batchableTasks(repo).length > 0 ? <AcceptBatch repo={repo} onSelect={onSelect} /> : null
 
   if (repo.tasks.length === 0) return <p className="orc-empty">{t('board.noTasks')}</p>
 

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { CliRunState } from './cli-runner.js'
 import { finishSteers, readSteer, transitionSteer } from './steers.js'
+import { failureTextOf } from './failure.js'
 export type DevinRunnerArgs = { kind?:'devin'; runDir:string; cwd:string; promptFile:string; command:string; commandArgs?:string[]; model?:string }
 type Mail = {id:string;text:string;mode:'auto'|'queue'|'interrupt';status:string;delivery?:string;error?:string}
 type Rpc = {id?:number|string;method?:string;params?:any;result?:any;error?:any}
@@ -69,7 +70,7 @@ export async function runDevinRun(args:DevinRunnerArgs,stop?:AbortSignal):Promis
    }
    child!.once('error',e=>finish(e.message))
    // Once stopping, the agent exits because we signalled it: an agent that handles SIGTERM exits non-zero, which is no failure.
-   child!.once('close',(code)=>{const failed=code&&!stopping?`Devin ACP exited with code ${code}: ${stderr.trim()}`:undefined;if(failed&&!cancelled)failure=failed;finish(failed)})
+   child!.once('close',(code)=>{const failed=code&&!stopping?`Devin ACP exited with code ${code}${stderr.trim()?`: ${failureTextOf(stderr,'')}`:''}`:undefined;if(failed&&!cancelled)failure=failed;finish(failed)})
   })
   const send=(v:Rpc)=>{
    if(closed)throw new Error('Devin ACP is closed')

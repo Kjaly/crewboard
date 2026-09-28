@@ -46,6 +46,34 @@ async function setup(answer: string | undefined, dirty = true) {
   return { root, backends, launches, base: { root, skipPreflight: true, backends, exec: nodeExec, env: {}, home: root, now: () => NOW } }
 }
 
+/** cm1: like `setup`, but the run's raw events may already carry the runner's own commit nudge (cli-runner.ts). */
+async function setupNudged(answer: string, dirty: boolean, nudged: boolean) {
+  const root = await makeRepo()
+  await writeFile(join(root, 'contract.md'), '# Contract\nDo the thing.\n')
+  await nodeExec('git', ['-C', root, 'add', 'contract.md'])
+  await nodeExec('git', ['-C', root, 'commit', '-q', '-m', 'contract'])
+  if (dirty) await writeFile(join(root, 'work.txt'), 'half done\n')
+  await initPlan(root, 'g', NOW)
+  await updatePlan(root, (p) => {
+    p.tasks.push({ ...newTask({ id: 'a', title: 'A', contract: 'contract.md' }), worktree: { path: root, branch: 'main' }, runs: [{ runId: 'run_claude-a', agent: 'claude', startedAt: '2026-09-24T11:00:00Z' }] })
+    return p
+  })
+  const events = [
+    ...(nudged ? [{ ts: NOW.toISOString(), type: 'commit_nudge', data: { uncommitted: 1 } }] : []),
+    { ts: NOW.toISOString(), type: 'answer_delta', data: answer },
+  ]
+  const backend: RunBackend = {
+    id: 'claude',
+    launch: async () => 'run_claude-b',
+    events: async () => events,
+    status: async () => ({ status: 'completed', terminal: true, exitCode: 0 }),
+    steer: async () => {},
+    cancel: async () => {},
+  }
+  const backends: Backends = { forAgent: async () => backend }
+  return { root, backends }
+}
+
 describe('incomplete runs (bg1)', () => {
   it('V-bg1/incomplete a clean exit with uncommitted work and no answer is incomplete and stays out of review', async () => {
     const { root, backends } = await setup(undefined)
@@ -87,8 +115,7 @@ describe('incomplete runs (bg1)', () => {
     const { root, backends } = await setup(undefined)
     const { plan, states } = await syncPlan(root, backends, NOW)
     const alarms = await gatherAttention(plan, states, backends, NOW)
-    expect(alarms).toEqual([expect.objectContaining({ kind: 'incomplete', severity: 'alert', taskId: 'a', message: expect.stringContaining('без отчёта'), hint: 'crewboard continue a' })])
-    expect(alarms[0]?.message).toContain('1')
+    expect(alarms).toEqual([expect.objectContaining({ kind: 'incomplete', severity: 'alert', taskId: 'a', incomplete: { reason: 'no_report', uncommitted: 1 }, hint: 'crewboard continue a' })])
     const items = needsYou([{ root, attention: alarms, updatedAt: NOW.toISOString(), tasks: [{ id: 'a', title: 'A', kind: 'implement', status: 'ready' }] }])
     expect(items).toEqual([expect.objectContaining({ kind: 'attention', taskId: 'a', alarm: 'incomplete', alert: true })])
   })
@@ -103,7 +130,8 @@ describe('incomplete runs (bg1)', () => {
     expect(prompt).toContain(`Прошлый запуск: claude, итог: incomplete.`)
     expect(prompt).toContain(CONTINUE_DIRECTION)
     expect(prompt).not.toContain('Указание человека')
-    expect(prompt.trimEnd().endsWith(WORKER_RULES.trimEnd())).toBe(true)
+    expect(prompt.startsWith(`${WORKER_RULES}\n# Contract\nDo the thing.\n\n<previous_run>`)).toBe(true)
+    expect(prompt.trimEnd().endsWith('</previous_run>')).toBe(true)
     // The task's copy is keyed by its id: the continued run works in the copy the plan records for it.
     expect(launches[0]?.cwd).toBe((await loadPlan(root)).tasks[0]?.worktree?.path)
   })
@@ -113,5 +141,53 @@ describe('incomplete runs (bg1)', () => {
     await syncPlan(root, backends, NOW)
     await expect(continueTask({ ...base, taskId: 'a' })).rejects.toMatchObject({ code: 'not_incomplete' })
     await expect(continueTask({ ...base, taskId: 'zzz' })).rejects.toMatchObject({ code: 'unknown_task' })
+  })
+})
+
+// cm1: a claimed result is not enough once the runner already asked the worker to commit (cli-runner.ts) and the
+// copy is still dirty — a worker that reported again without actually committing hands nothing in either.
+describe('a result with uncommitted work is finished in the same run (cm1)', () => {
+  it('V-cm1/still-dirty a claimed result after the runner\'s own commit nudge, still dirty, is incomplete', async () => {
+    const { root, backends } = await setupNudged('Результат: получен\n- done', true, true)
+    await syncPlan(root, backends, NOW)
+    const task = (await loadPlan(root)).tasks[0]!
+    expect(task.runs[0]).toMatchObject({ outcome: 'incomplete', incomplete: { reason: 'left_uncommitted', uncommitted: 1 } })
+    expect(task.status).toBe('ready')
+    expect(task.reviewIntervals ?? []).toEqual([])
+  })
+
+  it('V-cm1/committed a claimed result after the commit nudge, now clean, goes to review as before', async () => {
+    const { root, backends } = await setupNudged('Результат: получен\n- done', false, true)
+    await syncPlan(root, backends, NOW)
+    const task = (await loadPlan(root)).tasks[0]!
+    expect(task.runs[0]?.outcome).toBe('completed')
+    expect(task.runs[0]?.incomplete).toBeUndefined()
+    expect(task.status).toBe('in_review')
+  })
+
+  it('a claimed result with a dirty copy the runner never nudged about goes to review unchanged', async () => {
+    // No `commit_nudge` event: an older evidence record, or a run whose report never claimed a result until its
+    // very last turn — either way, nothing here asked the worker to commit, so this is not cm1's concern.
+    const { root, backends } = await setupNudged('Результат: получен\n- done', true, false)
+    await syncPlan(root, backends, NOW)
+    const task = (await loadPlan(root)).tasks[0]!
+    expect(task.runs[0]?.outcome).toBe('completed')
+    expect(task.status).toBe('in_review')
+  })
+
+  it('raises an incomplete alarm for left_uncommitted with the count and the continue hint', async () => {
+    const { root, backends } = await setupNudged('Результат: получен\n- done', true, true)
+    const { plan, states } = await syncPlan(root, backends, NOW)
+    const alarms = await gatherAttention(plan, states, backends, NOW)
+    expect(alarms).toEqual([
+      expect.objectContaining({
+        kind: 'incomplete',
+        severity: 'alert',
+        taskId: 'a',
+        incomplete: { reason: 'left_uncommitted', uncommitted: 1 },
+        hint: 'crewboard continue a',
+        message: 'The run reported a result but left 1 files uncommitted',
+      }),
+    ])
   })
 })

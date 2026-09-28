@@ -6,7 +6,7 @@ import { deadEnds } from '../dead-ends.js'
 import { lensIds, lensTasks } from '../lens.js'
 import { relativeTime, t, useLang } from '../i18n.js'
 import { taskTone } from '../styles.js'
-import { sinceLabel, taskEssence } from '../summary.js'
+import { attentionText, sinceLabel, taskEssence } from '../summary.js'
 import { AcceptBatch } from './accept-batch.js'
 import type { ViewProps } from './types.js'
 
@@ -71,7 +71,7 @@ type RowLens = { dim: boolean; rowRef(el: HTMLLIElement | null): void }
 
 function AttentionRow({ item, task, selected, detailed, onSelect, root, dim, rowRef }: { item: Attention; task: TaskSnapshot; selected: boolean; detailed: boolean; onSelect(id: string): void; root: string } & RowLens) {
   const action = useAction()
-  const meta = item.hint ? `${item.message} → ${item.hint}` : item.message
+  const meta = item.hint ? `${attentionText(item)} → ${item.hint}` : attentionText(item)
   return (
     <Row task={task} meta={meta} tone={item.severity === 'alert' ? 'alert' : 'warn'} selected={selected} detailed={detailed} dim={dim} rowRef={rowRef} onSelect={onSelect}>
       {task.status === 'running' ? (

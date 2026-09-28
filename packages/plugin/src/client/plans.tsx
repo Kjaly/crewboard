@@ -12,7 +12,7 @@ export function plansOf(repo: RepoSnapshot): PlanItem[] {
     {
       id: repo.planId ?? 'main',
       goal: repo.goal || repo.root,
-      archived: false,
+      archived: repo.archived === true,
       current: true,
       rev: repo.rev,
       updatedAt: repo.updatedAt,

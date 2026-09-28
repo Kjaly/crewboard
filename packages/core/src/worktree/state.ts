@@ -4,9 +4,9 @@ import { join, resolve } from 'node:path'
 /**
  * The last baseline of a task worktree: the copy's `commit` it ran on, the repository `base` that commit
  * contains (absent when the copy could not take the repository HEAD in), the command after `{scope}`
- * was filled in, its result and when it finished.
+ * was filled in, its result and when it finished. A red one names the file with its full output (tk1).
  */
-export type BaselineRecord = { commit: string; base?: string; command: string; ok: boolean; at: string }
+export type BaselineRecord = { commit: string; base?: string; command: string; ok: boolean; at: string; log?: string }
 
 /** What a launch knows about a copy it did not create just now. No file: a copy of an older version — unknown. */
 export type WorktreeState = { setup?: { ok: boolean; at: string }; baseline?: BaselineRecord }

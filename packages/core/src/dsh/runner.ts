@@ -2,6 +2,9 @@ import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from 'nod
 import { join } from 'node:path'
 import type { RawEvent } from '../runs/raw-event.js'
 import { AcpConnection } from './acp.js'
+import { isIdentifiedAnthropicRoute } from '../routing/anthropic-policy.js'
+import type { FailureReason } from '../runs/failure.js'
+import { dshSelectionOf } from './models.js'
 import { finishSteers, steerIdOfMail, transitionSteer } from '../runs/steers.js'
 
 export type DshRunStatus = 'running' | 'completed' | 'failed' | 'cancelled'
@@ -12,12 +15,12 @@ export type DshRunState = {
   finishedAt?: string
   sessionId?: string
   error?: string
+  reason?: FailureReason
   pid: number
 }
 export type RunnerArgs = { runDir: string; cwd: string; promptFile: string; model?: string; command: string; args: string[] }
 
 export const DEFAULT_DSH_COMMAND = { command: 'dsh', args: ['--profile', 'acp'] }
-const PROVIDER = 'deepseek-official'
 const MAILBOX_POLL_MS = 250
 
 export const runPaths = (runDir: string) => ({
@@ -94,6 +97,12 @@ export async function runDshRun(args: RunnerArgs, now: () => Date = () => new Da
     return state
   }
 
+  // Direct/stale runner calls cannot bypass the same identified-provider rule used by preflight.
+  if (isIdentifiedAnthropicRoute({ backend: 'dsh', model: args.model })) {
+    state.reason = { code: 'setup_failed', step: 'anthropic-automation-policy' }
+    return finish('failed', 1, 'Crewboard API-only policy: this identified Anthropic route is unverified. Use the supported direct Claude API adapter or another allowed worker.')
+  }
+
   const conn = AcpConnection.spawn(args.command, args.args, args.cwd)
   conn.onNotification = (method, params) => {
     if (method !== 'session/update') return
@@ -122,7 +131,8 @@ export async function runDshRun(args: RunnerArgs, now: () => Date = () => new Da
     state.sessionId = session.sessionId
     await writeJsonAtomic(paths.state, state)
     if (args.model) {
-      await conn.request('session/set_config_option', { sessionId: session.sessionId, configId: 'model', value: JSON.stringify([PROVIDER, args.model]) })
+      const { provider, model } = dshSelectionOf(args.model)
+      await conn.request('session/set_config_option', { sessionId: session.sessionId, configId: 'model', value: JSON.stringify([provider, model]) })
     }
 
     const queue: { text: string; id?: string }[] = []
@@ -132,7 +142,7 @@ export async function runDshRun(args: RunnerArgs, now: () => Date = () => new Da
       for (const item of await takeMail(paths.mailbox)) {
         if (item.kind === 'cancel') {
           cancelled = true
-          await emit('steer', 'остановка по запросу')
+          await emit('steer', { code: 'stop_requested' })
         } else {
           queue.push({ text: item.text, ...(item.id ? { id: item.id } : {}) })
           await emit('steer', item.text.trim().slice(0, 200))

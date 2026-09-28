@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { OrchestraRepoSnapshot, TaskDetail, TaskSnapshot, WorkerInfo } from '../shared/types.js'
-import { api } from './api.js'
+import { api, shared, taskVersion } from './api.js'
 import { isOwnWork, waitsForHuman } from '../../../core/src/plan/graph.js'
 import { t } from './i18n.js'
 import { orchestraStore } from './store.js'
@@ -49,7 +49,7 @@ export function TaskMenu({ request, repo, workers, onClose, onSelect, onTab, onT
   // biome-ignore lint/correctness/useExhaustiveDependencies: The listed key intentionally triggers a refresh when its underlying data changes.
   useEffect(() => {
     let alive = true
-    void api.task(repo.root, request.taskId).then((result) => { if (alive && result.ok) setDetail(result.value) })
+    void shared.task(repo.root, request.taskId, taskVersion(repo, request.taskId)).then((result) => { if (alive && result.ok) setDetail(result.value) })
     return () => { alive = false }
   }, [repo.root, request.taskId, repo.rev])
   // biome-ignore lint/correctness/useExhaustiveDependencies: The listed key intentionally triggers a refresh when its underlying data changes.
@@ -82,7 +82,8 @@ export function TaskMenu({ request, repo, workers, onClose, onSelect, onTab, onT
   if (request.selectedIds && request.selectedIds.length > 1) {
     const selected = request.selectedIds.map((id) => repo.tasks.find((item) => item.id === id)).filter((item): item is TaskSnapshot => !!item)
     const batch: Item[] = []
-    if (selected.length > 1 && selected.every((item) => waitsForHuman(item))) batch.push({ label: t('menu.acceptSelected'), action: () => act(() => api.acceptBatch(repo.root, selected.map((item) => item.id))) })
+    // dc1: a decision never closes in a batch — it is confirmed one by one in its panel.
+    if (selected.length > 1 && selected.every((item) => waitsForHuman(item) && item.kind !== 'decision')) batch.push({ label: t('menu.acceptSelected'), action: () => act(() => api.acceptBatch(repo.root, selected.map((item) => item.id))) })
     batch.push({ label: t('menu.highlight'), action: () => { onGraph(); close() } })
     groups.push(batch)
   } else {

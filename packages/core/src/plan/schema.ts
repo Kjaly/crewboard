@@ -1,3 +1,4 @@
+import { FAILURE_CODES } from '../runs/failure.js'
 import * as z from '../util/zod.js'
 
 /**
@@ -64,17 +65,45 @@ function tolerate<S extends z.core.$ZodType>(label: string, fields: Tolerated, s
 const kept = <T extends z.core.$ZodLooseShape>(shape: T) => z.looseObject(shape) as unknown as z.ZodMiniObject<z.core.util.Writeable<T>, z.core.$strip>
 
 /**
- * `incomplete` (bg1): the worker process finished cleanly, but its copy has uncommitted changes and its answer
- * carries no result claim — it stopped mid-work, it did not hand anything in. Strict like the rest: an older build
+ * `incomplete` (bg1, cm1): the worker process finished cleanly, but its copy has uncommitted changes — either its
+ * answer carries no result claim (it stopped mid-work, it did not hand anything in), or it claimed a result, was
+ * asked once to commit before finishing, and still left files uncommitted. Strict like the rest: an older build
  * reading it as `completed` would put unfinished work in review, so it refuses the plan instead.
  */
 const OUTCOMES = ['completed', 'failed', 'cancelled', 'incomplete'] as const
-export const INCOMPLETE_REASONS = ['no_report', 'no_claim'] as const
+export const INCOMPLETE_REASONS = ['no_report', 'no_claim', 'left_uncommitted'] as const
 const BILLING_MODES = ['api', 'subscription', 'promotional', 'unknown'] as const
+/** The verified commercial channel a run was launched on (routing/anthropic-policy.ts). Descriptive, so tolerated. */
+const AUTH_CHANNELS = ['anthropic-api-key'] as const
 const IDENTITY_RESOLUTIONS = ['launch_snapshot', 'alias', 'legacy_inferred', 'unresolved'] as const
 const ATTEMPT_TRIGGERS = ['initial', 'human_relaunch', 'automatic_retry', 'unknown'] as const
 const WORKER_CHOICES = ['preset', 'person', 'agent'] as const
 const ATTRIBUTIONS = ['exclusive', 'shared', 'unknown'] as const
+
+/**
+ * Why a failed run failed (fo1): a code next to the text. Optional and loose, so older builds keep it as an unknown
+ * key; the strict `outcome` enum is not widened. A code this build does not know reads as `worker_error`.
+ */
+const FailureSchema = tolerate('failure', { reason: { values: FAILURE_CODES, fallback: 'worker_error' } }, kept({
+  reason: z.enum(FAILURE_CODES),
+  text: z.optional(z.string()),
+  resetsAt: z.optional(z.string()),
+  login: z.optional(z.string()),
+  step: z.optional(z.string()),
+  log: z.optional(z.string()),
+}))
+
+/**
+ * A launch that failed before any worker started (fo1): the worktree's setup, a red baseline, a full disk. Kept on
+ * the task, since no run exists for it; a later run supersedes it.
+ */
+const LaunchFailureSchema = tolerate('launchFailure', { reason: { values: ['setup_failed', 'baseline_red', 'disk_full'], fallback: 'setup_failed' } }, kept({
+  at: z.string(),
+  reason: z.enum(['setup_failed', 'baseline_red', 'disk_full']),
+  step: z.optional(z.string()),
+  log: z.optional(z.string()),
+  text: z.optional(z.string()),
+}))
 
 const QuotaSampleSchema = tolerate('quotaSample', { attribution: { values: ATTRIBUTIONS, fallback: 'unknown' } }, kept({ sampleId: z.string(), accountKey: z.string(), provider: z.string(), windowId: z.string(), windowStart: z.optional(z.string()), resetAt: z.optional(z.string()), observedBeforeAt: z.optional(z.string()), observedAfterAt: z.optional(z.string()), beforePct: z.number(), afterPct: z.number(), rawResolution: z.optional(z.number()), reset: z.optional(z.boolean()), attribution: z.enum(ATTRIBUTIONS) }))
 
@@ -86,7 +115,11 @@ const RunObject = kept({
   outcome: z.optional(z.enum(OUTCOMES)),
   /** Why an `incomplete` run is one: no final answer at all, or an answer without a result claim; files left uncommitted. */
   incomplete: z.optional(kept({ reason: z.enum(INCOMPLETE_REASONS), uncommitted: z.number() })),
+  /** Why a `failed` run failed (fo1); absent on older runs and on other outcomes. */
+  failure: z.optional(FailureSchema),
   model: z.optional(z.string()),
+  /** The effort the worker's CLI was launched with (ef1); absent — the CLI's default, or a run of an older build. */
+  effort: z.optional(z.string()),
   contractPath: z.optional(z.string()),
   contractRevision: z.optional(z.string()),
   evidence: z.optional(z.string()),
@@ -98,6 +131,13 @@ const RunObject = kept({
   canonicalWorkerId: z.optional(z.string()),
   provider: z.optional(z.string()),
   billingMode: z.optional(z.enum(BILLING_MODES)),
+  /**
+   * The auth channel a launch resolved and the policy revision that allowed it (2026-09-28 API-only Claude
+   * policy). Non-secret: a channel name and a revision string, never a credential or its value. Absent on
+   * historical runs, whose billing assumptions stay as recorded.
+   */
+  authChannel: z.optional(z.enum(AUTH_CHANNELS)),
+  policyRevision: z.optional(z.string()),
   identityResolution: z.optional(z.enum(IDENTITY_RESOLUTIONS)),
   attemptIndex: z.optional(z.number().check(z.int(), z.positive())),
   attemptParentRunId: z.optional(z.string()),
@@ -108,6 +148,7 @@ const RunObject = kept({
 /** Launch metadata is descriptive: an unknown value reads as absent — historical, unknown. `outcome` stays strict. */
 export const RunSchema = tolerate('run', {
   billingMode: { values: BILLING_MODES },
+  authChannel: { values: AUTH_CHANNELS },
   identityResolution: { values: IDENTITY_RESOLUTIONS },
   attemptTrigger: { values: ATTEMPT_TRIGGERS },
   workerChoice: { values: WORKER_CHOICES },
@@ -122,17 +163,32 @@ export type NoteEvent =
   | { kind: 'check_due' }
   | { kind: 'check_taken'; by?: string }
   | { kind: 'checked'; by?: string; note: string }
+  | { kind: 'result_attested'; verdict: 'result' | 'negative' | 'disputed'; report: string; proofHash: string; runId: string; head: string; contractRevision: string; by: 'orchestrator' }
   | { kind: 'check_returned'; by?: string; findings: string }
   | { kind: 'check_skipped' }
-  | { kind: 'accepted'; evidence?: string }
+  | { kind: 'accepted'; evidence?: string; by?: 'orchestrator' }
+  /** dc1: an answer the person already gave in chat, recorded by the orchestrator (`decision answer`); `by` is
+   *  pinned to the orchestrator so a chat record can never pass for a click in the panel. */
+  | { kind: 'answered'; answer: string; basis: string; by: 'orchestrator' }
+  /** dc1: an open decision sent back into the orchestrator's preparation (`decision prepare`) at the person's
+   *  word; `report` keeps the earlier proposal's report file as history once the check it hung on is cleared. */
+  | { kind: 'decision_prepare'; reason: string; by?: string; report?: string }
   | { kind: 'rejected'; reason: string }
   | { kind: 'superseded'; by: string }
   | { kind: 'dropped'; reason: string }
   | { kind: 'launched_outside_preset'; worker: string; preset?: string }
   | { kind: 'preset_fallback'; stale: string; worker: string; preset?: string }
+  /** nb1: an automatic pick passed over `skipped` (its first failed check, `reason`) and ran `worker`. */
+  | { kind: 'worker_skipped'; skipped: string; reason: string; worker: string }
   | { kind: 'steer'; delivery: 'delivered' | 'refused' | 'failed' | 'abandoned'; steerId: string; detail?: string; message: string }
   | { kind: 'worktree'; outcome: 'removed' | 'kept_recent' | 'kept_unmerged' }
   | { kind: 'started'; by?: string }
+  /** A person merged the accepted work from Crewboard (mg1): `commit` is the new commit on `into`. */
+  | { kind: 'merged'; into: string; strategy: 'no-ff' | 'squash'; commit: string }
+  /** mk1: the copy's uncommitted work was found in `into` byte for byte — carried there by hand, no branch commit. */
+  | { kind: 'merged_by_content'; into: string }
+  /** mk1: a person recorded the work as merged (`crewboard mark-merged`, the screen's Mark as merged…) with a reason. */
+  | { kind: 'marked_merged'; into: string; by: 'person'; reason: string }
 
 /**
  * The event shapes, checked by hand rather than by a zod union: a union with a fallback for unknown kinds
@@ -144,17 +200,24 @@ const EVENT_SHAPES: Record<NoteEvent['kind'], EventShape> = {
   check_due: {},
   check_taken: { may: ['by'] },
   checked: { need: ['note'], may: ['by'] },
+  result_attested: { need: ['verdict', 'report', 'proofHash', 'runId', 'head', 'contractRevision', 'by'], may: [], oneOf: { verdict: ['result', 'negative', 'disputed'], by: ['orchestrator'] } },
   check_returned: { need: ['findings'], may: ['by'] },
   check_skipped: {},
-  accepted: { may: ['evidence'] },
+  accepted: { may: ['evidence', 'by'] },
+  answered: { need: ['answer', 'basis'], oneOf: { by: ['orchestrator'] } },
+  decision_prepare: { need: ['reason'], may: ['by', 'report'] },
   rejected: { need: ['reason'] },
   superseded: { need: ['by'] },
   dropped: { need: ['reason'] },
   launched_outside_preset: { need: ['worker'], may: ['preset'] },
   preset_fallback: { need: ['stale', 'worker'], may: ['preset'] },
+  worker_skipped: { need: ['skipped', 'reason', 'worker'] },
   steer: { need: ['steerId', 'message'], may: ['detail'], oneOf: { delivery: ['delivered', 'refused', 'failed', 'abandoned'] } },
   worktree: { oneOf: { outcome: ['removed', 'kept_recent', 'kept_unmerged'] } },
   started: { may: ['by'] },
+  merged: { need: ['into', 'commit'], oneOf: { strategy: ['no-ff', 'squash'] } },
+  merged_by_content: { need: ['into'] },
+  marked_merged: { need: ['into', 'reason'], oneOf: { by: ['person'] } },
 }
 
 /** A stored event this build knows, reduced to its own fields; anything else (a newer build's kind) is undefined. */
@@ -198,7 +261,7 @@ export const NoteSchema = tolerate('note', { type: { values: NOTE_TYPES, fallbac
   })),
 }))
 
-const INTERVAL_SOURCES = ['human', 'legacy_note', 'inferred'] as const
+const INTERVAL_SOURCES = ['human', 'orchestrator', 'legacy_note', 'inferred'] as const
 const INTERVAL_ASSOCIATIONS = ['exact', 'task_only', 'ambiguous'] as const
 /** `decision` stays strict (absent means «still open»); an unknown provenance reads as its default. */
 export const ReviewIntervalSchema = tolerate('reviewInterval', { source: { values: INTERVAL_SOURCES }, association: { values: INTERVAL_ASSOCIATIONS } }, kept({
@@ -217,14 +280,28 @@ export const ReviewIntervalSchema = tolerate('reviewInterval', { source: { value
  */
 export const CHECK_STATES = ['pending', 'checking', 'checked'] as const
 export type CheckState = (typeof CHECK_STATES)[number]
+export const ResultAttestationSchema = kept({
+  verdict: z.enum(['result', 'negative', 'disputed']),
+  report: z.string(),
+  proofHash: z.string(),
+  by: z.literal('orchestrator'),
+  runId: z.string(),
+  checkedAt: z.string(),
+  head: z.string(),
+  contractPath: z.string(),
+  contractRevision: z.string(),
+})
+export type ResultAttestation = z.infer<typeof ResultAttestationSchema>
 export const TaskCheckSchema = kept({
   state: z.enum(CHECK_STATES),
   runId: z.optional(z.string()),
   at: z.string(),
   by: z.optional(z.string()),
   note: z.optional(z.string()),
-  /** Root tasks and decisions: the stored markdown report (`.orchestration/reports/…`), relative to the repository. */
+  /** Own work, or an orchestrator's final report for a preserved incomplete worker run. */
   report: z.optional(z.string()),
+  /** Worktree HEAD certified by the orchestrator's final report for an incomplete run. */
+  commit: z.optional(z.string()),
 })
 export type TaskCheck = z.infer<typeof TaskCheckSchema>
 
@@ -257,20 +334,30 @@ const TaskObject = kept({
   contract: z.optional(z.string()),
   acceptance: z.optional(z.array(z.string())),
   sources: z.optional(z.array(z.string())),
-  worktree: z.optional(kept({ path: z.string(), branch: z.string() })),
+  /** `base` (mg1): the branch checked out in the main checkout when the copy was made — where its work is merged. */
+  worktree: z.optional(kept({ path: z.string(), branch: z.string(), base: z.optional(z.string()) })),
   /**
    * An accepted task's branch reached the base branch (w1d): recorded on sync once the branch is an ancestor of
-   * `into` and the copy holds nothing uncommitted. Crewboard never merges by itself — a person or the orchestrator
-   * does. `commit` — the branch tip at that moment; absent when the branch was already gone (deleted after its
-   * merge, or by worktree cleanup, which removes only merged copies).
+   * `into` and the copy holds nothing uncommitted. Crewboard merges only when a person asks it to (mg1); otherwise
+   * a person or the orchestrator merges by hand. `commit` — the branch tip at that moment; absent when the branch was already gone (deleted after its
+   * merge, or by worktree cleanup, which removes only merged copies). `mergeCommit` and `strategy` (mg1): the
+   * merge was made by `crewboard merge` or the screen's Merge — the commit it created on `into`, and how.
+   * `how` (mk1): `content` — the copy's uncommitted work was found in `into` byte for byte (carried there by hand);
+   * `person` — a person recorded it as merged, with `by: 'person'` and their `reason`.
    */
-  merged: z.optional(kept({ at: z.string(), into: z.string(), commit: z.optional(z.string()) })),
+  merged: z.optional(kept({ at: z.string(), into: z.string(), commit: z.optional(z.string()), mergeCommit: z.optional(z.string()), strategy: z.optional(z.enum(['no-ff', 'squash'])), how: z.optional(z.enum(['content', 'person'])), by: z.optional(z.enum(['person'])), reason: z.optional(z.string()) })),
   runs: z._default(z.array(RunSchema), []),
   notes: z._default(z.array(NoteSchema), []),
   reviewIntervals: z.optional(z.array(ReviewIntervalSchema)),
   check: z.optional(TaskCheckSchema),
+  /** Append-only independent orchestrator judgements; worker runs and evidence remain immutable. */
+  resultAttestations: z.optional(z.array(ResultAttestationSchema)),
   /** Root tasks (rt1): the orchestrator took the work with `start` — «in work by the orchestrator». */
   started: z.optional(kept({ at: z.string(), by: z.optional(z.string()) })),
+  /** The last launch that failed before a worker started (fo1); older than the last run's start — stale. */
+  launchFailure: z.optional(LaunchFailureSchema),
+  /** A manual drag on the graph (mm1): `y` is relative to the lane's own top, so folding or reordering
+   *  a lane above it moves the card with the lane instead of dragging it into a neighbour's band. */
   pos: z.optional(kept({ x: z.number(), y: z.number() })),
 })
 
@@ -307,6 +394,8 @@ const PlanObject = tolerate('plan', { exampleLang: { values: ['en', 'ru'] } }, k
     preset: z.optional(z.string()),
     /** «Orchestrator checks finished work» for this plan; absent — the repository setting, else on while the plan has a chat. */
     orchestratorCheck: z.optional(z.boolean()),
+    /** The base new copies branch from, for this plan (bs1); absent — the repository's setting, else the repository's own default (`origin/HEAD`, else `main`/`master`). */
+    defaultBase: z.optional(z.string()),
     archived: z.optional(z.boolean()),
     example: z.optional(z.boolean()),
     exampleLang: z.optional(z.enum(['en', 'ru'])),

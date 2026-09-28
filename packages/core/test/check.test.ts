@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest'
 import type { LaunchInput, RunBackend } from '../src/backend/types.js'
 import { nodeExec } from '../src/exec.js'
 import type { Backends } from '../src/orchestration/backends.js'
-import { finishCheck, returnFromCheck, takeCheck } from '../src/orchestration/check.js'
+import { gatherAttention } from '../src/orchestration/attention.js'
+import { finishCheck, returnFromCheck, takeCheck, takeUncommittedForCheck } from '../src/orchestration/check.js'
 import { resolveOrchestratorCheck, setPlanOrchestratorCheck, setRepositoryOrchestratorCheck } from '../src/orchestration/check-setting.js'
 import { acceptTask } from '../src/orchestration/review.js'
 import { buildRepoSnapshot } from '../src/orchestration/snapshot.js'
@@ -137,5 +138,31 @@ describe('orchestrator check (vr1)', () => {
     await expect(takeCheck(root, 't2', NOW)).rejects.toMatchObject({ code: 'not_in_review' })
     await expect(takeCheck(root, 'zzz', NOW)).rejects.toMatchObject({ code: 'unknown_task' })
     await expect(finishCheck(root, 't2', '  ', NOW)).rejects.toMatchObject({ code: 'no_note' })
+  })
+
+  it('takes a reported uncommitted run for orchestrator review without changing its incomplete outcome', async () => {
+    const { root, backends } = await setup(true)
+    await updatePlan(root, (p) => {
+      const task = p.tasks[0]!
+      task.runs = [{ runId: 'run_dsh-a', agent: 'dsh', startedAt: NOW.toISOString(), finishedAt: NOW.toISOString(), outcome: 'incomplete', incomplete: { reason: 'left_uncommitted', uncommitted: 2 }, evidence: '.orchestration/runs/run_dsh-a/evidence.json' }]
+      return p
+    })
+    await takeUncommittedForCheck(root, 't1', 'files preserved; checks still failing', NOW, { by: 'orchestrator' })
+    const task = (await loadPlan(root)).tasks[0]!
+    expect(task.runs[0]?.outcome).toBe('incomplete')
+    expect(task).toMatchObject({ status: 'in_review', check: { state: 'checking', runId: 'run_dsh-a', note: 'files preserved; checks still failing' } })
+    expect(await waits(root)).toBe(false)
+    expect(await gatherAttention(await loadPlan(root), {}, backends, NOW)).toEqual([])
+    await expect(takeUncommittedForCheck(root, 't1', 'again', NOW)).rejects.toMatchObject({ code: 'not_ready' })
+  })
+
+  it('takes preserved no-claim work for an orchestrator-authored final report', async () => {
+    const { root } = await setup(true)
+    await updatePlan(root, (p) => {
+      p.tasks[0]!.runs = [{ runId: 'run_dsh-a', agent: 'dsh', startedAt: NOW.toISOString(), finishedAt: NOW.toISOString(), outcome: 'incomplete', incomplete: { reason: 'no_claim', uncommitted: 2 }, evidence: '.orchestration/runs/run_dsh-a/evidence.json' }]
+      return p
+    })
+    await takeUncommittedForCheck(root, 't1', 'Final claim was lost; the copy is preserved', NOW, { by: 'orchestrator' })
+    expect((await loadPlan(root)).tasks[0]).toMatchObject({ status: 'in_review', check: { state: 'checking', runId: 'run_dsh-a' } })
   })
 })

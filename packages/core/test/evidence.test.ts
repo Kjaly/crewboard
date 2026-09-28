@@ -41,6 +41,32 @@ function backend(answer?: string, unreadable = false): Backends {
 }
 
 describe('terminal run evidence', () => {
+  it('projects legacy READY03 check claims read-only from the final answer, separately from receipts', async () => {
+    const root = await fixture()
+    await writeFile(join(root, 'contract.md'), '<checks>\n- pnpm --filter @crewboard/core typecheck\n- git diff --check\n</checks>\n')
+    const answer = 'Результат: заблокирован — браузер недоступен.\n- Typecheck — **PASS**, exit 0.\n- `git diff --check` — **PASS**.\n- Worker browser — **NOT RUN**, EPERM'
+    await syncPlan(root, backend(answer), NOW)
+    const task = (await loadPlan(root)).tasks[0]!
+    const evidencePath = join(root, task.runs[0]!.evidence!)
+    const stored = JSON.parse(await readFile(evidencePath, 'utf8'))
+    stored.checks = [
+      { command: 'pnpm --filter @crewboard/core typecheck', state: 'unreported' },
+      { command: 'git diff --check', state: 'not_run' },
+    ]
+    await writeFile(evidencePath, JSON.stringify(stored, null, 2))
+    const immutableSnapshot = await readFile(evidencePath, 'utf8')
+
+    const detail = await getTaskDetail(root, 'a', backend(answer), nodeExec)
+    expect(detail.workerClaimProjection).toMatchObject({ version: 1, source: 'finalAnswer', checks: [
+      { command: 'pnpm --filter @crewboard/core typecheck', state: 'run' },
+      { command: 'git diff --check', state: 'run' },
+    ], workerBrowserClaim: { state: 'not_run', line: '- Worker browser — **NOT RUN**, EPERM' } })
+    expect(detail.evidence?.checks).toEqual(stored.checks)
+    expect(detail.evidence?.crewboardChecks).toBeUndefined()
+    expect(detail.verdict?.kind).toBe('negative')
+    expect(await readFile(evidencePath, 'utf8')).toBe(immutableSnapshot)
+  })
+
   it('writes once and serves the accepted facts without backend or worktree', async () => {
     const root = await fixture()
     const answer = 'Результат: получен\n## Отчёт\nВыполнил pnpm test; 2 tests passed.\nПроверку pnpm lint не запускал.\n'
@@ -53,7 +79,7 @@ describe('terminal run evidence', () => {
     expect((await readEvidence(root, run.evidence))?.finalAnswer).toBe(answer)
     await rm(join(root, 'file.txt'))
     const dead: Backends = { forAgent: async () => { throw new Error('backend must not be called') } }
-    const detail = await getTaskDetail(root, 'a', dead, async () => { throw new Error('git must not be called') })
+    const detail = await getTaskDetail(root, 'a', dead, nodeExec)
     expect(detail.report?.text).toContain('Выполнил pnpm test')
     expect(detail.changedFiles).toEqual(['file.txt'])
     expect(detail.verdict?.facts.map((f) => f.code)).toContain('checks_not_run')

@@ -63,7 +63,7 @@ describe('orch plan commands', () => {
     await run(['init'], bot.io)
     await run(['task', 'add', 'plan', '--title', 'План', '--kind', 'decision'], bot.io)
     expect(await run(['--lang', 'ru', 'accept', 'plan'], bot.io)).toBe(1)
-    expect(bot.err()).toContain('только человек')
+    expect(bot.err()).toContain('если вы человек')
 
     const human = makeHarness({ cwd: root, isTTY: true, answers: ['да'] })
     expect(await run(['accept', 'plan'], human.io)).toBe(0)

@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useState } from 'react'
 import type { TaskSnapshot } from '../../shared/types.js'
-import { api } from '../api.js'
+import { shared, taskVersion } from '../api.js'
 import { isChecking, waitsForHuman } from '../../../../core/src/plan/graph.js'
 import { t, useLang } from '../i18n.js'
 import { sinceLabel } from '../summary.js'
@@ -35,7 +35,7 @@ function RunningCard({ task, repo, ...props }: { task: TaskSnapshot; repo: ViewP
   // biome-ignore lint/correctness/useExhaustiveDependencies: The listed key intentionally triggers a refresh when its underlying data changes.
   useEffect(() => {
     let live = true
-    void api.task(repo.root, task.id).then((result) => {
+    void shared.task(repo.root, task.id, taskVersion(repo, task.id)).then((result) => {
       if (live && result.ok) setLast(result.value.events.at(-1)?.text ?? null)
     }).catch(() => {})
     return () => { live = false }

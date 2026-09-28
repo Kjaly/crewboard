@@ -4,7 +4,15 @@ Releases are published from `.github/workflows/release.yml` when a `v*` tag is p
 
 ## One-time npm setup
 
-For **each** npm package (`crewboard` and `dsh-crewboard`):
+A trusted publisher is configured in the settings of a package that already exists on npm, so the first version is published by hand; the workflow publishes every later tag. The workflow skips a package whose version is already on npm, so tagging the hand-published version still runs the checks and does not fail.
+
+First release, from a clean checkout of the tagged commit:
+
+1. `pnpm install --frozen-lockfile && pnpm release:check` — it builds and packs both packages and checks the tarballs.
+2. `npm login` with the npm account that will own the packages (two-factor authentication on).
+3. `npm publish packages/cli/<crewboard tarball> --access public` and `npm publish packages/plugin/<dsh-crewboard tarball> --access public` (the paths `release:check` printed).
+
+Then, for **each** package:
 
 1. Create or claim the package on npm under the intended owner and grant the release maintainers access.
 2. In npm package settings, configure a trusted publisher for GitHub Actions with repository owner `Kjaly`, repository `crewboard`, and workflow filename `release.yml`.

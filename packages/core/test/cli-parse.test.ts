@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseClaudeLine, parseCodexLine } from '../src/runs/cli-parse.js'
+import { opencodeTurnState, parseClaudeLine, parseCodexLine, parseCursorLine, parseGeminiOutput, parseGrokLine, parseOpencodeLine } from '../src/runs/cli-parse.js'
 
 describe('parseClaudeLine', () => {
   it('maps init, text, tool use/result, rate limits and results', () => {
@@ -63,9 +63,103 @@ describe('parseCodexLine', () => {
     expect(parseCodexLine('{"type":"item.completed","item":{"id":"i0","type":"error","message":"skills budget"}}').events).toEqual([['warning', 'skills budget']])
     expect(parseCodexLine('{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":800,"output_tokens":50,"reasoning_output_tokens":5}}').turnEnd).toEqual({
       stopReason: 'completed',
-      usage: { input: 200, output: 50, cacheRead: 800, cacheWrite: 0, reasoning: 5 },
+      usage: { input: 200, output: 50, cacheRead: 800, reasoning: 5 },
     })
+    expect(parseCodexLine('{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":5,"cache_write_input_tokens":0,"reasoning_output_tokens":1}}').turnEnd?.usage).toHaveProperty('cacheWrite', 0)
     expect(parseCodexLine('{"type":"turn.failed","error":{"message":"boom"}}').turnEnd).toMatchObject({ stopReason: 'failed', failed: true, error: 'boom' })
     expect(parseCodexLine('{"type":"error","message":"Reconnecting 1/5"}').events).toEqual([['warning', 'Reconnecting 1/5']])
+  })
+})
+
+describe('parseOpencodeLine (rb1; shapes verified against opencode 1.18.30 live output)', () => {
+  it('preserves partial cache-write coverage when an error ends a mixed-step turn', () => {
+    const turn = opencodeTurnState()
+    parseOpencodeLine(JSON.stringify({ type: 'step_finish', part: { reason: 'tool-calls', tokens: { cache: { write: 7 } } } }), turn)
+    parseOpencodeLine(JSON.stringify({ type: 'step_finish', part: { reason: 'tool-calls', tokens: {} } }), turn)
+    const ended = parseOpencodeLine(JSON.stringify({ type: 'error', error: { data: { message: 'provider refused' } } }), turn)
+    expect(ended.turnEnd?.usage).toMatchObject({ cacheWrite: 7, cacheWritePartial: true })
+  })
+  it('maps text, tool calls, session id and accumulates tokens/cost across step_finish lines', () => {
+    const turn = opencodeTurnState()
+    expect(parseOpencodeLine('{"type":"step_start","sessionID":"ses_1","part":{"type":"step-start","sessionID":"ses_1"}}', turn)).toEqual({ events: [], sessionId: 'ses_1' })
+    expect(parseOpencodeLine('{"type":"text","sessionID":"ses_1","part":{"type":"text","text":"on it","sessionID":"ses_1"}}', turn).events).toEqual([['answer_delta', 'on it']])
+    // A tool call already carries its final state: started and completed in one line.
+    expect(
+      parseOpencodeLine('{"type":"tool_use","sessionID":"ses_1","part":{"type":"tool","tool":"Write","callID":"c1","sessionID":"ses_1","state":{"status":"completed","input":{"filePath":"/w/f.txt"},"output":"ok"}}}', turn).events,
+    ).toEqual([
+      ['tool_started', { tool: 'write', status: 'running', input: { filePath: '/w/f.txt' }, callId: 'c1' }],
+      ['tool_completed', { tool: 'write', status: 'completed', callId: 'c1', output: 'ok' }],
+    ])
+    // A mid-turn step boundary (reason "tool-calls") accumulates without ending the turn.
+    const mid = parseOpencodeLine('{"type":"step_finish","sessionID":"ses_1","part":{"type":"step-finish","reason":"tool-calls","sessionID":"ses_1","tokens":{"input":10,"output":5,"reasoning":1,"cache":{"read":2,"write":0}},"cost":0.01}}', turn)
+    expect(mid.turnEnd).toBeUndefined()
+    const end = parseOpencodeLine('{"type":"step_finish","sessionID":"ses_1","part":{"type":"step-finish","reason":"stop","sessionID":"ses_1","tokens":{"input":20,"output":7,"reasoning":0,"cache":{"read":0,"write":3}},"cost":0.02}}', turn)
+    expect(end.turnEnd).toEqual({ stopReason: 'stop', usage: { input: 30, output: 12, cacheRead: 2, cacheWrite: 3, reasoning: 1 }, usdTotal: 0.03 })
+  })
+
+  it('fails the turn on an error event with the data message', () => {
+    const parsed = parseOpencodeLine('{"type":"error","sessionID":"ses_1","error":{"name":"APIError","data":{"message":"provider refused"}}}', opencodeTurnState())
+    expect(parsed.events).toEqual([['warning', 'provider refused']])
+    expect(parsed.turnEnd).toMatchObject({ stopReason: 'error', failed: true, error: 'provider refused' })
+    expect(parseOpencodeLine('not json', opencodeTurnState())).toEqual({ events: [] })
+  })
+})
+
+describe('parseCursorLine (rb1; envelope shape cursor-agent documents for --output-format stream-json)', () => {
+  it('maps init, assistant text, tool_call started/completed and the closing result', () => {
+    const tools = new Map<string, string>()
+    expect(parseCursorLine('{"type":"system","subtype":"init","session_id":"chat-1"}', tools)).toEqual({ events: [], sessionId: 'chat-1' })
+    expect(parseCursorLine('{"type":"assistant","message":{"content":[{"type":"text","text":"on it"}]}}', tools).events).toEqual([['answer_delta', 'on it']])
+    expect(parseCursorLine('{"type":"tool_call","subtype":"started","call_id":"tc1","tool_call":{"bashToolCall":{"args":{"command":"ls"}}}}', tools).events).toEqual([
+      ['tool_started', { tool: 'bash', status: 'running', input: { command: 'ls' }, callId: 'tc1' }],
+    ])
+    expect(parseCursorLine('{"type":"tool_call","subtype":"completed","call_id":"tc1","tool_call":{"bashToolCall":{"result":"ok","success":true}}}', tools).events).toEqual([
+      ['tool_completed', { tool: 'bash', status: 'completed', callId: 'tc1', output: 'ok' }],
+    ])
+    expect(parseCursorLine('{"type":"result","subtype":"success","is_error":false,"session_id":"chat-1"}', tools)).toEqual({
+      events: [],
+      sessionId: 'chat-1',
+      turnEnd: { stopReason: 'success', failed: false, usage: { input: 0, output: 0, cacheRead: 0, reasoning: 0 } },
+    })
+    // A failed turn is read from is_error, the reason in result — like Claude's result line.
+    expect(parseCursorLine('{"type":"result","subtype":"success","is_error":true,"result":"API Error: 529"}', tools).turnEnd).toMatchObject({ failed: true, error: 'API Error: 529' })
+  })
+})
+
+describe('parseGeminiOutput (rb1; --output-format json shape per gemini-cli docs — not installed here)', () => {
+  it('reads response text, per-model token stats and a top-level error', () => {
+    const ok = parseGeminiOutput('{"response":"done","stats":{"models":{"gemini-3-pro-preview":{"tokens":{"prompt":10,"candidates":5,"cached":2,"thoughts":1}}}}}')
+    expect(ok.events).toEqual([['answer_delta', 'done']])
+    expect(ok.turnEnd).toEqual({ stopReason: 'success', usage: { input: 10, output: 5, cacheRead: 2, reasoning: 1 } })
+    const failed = parseGeminiOutput('{"error":{"message":"quota"}}')
+    expect(failed.turnEnd).toMatchObject({ stopReason: 'error', failed: true, error: 'quota' })
+    expect(parseGeminiOutput('not json')).toEqual({ events: [] })
+  })
+})
+
+describe('parseGrokLine (rb1; streaming-json events the porch adapter verified on Grok Build 0.2.112)', () => {
+  it('maps thought/text/tool events and reads stopReason from end', () => {
+    expect(parseGrokLine('{"type":"thought","data":"thinking…"}').events).toEqual([['thinking_delta', 'thinking…']])
+    expect(parseGrokLine('{"type":"text","data":"on it"}').events).toEqual([['answer_delta', 'on it']])
+    expect(parseGrokLine('{"type":"tool_use","toolName":"read_file","callId":"c1","input":{"path":"/w/f.txt"}}').events).toEqual([
+      ['tool_started', { tool: 'read_file', status: 'running', input: { path: '/w/f.txt' }, callId: 'c1' }],
+    ])
+    expect(parseGrokLine('{"type":"tool_call_update","callId":"c1","status":"in_progress"}').events).toEqual([['progress', 'in_progress']])
+    expect(parseGrokLine('{"type":"tool_call_update","callId":"c1","status":"completed","result":"ok"}').events).toEqual([
+      ['tool_completed', { tool: 'tool', status: 'completed', callId: 'c1', output: 'ok' }],
+    ])
+    expect(parseGrokLine('{"type":"end","stopReason":"EndTurn","sessionId":"grok-1","usage":{"input":10,"output":5}}')).toEqual({
+      events: [],
+      sessionId: 'grok-1',
+      turnEnd: { stopReason: 'EndTurn', usage: { input: 10, output: 5, cacheRead: 0, reasoning: 0 } },
+    })
+  })
+
+  it('fails closed on error, max_tokens and an unknown stopReason — partial text never makes it a success', () => {
+    expect(parseGrokLine('{"type":"error","message":"boom"}').turnEnd).toMatchObject({ stopReason: 'error', failed: true, error: 'boom' })
+    expect(parseGrokLine('{"type":"end","stopReason":"Error"}').turnEnd).toMatchObject({ failed: true })
+    expect(parseGrokLine('{"type":"end","stopReason":"MaxTokens"}').turnEnd).toMatchObject({ failed: true, error: 'grok stopped: MaxTokens' })
+    expect(parseGrokLine('{"type":"end","stopReason":"WhateverNew"}').turnEnd).toMatchObject({ failed: true, error: 'grok stopped: unknown_stop:whatevernew' })
+    expect(parseGrokLine('not json')).toEqual({ events: [] })
   })
 })

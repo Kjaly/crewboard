@@ -167,7 +167,14 @@ describe('gcRemove', () => {
       { id: 'new2', status: 'accepted', acceptAt: '2026-09-22T11:01:00Z' },
       { id: 'new3', status: 'accepted', acceptAt: '2026-09-22T11:02:00Z' },
     ])
+    // Each copy's saved command output (tk1) goes with the copy and stays with a kept one.
+    for (const id of ['dirty', 'clean']) {
+      await mkdir(join(root, '.orchestration/output', id), { recursive: true })
+      await writeFile(join(root, '.orchestration/output', id, '1-baseline.log'), 'out\n')
+    }
     const result = await gcRemove(root, ['dirty', 'clean'], { exec: nodeExec })
+    expect(await gone(join(root, '.orchestration/output/clean'))).toBe(true)
+    expect(await gone(join(root, '.orchestration/output/dirty'))).toBe(false)
     expect(result.removed).toEqual(['clean'])
     expect(result.failed).toEqual([{ taskId: 'dirty', reason: 'dirty' }])
     expect(await gone(copies.get('clean')!.path)).toBe(true)

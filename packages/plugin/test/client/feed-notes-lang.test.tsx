@@ -18,6 +18,7 @@ const NOTES: Note[] = [
   eventNote(AT, 'comment', { kind: 'superseded', by: 'b2' }),
   eventNote(AT, 'comment', { kind: 'launched_outside_preset', worker: 'codex' }),
   eventNote(AT, 'comment', { kind: 'preset_fallback', stale: 'dsh/flash', worker: 'claude', preset: 'Only Claude' }),
+  eventNote(AT, 'comment', { kind: 'worker_skipped', skipped: 'claude/opus', reason: 'not logged in', worker: 'codex/gpt-6-luna' }),
   eventNote(AT, 'comment', { kind: 'worktree', outcome: 'kept_unmerged' }),
   { at: AT, type: 'comment', text: 'вытеснена задачей b1' },
 ]
@@ -33,8 +34,9 @@ it('renders the notes Crewboard wrote in the UI language and follows a live swit
     'acceptance: verdict: Disputed — work is blocked; accepted by a person; evidence: e.json',
     'sent back: нет тестов',
     'note: superseded by task b2',
-    'note: Launched by hand outside the preset “All workers”: codex',
+    'note: Launched by hand outside the preset “Default: workers that pass checks”: codex',
     'note: Worker dsh/flash, chosen by an agent, is no longer in the preset “Only Claude” for this class — ran by the preset order instead: claude. The assignment was cleared.',
+    'note: claude/opus skipped: not logged in → codex/gpt-6-luna',
     'note: Worktree kept: branch is not merged yet.',
     // An older note stored as text is shown as written.
     'note: вытеснена задачей b1',
@@ -46,8 +48,10 @@ it('renders the notes Crewboard wrote in the UI language and follows a live swit
     'приёмка: вердикт: Спорно — работа заблокирована; принято человеком; доказательства: e.json',
     'возврат: нет тестов',
     'заметка: вытеснена задачей b2',
-    'заметка: Запущено вручную вне пресета «Все воркеры»: codex',
+    'заметка: Запущено вручную вне пресета «По умолчанию: воркеры, прошедшие проверку»: codex',
     'заметка: Воркер dsh/flash, выбранный агентом, больше не входит в пресет «Only Claude» для этого класса — запущен по порядку пресета: claude. Назначение снято.',
+    // The reason is the preflight's own words, in the language of the launch.
+    'заметка: claude/opus пропущен: not logged in → codex/gpt-6-luna',
     'заметка: Рабочая копия сохранена: ветка ещё не влита.',
     'заметка: вытеснена задачей b1',
   ])

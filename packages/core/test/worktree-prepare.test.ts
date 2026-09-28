@@ -1,7 +1,7 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { nodeExec } from '../src/exec.js'
+import { type Exec, nodeExec } from '../src/exec.js'
 import { PrepareError, prepareWorktree, slugify, worktreeLocation } from '../src/worktree/prepare.js'
 import { readWorktreeState } from '../src/worktree/state.js'
 import { RecipeSchema, loadRecipe } from '../src/worktree/recipe.js'
@@ -33,6 +33,18 @@ describe('loadRecipe', () => {
     expect(await loadRecipe(root)).toEqual({ setup: ['echo hi'], env: { unset: [] }, timeoutSec: 300 })
   })
 })
+
+/** A task copy whose next refresh conflicts: the worker and the main line changed the same file. */
+async function conflictedCopy(taskId: string) {
+  const root = await makeRepo()
+  const recipe = RecipeSchema.parse({ baseline: 'touch baseline-ran' })
+  const first = await prepareWorktree({ repoRoot: root, taskId, title: 'Conflict', recipe, exec: nodeExec })
+  await rm(join(first.path, 'baseline-ran'))
+  await writeFile(join(first.path, 'README.txt'), 'worker\n')
+  await nodeExec('git', ['-C', first.path, 'commit', '-q', '-am', 'worker'])
+  await commitInRoot(root, 'README.txt', 'main\n')
+  return { root, recipe, path: first.path }
+}
 
 describe('prepareWorktree', () => {
   it('creates the worktree, runs steps, copies artefacts and runs the baseline', async () => {
@@ -162,6 +174,82 @@ describe('prepareWorktree', () => {
     expect(await readFile(join(again.path, 'README.txt'), 'utf8')).toBe('worker\n')
   })
 
+  it('a conflicting refresh whose undo succeeds goes on as before: the step says so and the baseline runs (rf2)', async () => {
+    const { root, recipe } = await conflictedCopy('r4')
+    const again = await prepareWorktree({ repoRoot: root, taskId: 'r4', title: 'Conflict', recipe, exec: nodeExec })
+    expect(again.steps.at(-1)).toMatchObject({ ok: false, output: expect.stringContaining('the merge is undone') })
+    expect(again.baseline).toMatchObject({ ok: true })
+  })
+
+  it('a conflicting refresh whose abort git refuses stops the launch with the copy and the command, before the baseline (rf2)', async () => {
+    const { root, recipe, path } = await conflictedCopy('r5')
+    const calls: string[] = []
+    const refusing: Exec = async (cmd, args, opts) => {
+      if (cmd === 'git' && args.includes('--abort')) {
+        calls.push('abort')
+        return { code: 128, stdout: '', stderr: 'fatal: simulated failure\n', timedOut: false }
+      }
+      return nodeExec(cmd, args, opts)
+    }
+    const err = await prepareWorktree({ repoRoot: root, taskId: 'r5', title: 'Conflict', recipe, exec: refusing }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(PrepareError)
+    const refusal = err as PrepareError
+    expect(refusal.message).toContain(`copy ${path} conflicted and git could not undo it`)
+    expect(refusal.message).toContain(`git -C ${path} merge --abort`)
+    // Retried briefly, then given up.
+    expect(calls).toHaveLength(3)
+    expect(refusal.result.baseline).toBeUndefined()
+    expect(refusal.result.steps.at(-1)).toMatchObject({ ok: false, log: { path: expect.stringContaining('-refresh.log') } })
+    expect(await readFile(refusal.result.steps.at(-1)?.log?.path ?? '', 'utf8')).toContain('simulated failure')
+    await expect(stat(join(path, 'baseline-ran'))).rejects.toThrow()
+    // The copy really is mid-merge: the sentence's command cleans it.
+    expect((await nodeExec('git', ['-C', path, 'merge', '--abort'])).code).toBe(0)
+  })
+
+  it('a held index.lock makes the abort fail: the launch stops; a lock released in time is retried past (rf2)', async () => {
+    const { root, recipe, path } = await conflictedCopy('r6')
+    const lock = join((await nodeExec('git', ['-C', path, 'rev-parse', '--absolute-git-dir'])).stdout.trim(), 'index.lock')
+    let aborts = 0
+    const locking = (releaseAfter: number): Exec => async (cmd, args, opts) => {
+      if (cmd === 'git' && args.includes('--abort')) {
+        aborts++
+        if (aborts <= releaseAfter) await writeFile(lock, '')
+        else await rm(lock, { force: true })
+      }
+      return nodeExec(cmd, args, opts)
+    }
+    const err = await prepareWorktree({ repoRoot: root, taskId: 'r6', title: 'Conflict', recipe, exec: locking(Number.POSITIVE_INFINITY) }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(PrepareError)
+    expect((err as PrepareError).message).toContain(`git -C ${path} merge --abort`)
+    await expect(stat(join(path, 'baseline-ran'))).rejects.toThrow()
+
+    // Same copy, still mid-merge and locked; the lock goes away before the second try.
+    await rm(lock, { force: true })
+    expect((await nodeExec('git', ['-C', path, 'merge', '--abort'])).code).toBe(0)
+    aborts = 0
+    const again = await prepareWorktree({ repoRoot: root, taskId: 'r6', title: 'Conflict', recipe, exec: locking(1) })
+    expect(aborts).toBe(2)
+    expect(again.steps.at(-1)).toMatchObject({ ok: false, output: expect.stringContaining('the merge is undone') })
+    expect(again.baseline).toMatchObject({ ok: true })
+    expect((await nodeExec('git', ['-C', path, 'status', '--porcelain', '--untracked-files=no'])).stdout).toBe('')
+  })
+
+  it('conflict markers left in tracked files after the abort stop the launch too, in Russian as well (rf2)', async () => {
+    const { root, recipe, path } = await conflictedCopy('r7')
+    // An abort that reports success but only drops MERGE_HEAD: the conflicted file stays as git wrote it.
+    const gitDir = (await nodeExec('git', ['-C', path, 'rev-parse', '--absolute-git-dir'])).stdout.trim()
+    const halfway: Exec = async (cmd, args, opts) => {
+      if (cmd !== 'git' || !args.includes('--abort')) return nodeExec(cmd, args, opts)
+      await rm(join(gitDir, 'MERGE_HEAD'))
+      return { code: 0, stdout: '', stderr: '', timedOut: false }
+    }
+    const err = await prepareWorktree({ repoRoot: root, taskId: 'r7', title: 'Conflict', recipe, exec: halfway, lang: 'ru' }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(PrepareError)
+    expect((err as PrepareError).message).toContain(`в её файлах остались маркеры конфликта`)
+    expect((err as PrepareError).message).toContain(`git -C ${path} reset --hard HEAD`)
+    await expect(stat(join(path, 'baseline-ran'))).rejects.toThrow()
+  })
+
   it('stops at the first failing step', async () => {
     const root = await makeRepo()
     const recipe = RecipeSchema.parse({ setup: ['exit 4', 'echo never > never.txt'] })
@@ -174,7 +262,10 @@ describe('prepareWorktree', () => {
     const root = await makeRepo()
     const recipe = RecipeSchema.parse({ setup: ['sleep 30'], timeoutSec: 1 })
     const err = await prepareWorktree({ repoRoot: root, taskId: 't3', title: 'x', recipe, exec: nodeExec }).catch((e: unknown) => e)
-    expect((err as PrepareError).result.steps[0]?.output).toContain('таймаут 1 с')
+    expect((err as PrepareError).result.steps[0]?.output).toContain('[timeout 1 s]')
+    expect((err as PrepareError).step).toBe('sleep 30')
+    const ru = await prepareWorktree({ repoRoot: root, taskId: 't3b', title: 'x', recipe, exec: nodeExec, lang: 'ru' }).catch((e: unknown) => e)
+    expect((ru as PrepareError).result.steps[0]?.output).toContain('[таймаут 1 с]')
   })
 
   it('reruns a red baseline on reuse until its cause is fixed (bl1)', async () => {
@@ -184,7 +275,8 @@ describe('prepareWorktree', () => {
     const first = await prepareWorktree({ repoRoot: root, taskId: 'b1', title: 'Red', recipe, exec: nodeExec, now })
     expect(first.baseline).toMatchObject({ ok: false })
     const head = (await nodeExec('git', ['-C', first.path, 'rev-parse', 'HEAD'])).stdout.trim()
-    expect(first.record).toEqual({ commit: head, base: head, command: 'test -f fixed.txt', ok: false, at: '2026-09-24T10:00:00.000Z' })
+    expect(first.record).toEqual({ commit: head, base: head, command: 'test -f fixed.txt', ok: false, at: '2026-09-24T10:00:00.000Z', log: first.baseline?.log?.path })
+    expect(first.record?.log).toContain('.orchestration/output/b1/')
     expect(await readWorktreeState(first.path)).toMatchObject({ baseline: { ok: false } })
 
     const second = await prepareWorktree({ repoRoot: root, taskId: 'b1', title: 'Red', recipe, exec: nodeExec, now })

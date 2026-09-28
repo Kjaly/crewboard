@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -19,6 +19,21 @@ async function setup() {
 }
 
 describe('createDshBackend', () => {
+  it('blocks identified Anthropic direct launches and legacy steering without starting a runner', async () => {
+    const { dir, promptFile, runsRoot } = await setup()
+    let started = 0
+    const backend = createDshBackend({ runsRoot, startRunner: () => { started++ } })
+    await expect(backend.launch({ agent: 'dsh/anthropic/claude-opus', model: 'anthropic/claude-opus', promptFile, cwd: dir })).rejects.toMatchObject({ code: 'anthropic_unsupported_route' })
+    expect(started).toBe(0)
+    const legacy = join(runsRoot, 'run_dsh-legacy')
+    await mkdir(legacy, { recursive: true })
+    await writeFile(join(legacy, 'args.json'), JSON.stringify({ model: 'anthropic/claude-opus', agent: 'custom-worker' }))
+    await expect(backend.steer('run_dsh-legacy', promptFile)).rejects.toMatchObject({ code: 'anthropic_unsupported_route' })
+    expect(await stat(join(legacy, 'mailbox')).then(() => true, () => false)).toBe(false)
+    await backend.cancel('run_dsh-legacy')
+    expect(await stat(join(legacy, 'mailbox', 'cancel')).then(() => true, () => false)).toBe(true)
+  })
+
   it('launches through the runner and reports state and events', async () => {
     const { dir, promptFile, backend } = await setup()
     const runId = await backend.launch({ agent: 'dsh/deepseek-flash', promptFile, cwd: dir })

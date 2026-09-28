@@ -58,12 +58,12 @@ export function DraftJobView({ repo, job, onDraft, onDiscarded, onClose }: { rep
         <p>{t('panel.draftJob.needsRepairHelp')}</p>
         <ul>{(job.findings ?? []).map((finding, index) => <li key={`${finding.path}-${index}`} className="orc-draft__finding--block"><code>{finding.path || t('panel.draftJob.wholeAnswer')}</code> {finding.message}</li>)}</ul>
       </> : null}
-      {job.status === 'failed' ? <><h2>{t('panel.draftJob.failed')}</h2><p>{t('panel.draftJob.failedHelp', { error: job.error ?? '' })}</p></> : null}
+      {job.status === 'failed' ? <><h2>{t('panel.draftJob.failed')}</h2><p>{t('panel.draftJob.failedHelp', { error: job.detail ?? job.error ?? '' })}</p>{job.hint ? <p>{t(`panel.draftJob.hint.${job.hint}`, { worker: job.agent })}</p> : null}{job.pick === 'auto' ? <p className="orc-welcome__hint">{t('panel.draftJob.repick')}</p> : null}</> : null}
       {job.recoveredFrom ? <p>{t('panel.draftJob.recovered', { run: job.recoveredFrom })}</p> : null}
     </section>
     {answer !== undefined ? <section className="orc-draft__decisions"><details open={job.status === 'needs_repair'}><summary>{t('panel.draftJob.answer')}</summary><pre className="orc-draft__answer">{answer}</pre></details></section> : null}
     <div className="orc-draft__actions">
-      {running ? null : <button type="button" className="orc-draft__approve" disabled={pending} onClick={() => void act('repair')}>{job.status === 'failed' && answer === undefined ? t('panel.draftJob.retry') : t('panel.draftJob.repair')}</button>}
+      {running ? null : <button type="button" className="orc-draft__approve" disabled={pending} onClick={() => void act('repair')}>{t('panel.draftJob.retry')}</button>}
       {confirmDiscard ? <span className="orc-draft__confirm">{t('panel.draftJob.discardConfirm')} <button type="button" disabled={pending} onClick={() => void act('discard')}>{t('panel.draftJob.discardYes')}</button><button type="button" onClick={() => setConfirmDiscard(false)}>{t('panel.draft.cancel')}</button></span> : <button type="button" className="orc-link" disabled={pending} onClick={() => setConfirmDiscard(true)}>{t('panel.draft.discard')}</button>}
     </div>
   </article>

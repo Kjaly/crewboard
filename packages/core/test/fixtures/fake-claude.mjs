@@ -13,8 +13,13 @@
 // 2.1.281 does (probed 2026-09-24): `background_tasks_changed` lists it; when it exits while stdin is open, a
 // `task_notification` wakes the session as a new turn with no user message; stdin closing while it still runs kills it
 // (`status: stopped`) and the process exits. "NOWAKE" drops the wake-up turn (a CLI that does not wake the session).
-import { spawn } from 'node:child_process'
-import { appendFileSync } from 'node:fs'
+// "WRITE:<name>" makes the turn write <name> in its cwd with the Write tool — refused, as the real CLI refuses edits,
+// when it runs with `--permission-mode plan` (dr2).
+// "REPORT" ends the turn with a «Result: received» answer instead of «done» (cm1). A turn whose message is the
+// runner's own commit nudge («Your work is not committed…») always answers the same way; with
+// FAKE_CLI_COMMIT_ON_NUDGE set it commits everything in its cwd first, as a worker that took the hint would.
+import { execSync, spawn } from 'node:child_process'
+import { appendFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 
@@ -60,9 +65,24 @@ const runTurn = async (text) => {
     initDone = true
   }
   take(text)
+  if (text.includes('Your work is not committed')) {
+    if (process.env.FAKE_CLI_COMMIT_ON_NUDGE) execSync('git add -A && git commit -q -m "commit before report"', { cwd: process.cwd() })
+    out({ type: 'assistant', message: { content: [{ type: 'text', text: 'Result: received' }] } })
+    out({ type: 'result', subtype: 'success', is_error: false, total_cost_usd: 0.1 * turn, usage: { input_tokens: 10, output_tokens: 100, cache_read_input_tokens: 1000, cache_creation_input_tokens: 50 } })
+    running = false
+    return
+  }
   out({ type: 'assistant', message: { content: [{ type: 'text', text: `on it: ${text.split(' ')[0]}` }, { type: 'tool_use', id: `toolu_${turn}`, name: 'Write', input: { file_path: `/w/f${turn}.txt`, content: 'x' } }] } })
   out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: `toolu_${turn}`, is_error: false, content: 'ok' }] } })
   out({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed', rateLimitType: 'five_hour' } })
+  const write = /WRITE:(\S+)/.exec(text)
+  if (write) {
+    const mode = process.argv.indexOf('--permission-mode')
+    const planMode = mode >= 0 && process.argv[mode + 1] === 'plan'
+    if (!planMode) writeFileSync(join(process.cwd(), write[1]), 'written by the worker\n')
+    out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: `toolu_w${turn}`, name: 'Write', input: { file_path: join(process.cwd(), write[1]), content: 'x' } }] } })
+    out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: `toolu_w${turn}`, is_error: planMode, content: planMode ? 'Plan mode is active: file edits are not allowed.' : 'ok' }] } })
+  }
   if (text.includes('ORPHAN')) {
     if (text.includes('STUBBORN')) process.on('SIGTERM', () => {})
     process.stdout.on('error', () => {})
@@ -89,7 +109,7 @@ const runTurn = async (text) => {
     take(more)
     out({ type: 'assistant', message: { content: [{ type: 'text', text: `also: ${more.split(' ')[0]}` }] } })
   }
-  out({ type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } })
+  out({ type: 'assistant', message: { content: [{ type: 'text', text: text.includes('REPORT') ? 'Result: received' : 'done' }] } })
   out({ type: 'result', subtype: 'success', is_error: false, total_cost_usd: 0.1 * turn, usage: { input_tokens: 10, output_tokens: 100, cache_read_input_tokens: 1000, cache_creation_input_tokens: 50 } })
   running = false
 }

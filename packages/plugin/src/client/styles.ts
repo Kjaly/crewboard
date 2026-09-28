@@ -64,6 +64,17 @@ const CSS = `
 /* The header is chrome: it spans the full width like the rail and the task panel, while the view
    below keeps the centring gutter. */
 .orc-top{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0;padding:8px 14px;border-bottom:1px solid var(--orc-hair);background:var(--orc-layer1)}
+.orc-process{display:flex;align-items:center;gap:7px;min-height:38px;padding:5px 14px;border-bottom:1px solid var(--orc-hair);background:var(--orc-layer1);font-size:11px;line-height:17px;overflow-x:auto;scrollbar-width:thin}
+.orc-process__title{flex:none;margin-right:4px;color:var(--orc-fg2);font-weight:600}
+.orc-process__stage{display:inline-flex;align-items:center;gap:6px;flex:none;min-height:25px;padding:3px 8px;border:1px solid var(--orc-hair);border-radius:6px;background:transparent;color:var(--orc-fg3);font:inherit;white-space:nowrap;cursor:pointer}
+.orc-process__stage:disabled{cursor:default;opacity:.65}
+.orc-process__stage--active{border-color:color-mix(in srgb,var(--orc-accent) 35%,var(--orc-line));background:color-mix(in srgb,var(--orc-accent) 9%,var(--orc-layer1));color:var(--orc-fg)}
+.orc-process__stage--active:hover{background:color-mix(in srgb,var(--orc-accent) 17%,var(--orc-layer1))}
+.orc-process__stage strong{font-variant-numeric:tabular-nums;font-weight:650}
+.orc-process__dot{width:6px;height:6px;flex:none;border-radius:50%;background:var(--orc-fg3)}
+.orc-process__stage--active .orc-process__dot{background:var(--orc-accent)}
+.orc-process__stage--moving .orc-process__dot{animation:orc-breathe 2s ease-in-out infinite}
+.orc-process__note{min-width:0;color:var(--orc-fg3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .orc-goal{font:var(--dsw-font-strong-xs-13,600 13px/20px system-ui,sans-serif);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:60px;max-width:24ch;flex:0 1 auto}
 .orc-preset{position:relative;display:inline-flex;align-items:center;flex:none;min-width:0}
 .orc-preset__trigger{max-width:190px}
@@ -116,6 +127,7 @@ const CSS = `
 .orc-needs__text{min-width:0}
 .orc-needs h2{margin:2px 0 5px;font-size:19px;line-height:26px}
 .orc-needs p{margin:0;color:var(--orc-fg2)}
+.orc-needs__scope{margin:0;color:var(--orc-fg3);font-size:12px}
 .orc-needs__tasks{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px}
 .orc-needs__task{max-width:100%;padding:0;border:0;background:none;color:var(--orc-fg);font:inherit;font-weight:600;text-align:left;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .orc-needs__task:hover{text-decoration:underline}
@@ -251,6 +263,7 @@ const CSS = `
 .orc-seg__item{min-height:24px;padding:2px 10px;border:0;border-radius:6px;background:transparent;color:var(--orc-fg3);font:inherit;cursor:pointer}
 .orc-seg__item:hover{background:var(--orc-hover);color:var(--orc-fg2)}
 .orc-seg__item[aria-checked="true"]{background:var(--orc-layer1);color:var(--orc-fg);box-shadow:var(--dsw-elevation-panel,0 0 0 .5px #fff3)}
+.orc-seg.orc-notify{display:inline-flex;flex-wrap:wrap;max-width:100%;margin:2px 0 6px}
 .orc-conn{display:inline-flex;align-items:center;gap:5px;color:var(--orc-warn);font:var(--dsw-font-xxs-12,12px/18px system-ui,sans-serif)}
 
 /* Body: the gutter lives here, not inside each view — both .orc-top and .orc-body pad against the
@@ -334,6 +347,16 @@ const CSS = `
 .orc-ibrow__meta{flex:0 1 auto;min-width:0;color:var(--orc-fg3);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .orc-ibrow--alert .orc-ibrow__meta{color:var(--orc-error)}
 .orc-ibrow--example{border-style:dashed;border-color:var(--orc-line)}
+/* at2: «Needs you» in groups — repository · plan, then the reason summary — and a reason tag on each row. */
+.orc-inbox__group{display:flex;flex-direction:column;gap:0;margin:6px 0 1px;padding:0 8px;min-width:0}
+.orc-inbox__gname{color:var(--orc-fg2);font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.orc-inbox__gsum{color:var(--orc-fg3);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.orc-inbox__more{min-height:24px;margin:0 0 2px;padding:0 8px;border:0;border-radius:6px;background:transparent;
+  color:var(--orc-accent);font:inherit;font-size:12px;cursor:pointer}
+.orc-inbox__more:hover{background:var(--orc-hover)}
+.orc-ibrow__tag{flex:none;padding:0 5px;border:1px solid var(--orc-line);border-radius:5px;color:var(--orc-fg3);font-size:10px;line-height:15px;white-space:nowrap}
+.orc-ibrow__tag--failed,.orc-ibrow__tag--blocked{border-color:var(--orc-error);color:var(--orc-error)}
+.orc-ibrow__tag--decision,.orc-ibrow__tag--review{border-color:var(--orc-warn);color:var(--orc-warn)}
 .orc-inbox__divider{display:flex;align-items:center;gap:6px;margin:6px 0 2px;padding:0 8px;color:var(--orc-fg3);font-size:11px}
 .orc-inbox__divider::after{content:'';flex:1 1 auto;border-top:1px solid var(--orc-line)}
 .orc-tree{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
@@ -469,6 +492,10 @@ const CSS = `
 .orc-lenspop{position:absolute;top:calc(100% + 4px);right:0;z-index:35;width:288px;max-height:330px;display:flex;flex-direction:column;
   border:1px solid var(--orc-line);border-radius:10px;background:var(--orc-layer1);
   box-shadow:0 10px 30px #00000066;animation:orc-sheet-in 140ms cubic-bezier(.23,1,.32,1) both;transform-origin:top right}
+/* A stage's list is fixed to the viewport (its strip scrolls horizontally): placed by measure, never clipped. */
+.orc-lenspop--fixed{position:fixed;right:auto;transform-origin:top left}
+/* In the strip a pressed stage marks the lens the screen is wearing, distinct from «tasks exist». */
+.orc-process__stage[aria-pressed="true"]{border-color:var(--orc-accent);box-shadow:0 0 0 1px var(--orc-accent);color:var(--orc-fg)}
 .orc-lenspop__list{flex:1 1 auto;min-height:0;overflow:auto;margin:0;padding:4px;list-style:none}
 .orc-lensrow{display:block;width:100%;min-width:0;padding:3px 8px;border:0;border-radius:7px;
   background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
@@ -578,6 +605,9 @@ const CSS = `
 .orc-card__title{flex:1 1 auto;min-width:0;font-weight:600;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
 .orc-card__identity,.orc-panel__identity{display:flex;align-items:center;gap:5px;min-width:0;margin-top:3px;color:var(--orc-fg2);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .orc-panel__identity{margin-top:5px;font:var(--dsw-font-xxs-12,12px/18px system-ui,sans-serif)}
+.orc-panel__context{margin-top:7px;color:var(--orc-fg2);font-size:11px;line-height:17px}
+.orc-panel__context summary{display:list-item;width:max-content;max-width:100%;cursor:pointer;color:var(--orc-fg3)}
+.orc-panel__context[open] summary{margin-bottom:5px;color:var(--orc-fg2)}
 .orc-prov--img{object-fit:contain;background:transparent;padding:1px}
 .orc-prov{display:inline-flex;flex:none;align-items:center;justify-content:center;width:19px;height:18px;border-radius:5px;background:color-mix(in srgb,currentColor 16%,var(--orc-layer2));color:var(--orc-fg2);font:700 9px/1 system-ui,sans-serif;letter-spacing:.01em}
 .orc-prov--DS{color:var(--orc-prov-deepseek)}
@@ -663,9 +693,16 @@ const CSS = `
 .orc-run__link{padding:0 2px;border:0;border-radius:5px;background:transparent;color:var(--orc-accent);font:inherit;cursor:pointer}
 .orc-run__link:hover{background:var(--orc-hover);color:var(--orc-fg)}
 .orc-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px}
-.orc-panel .orc-actions{flex-wrap:nowrap;min-width:0}
-.orc-panel .orc-actions>.orc-btn,.orc-panel .orc-actions>.orc-select{min-width:0;white-space:nowrap}
-.orc-panel .orc-actions>.orc-select{flex:1 1 auto;max-width:100%}
+/* bx1: in the panel an action row wraps instead of squeezing — a button keeps its whole label and moves to the next
+   line; only a button wider than the whole row breaks its label (whatever the host sets on buttons). Words (a lead, a login command) take a line of their own. */
+.orc-panel .orc-actions{min-width:0}
+.orc-panel .orc-actions>.orc-btn{flex:0 1 auto;max-width:100%;overflow:visible;text-overflow:clip;white-space:normal}
+.orc-panel .orc-actions>.orc-select{flex:1 1 140px;min-width:0;max-width:100%}
+.orc-panel .orc-actions>.orc-meta,.orc-panel .orc-actions>code{flex:1 0 100%;min-width:0;overflow-wrap:anywhere}
+.orc-early{color:var(--orc-fg3);font-size:11px}.orc-early summary{cursor:pointer}.orc-early[open]{flex-basis:100%}.orc-early__actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+.orc-action-state{margin:0 0 7px;color:var(--orc-fg2)}
+.orc-detail-error{display:grid;gap:7px;margin:0 0 7px;color:var(--orc-error);font-size:12px}.orc-detail-error p{margin:0}.orc-detail-error .orc-btn{justify-self:start}
+.orc-merge-details{margin-top:6px;color:var(--orc-fg3);font-size:11px}.orc-merge-details summary{cursor:pointer}
 .orc-btn{min-height:24px;padding:4px 11px;border-radius:7px;border:1px solid transparent;background:var(--orc-fg);color:var(--orc-bg);font:inherit;font-weight:600;cursor:pointer}
 .orc-btn:hover{opacity:.9}
 .orc-btn:disabled{opacity:.5;cursor:default}
@@ -705,7 +742,9 @@ const CSS = `
 .orc-tabpanel{padding:8px 14px}
 .orc-tabpanel>.orc-sec{padding:8px 0}
 .orc-overview-section{padding:10px 0;border-top:1px solid var(--orc-hair)}
+.orc-panel__history{padding:10px 0;border-top:1px solid var(--orc-hair)}.orc-panel__history>summary{color:var(--orc-fg2);font-size:12px;font-weight:600;cursor:pointer}.orc-panel__history[open]>summary{margin-bottom:7px}
 .orc-overview-section h3{margin:0 0 6px;font-size:12px}
+.orc-attempt p{margin:0 0 6px;overflow-wrap:anywhere}.orc-attempt__head{font-size:12px;line-height:18px}.orc-attempt .orc-actions code{align-self:center;font-size:11px}.orc-attempt__output pre{max-height:220px;overflow:auto}
 .orc-relation-list{display:flex;flex-wrap:wrap;gap:5px;list-style:none;margin:4px 0;padding:0}
 .orc-relation-chip,.orc-panel__chip{display:inline-block;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid var(--orc-line);border-radius:999px;background:var(--orc-layer2);padding:1px 7px;color:var(--orc-fg2);font:var(--dsw-font-xxxs-11,11px/17px system-ui,sans-serif)}
 .orc-relation-chip{cursor:pointer}
@@ -718,6 +757,7 @@ const CSS = `
 .orc-panel__worktree button{border:0;background:transparent;color:var(--orc-fg3);cursor:pointer}
 .orc-panel__baseline{grid-column:1/-1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:11px var(--orc-mono);color:var(--orc-fg3)}
 .orc-panel__baseline--red{color:var(--orc-error)}
+.orc-panel__base{grid-column:1/-1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:11px var(--orc-mono);color:var(--orc-fg3)}
 .orc-activity-run{display:flex;align-items:center;gap:5px;min-width:0;flex-wrap:wrap;margin-bottom:8px}
 .orc-activity-run select{min-width:0;max-width:100%;flex:1 1 150px}
 .orc-preview-list{margin:4px 0;padding-left:20px}
@@ -763,6 +803,7 @@ const CSS = `
   font:var(--dsw-font-xxs-12,12px/18px system-ui,sans-serif);font-weight:600;letter-spacing:.01em}
 .orc-report__title{color:var(--orc-fg2);font:var(--dsw-font-xxs-12,12px/18px system-ui,sans-serif);font-weight:600;letter-spacing:.01em}
 .orc-report__body{margin-top:5px;color:var(--orc-fg);font:var(--dsw-font-xs-13,13px/20px system-ui,sans-serif)}
+.orc-report__body--folded{max-height:60px;overflow:hidden}
 .orc-report__body strong{font-weight:650}
 .orc-report__link{padding:0;border:0;border-radius:4px;background:transparent;color:var(--orc-accent);font:inherit;cursor:pointer}
 .orc-report__link:hover{background:var(--orc-hover);color:var(--orc-fg)}
@@ -777,14 +818,31 @@ const CSS = `
 .orc-report__body code{padding:0 3px;border-radius:4px;background:var(--orc-bg);font-family:var(--orc-mono);font-size:11px}
 .orc-report__note{margin:7px 0 0;color:var(--orc-fg3);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif)}
 .orc-report__link{display:block;margin-top:8px;padding:0;border:0;background:transparent;color:var(--orc-accent);font:inherit;cursor:pointer}
-.orc-vcheck{margin:0 0 8px;padding:7px 9px;border-radius:7px;background:var(--orc-layer2);color:var(--orc-fg2);font-size:12px;line-height:18px;overflow-wrap:anywhere}.orc-vcheck p{margin:0}.orc-vcheck__head{color:var(--orc-fg)}.orc-vcheck__note{margin-top:2px;white-space:pre-wrap}
+.orc-vcheck{margin:5px 0 8px;color:var(--orc-fg2);font-size:12px;line-height:18px;overflow-wrap:anywhere}.orc-vcheck p{margin:0}.orc-vcheck__head{color:var(--orc-fg2)}.orc-vcheck summary{cursor:pointer}.orc-vcheck__note{margin-top:7px;padding:8px;border-radius:7px;background:var(--orc-layer2);white-space:pre-wrap}
 .orc-verdict{padding:7px 9px;border-radius:7px;background:var(--orc-layer2);color:var(--orc-fg2);font-size:12px;line-height:18px;overflow-wrap:anywhere}
+.orc-sec--actions>.orc-verdict{margin-bottom:7px}
 .orc-verdict__mark{margin-right:8px;color:var(--orc-fg2);font-weight:700}
 .orc-verdict--result .orc-verdict__mark{color:var(--orc-ok)}
 .orc-verdict--disputed .orc-verdict__mark{color:var(--orc-warn)}
+.orc-verdict--caution .orc-verdict__mark{color:var(--orc-warn)}
+.orc-verdict__files{color:var(--orc-fg3)}
+.orc-vcheck--off{color:var(--orc-fg2)}
+.orc-vcheck--off .orc-run__link{margin-left:4px}
+.orc-signals{display:flex;flex-wrap:wrap;gap:4px 10px;min-width:0;font-size:11px;line-height:16px;color:var(--orc-fg2)}
+.orc-signal{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.orc-signal .orc-verdict__mark{margin-right:4px}
+.orc-signal--check-checked{color:var(--orc-fg2)}
+.orc-signal--check-off{color:var(--orc-fg3)}
 .orc-verdict__facts{display:flex;flex-wrap:wrap;gap:5px;margin:7px 0 9px}
 .orc-verdict__fact{padding:2px 7px;border-radius:999px;background:var(--orc-layer2);color:var(--orc-fg2);font-size:11px;line-height:16px}
 .orc-verdict__fact--warn{color:var(--orc-warn)}
+.orc-verdict__fact--bad{color:var(--orc-error);font-weight:650}
+.orc-ckrun__summary{cursor:pointer;color:var(--orc-fg2);font-weight:600}
+.orc-ckrun__summary .orc-ckrun__sum{float:right;margin-left:8px}
+.orc-ckrun details[open]>summary{margin-bottom:7px}
+.orc-ckrun__sum{font-weight:600}.orc-ckrun__sum--ok{color:var(--orc-ok)}.orc-ckrun__sum--warn{color:var(--orc-error)}
+.orc-ckrun__failed li{margin:6px 0}.orc-ckrun__failed p{margin:0}
+.orc-ckrun__tail{margin:4px 0;padding:6px 8px;max-height:220px;overflow:auto;border-radius:6px;background:var(--orc-layer2);font-size:11px;line-height:15px;white-space:pre-wrap;word-break:break-word}
 .orc-verdict__fact--link{border:0;font-family:inherit;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
 .orc-verdict__fact--link:focus-visible{outline:2px solid var(--orc-accent);outline-offset:2px}
 .orc-report__pointer{animation:orc-report-pointer 1.8s ease-out}
@@ -848,13 +906,18 @@ const CSS = `
 .orc-gnode__meta{display:flex;align-items:center;gap:5px;margin-top:2px;height:16px;color:var(--orc-fg3);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);white-space:nowrap;overflow:hidden}
 .orc-gnode__meta em{font-style:normal;overflow:hidden;text-overflow:ellipsis}
 .orc-gnode__model{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.orc-gnode__checkstate{position:absolute;top:-14px;left:12px;z-index:2;display:inline-flex;align-items:center;gap:5px;max-width:calc(100% - 22px);min-height:20px;padding:2px 7px;border:1px solid var(--orc-accent);border-radius:999px;background:var(--orc-layer1);color:var(--orc-accent);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);font-weight:600;white-space:nowrap;pointer-events:none;box-shadow:0 1px 5px #00000059}
+.orc-gnode__checkdot{width:6px;height:6px;flex:none;border-radius:50%;background:currentColor}
+.orc-gnode__checkstate--checking .orc-gnode__checkdot{animation:orc-breathe 2s ease-in-out infinite}
 .orc-gnode__fact{flex:none;font-variant-numeric:tabular-nums}
+.orc-gnode__verdict .orc-verdict__mark{margin-right:3px}
+.orc-gnode__check{flex:none;color:var(--orc-fg2)}
 .orc-gnode__badge{position:absolute;top:-7px;right:-7px;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--orc-error);color:#fff;
   font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);font-weight:700;text-align:center}
 .orc-gnode__dep{position:absolute;left:7px;bottom:-7px;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--orc-warn);color:var(--orc-bg);font-size:11px;line-height:16px;font-weight:700;text-align:center}
-.orc-gnode__hand{flex:none;color:var(--orc-warn,var(--orc-fg2));font-size:10px;line-height:1}
+.orc-gnode__hand{flex:none;color:var(--orc-fg2);font-size:10px;line-height:1}
 .orc-panel__choice{margin:2px 0 0;color:var(--orc-fg2)}
-.orc-panel__hand{margin-left:6px;color:var(--orc-warn,var(--orc-fg2))}
+.orc-panel__hand{margin-left:6px;color:var(--orc-fg2)}
 .orc-gnode__pin{position:absolute;top:-6px;left:-6px;color:var(--orc-fg3);font-size:11px;line-height:1}
 .orc-gnode__ping{position:absolute;inset:-1px;border-radius:9px;border:2px solid var(--orc-ping,var(--orc-accent));opacity:0;pointer-events:none}
 /* «Пока тебя не было»: what changed behind a hidden tab keeps an outline for a few seconds. */
@@ -932,6 +995,14 @@ const CSS = `
 .orc-gmap__node{position:absolute;border-radius:1.5px;opacity:.75;transition:opacity 160ms ease-out}
 .orc-gmap__node--on{opacity:1;box-shadow:0 0 0 1px var(--orc-fg)}
 .orc-gmap__node--dim{opacity:.25}
+/* Live lanes get a short name over the corner map (mm1); History and folded lanes stay unlabelled
+   dots unless they hold the selected task, which always gets a name and a way back to it. */
+.orc-gmap__label{position:absolute;transform:translateY(-50%);max-width:96px;margin:0;padding:0 3px;border:0;border-radius:3px;
+  background:color-mix(in srgb,var(--orc-bg) 75%,transparent);color:var(--orc-fg2);font:9px/11px system-ui,sans-serif;
+  font-weight:600;text-transform:uppercase;letter-spacing:.03em;text-align:left;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;cursor:pointer}
+.orc-gmap__label:hover,.orc-gmap__label:focus-visible{color:var(--orc-fg)}
+.orc-gmap__label--selected{color:var(--orc-fg);background:color-mix(in srgb,var(--orc-accent) 26%,var(--orc-bg) 74%)}
 .orc-gmap__frame{position:absolute;left:0;top:0;width:0;height:0;border:1px solid var(--orc-fg2);border-radius:3px;background:#ffffff14;pointer-events:none}
 @media (max-width:640px){.orc-gmap{display:none}}
 
@@ -1067,14 +1138,67 @@ const CSS = `
 .orc-set__list{margin:0;padding:0;list-style:none}
 .orc-set__list>li{padding:6px 0}
 .orc-set__list>li+li{border-top:1px solid var(--orc-sep)}
-/* One grid template is shared by the column caption and every worker row, so «Оплата»,
-   «Где используется» and the switches line up across provider groups. */
-.orc-wcap,.orc-wrow__line{display:grid;grid-template-columns:minmax(0,1fr) 74px minmax(110px,32%) 32px 26px;
-  column-gap:12px;align-items:center}
-.orc-wcap{margin:8px 0 0;color:var(--orc-fg3);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif)}
+/* wo1: three sections — subscriptions by CLI, dsh by provider, «Other / imported» folded. */
+.orc-wsec{margin-top:16px;padding-top:10px;border-top:1px solid var(--orc-sep)}
+.orc-wsec__title{margin:0 0 4px;color:var(--orc-fg);font:var(--dsw-font-xs-13,13px/20px system-ui,sans-serif);font-weight:600}
+.orc-wsec__title .orc-disclose{color:var(--orc-fg);font-weight:600}
+.orc-wsec>.orc-hint{margin:0 0 6px}
+.orc-linkbtn{padding:0;border:0;background:none;color:var(--orc-accent);font:inherit;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.orc-linkbtn:hover{color:var(--orc-fg)}
+/* The caption lines up with every worker line: name, «Used in», «Enabled» over the switches. */
+.orc-wcap{display:grid;grid-template-columns:minmax(0,1fr) minmax(120px,46%) 32px 26px;column-gap:10px;margin:6px 0 0;
+  color:var(--orc-fg3);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif)}
 .orc-wcap>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.orc-wcap__sw{justify-self:end}
-.orc-wrow__line{min-height:24px}
+.orc-wcap__sw{grid-column:3 / span 2}
+/* One CLI: its state and sign-in command on one line, the actions at the right edge, its models below. */
+.orc-cli{margin-top:8px;padding:8px 10px;border:1px solid var(--orc-hair);border-radius:9px;background:var(--orc-bg)}
+.orc-cli:focus-visible,.orc-wline:focus-visible,.orc-oentry:focus-visible,.orc-class:focus-visible{outline:2px solid var(--orc-accent);outline-offset:2px}
+.orc-cli__head{display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;min-width:0}
+.orc-cli__name{margin:0;font:inherit;font-weight:600}
+.orc-cli__state{color:var(--orc-fg3);font-size:11px;white-space:nowrap}
+.orc-cli__head code{min-width:0;color:var(--orc-fg3);font:11px/16px var(--orc-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.orc-cli__actions{display:flex;gap:6px;margin-left:auto}
+.orc-cli__actions button,.orc-oentry__actions button{min-height:24px;padding:3px 9px;border:1px solid var(--orc-line);border-radius:7px;background:var(--orc-layer2);
+  color:var(--orc-fg2);font:inherit;font-size:11px;white-space:nowrap;cursor:pointer;transition:transform 120ms ease-out,background-color 120ms ease-out}
+.orc-cli__actions button:hover,.orc-oentry__actions button:hover{background:var(--orc-hover);color:var(--orc-fg)}
+.orc-cli__actions button:active,.orc-oentry__actions button:active{transform:scale(.97)}
+.orc-cli__actions button + button,.orc-oentry__actions button:first-child{color:var(--orc-accent)}
+.orc-cli__actions button:disabled{opacity:.5;cursor:default}
+.orc-cli>.orc-hint{margin:4px 0 0}
+/* wo2: a provider folds to its head line; a click on the line opens it, the name is the disclosure. */
+.orc-cli__head{cursor:pointer}
+.orc-cli__name .orc-disclose{padding:0;color:var(--orc-fg);font-weight:600}
+.orc-cli__count{color:var(--orc-fg3);font-size:11px;white-space:nowrap}
+.orc-wsec__title{display:flex;align-items:baseline;gap:10px}
+.orc-wsec__fold{margin-left:auto;font-size:11px;font-weight:400;text-decoration:none}
+.orc-cli .orc-set__list{margin-top:6px;border-top:1px solid var(--orc-hair)}
+/* A model row: the name once, then one line per effort — the effort chip, its uses, its own switch. */
+.orc-mrow__head{display:flex;align-items:center;gap:8px;min-width:0}
+.orc-mrow__head .orc-wk{margin-right:0}
+.orc-mrow__lines{display:flex;flex-direction:column;gap:2px;margin-top:2px}
+.orc-wline__main{display:grid;grid-template-columns:auto minmax(0,1fr) 32px 26px;column-gap:10px;align-items:center;min-height:26px;padding-left:30px}
+.orc-wline__main>.orc-wrow__missing{grid-column:1}
+.orc-wline__main>.orc-wrow__use{grid-column:2}
+.orc-effort{grid-column:1;padding:0 7px;border:1px solid var(--orc-line);border-radius:999px;background:var(--orc-layer2);color:var(--orc-fg2);
+  font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);white-space:nowrap}
+.orc-wline--off .orc-effort,.orc-wline--off .orc-wrow__use{color:var(--orc-fg3)}
+.orc-switch:disabled{opacity:.45;cursor:not-allowed}
+/* «Used in»: compact chips that open the preset and class they name. */
+.orc-wrow__use{display:flex;flex-wrap:wrap;gap:3px 4px}
+.orc-use{padding:0 6px;border:1px solid var(--orc-hair);border-radius:6px;background:transparent;color:var(--orc-fg2);
+  font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);white-space:nowrap;cursor:pointer}
+.orc-use:hover{border-color:var(--orc-line);background:var(--orc-hover);color:var(--orc-fg)}
+/* «Other / imported»: one entry per duplicate group, imported profile or stale id, each with its actions. */
+.orc-oentry__line{display:grid;grid-template-columns:auto minmax(0,1fr) minmax(0,40%);align-items:center;gap:8px}
+.orc-oentry__line .orc-wk{margin-right:0}
+.orc-oentry__keep{display:flex;flex-direction:column;gap:3px;min-width:0;margin:0;padding:0;border:0}
+.orc-oentry__keep legend{margin-bottom:2px;color:var(--orc-fg2);font-weight:600}
+.orc-oentry__keep .orc-hint{margin:0}
+.orc-oentry__keep .orc-wrow__use{margin-left:auto}
+.orc-oentry__actions{display:flex;flex-wrap:wrap;gap:6px;margin:5px 0 2px 30px}
+@media(max-width:570px){.orc-wcap{grid-template-columns:minmax(0,1fr) 32px 26px}.orc-wcap>span:nth-child(2){display:none}.orc-wcap__sw{grid-column:2 / span 2}
+  .orc-wline__main{grid-template-columns:auto minmax(0,1fr) 32px 26px;padding-left:0}.orc-oentry__line{grid-template-columns:auto minmax(0,1fr)}.orc-oentry__line>.orc-wrow__use{grid-column:2}
+  .orc-cli__actions{margin-left:0}}
 .orc-wrow__menu-button{width:26px;height:26px;border:0;border-radius:6px;background:transparent;color:var(--orc-fg2);font:700 16px/20px system-ui;cursor:pointer}
 .orc-wrow__menu-button:hover,.orc-wrow__menu-button[aria-expanded="true"]{background:var(--orc-hover);color:var(--orc-fg)}
 .orc-wrow__actions,.orc-wrow__edit,.orc-wrow__confirm{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:5px 0 4px 30px}
@@ -1085,25 +1209,25 @@ const CSS = `
 .orc-preset-row .orc-wrow__edit,.orc-preset-row__new-form{margin:4px 0 10px}
 .orc-preset-row__new{margin-top:12px;min-height:28px;padding:3px 10px;border:1px solid var(--orc-line);border-radius:7px;background:var(--orc-layer2);color:var(--orc-accent);font:inherit;cursor:pointer}
 @media(max-width:570px){.orc-preset-row__line{grid-template-columns:minmax(0,1fr) auto;gap:4px 8px}.orc-preset-row__use{grid-column:1;grid-row:2}.orc-preset-row__line .orc-wrow__actions{grid-column:2;grid-row:1 / 3}}
-.orc-wrow__actions button,.orc-wrow__edit button,.orc-wrow__confirm button,.orc-family button,.orc-add button{min-height:26px;padding:3px 9px;border:1px solid var(--orc-line);border-radius:7px;background:var(--orc-layer2);color:var(--orc-fg2);font:inherit;cursor:pointer;transition:transform 120ms ease-out,background-color 120ms ease-out}
-.orc-wrow__actions button:hover,.orc-wrow__edit button:hover,.orc-wrow__confirm button:hover,.orc-family button:hover,.orc-add button:hover{background:var(--orc-hover);color:var(--orc-fg)}
-.orc-wrow__actions button:active,.orc-wrow__edit button:active,.orc-wrow__confirm button:active,.orc-family button:active,.orc-add button:active{transform:scale(.97)}
+.orc-wrow__actions button,.orc-wrow__edit button,.orc-wrow__confirm button,.orc-add button{min-height:26px;padding:3px 9px;border:1px solid var(--orc-line);border-radius:7px;background:var(--orc-layer2);color:var(--orc-fg2);font:inherit;cursor:pointer;transition:transform 120ms ease-out,background-color 120ms ease-out}
+.orc-wrow__actions button:hover,.orc-wrow__edit button:hover,.orc-wrow__confirm button:hover,.orc-add button:hover{background:var(--orc-hover);color:var(--orc-fg)}
+.orc-wrow__actions button:active,.orc-wrow__edit button:active,.orc-wrow__confirm button:active,.orc-add button:active{transform:scale(.97)}
 .orc-wrow__edit label{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .orc-wrow__edit .orc-input{min-width:180px}
 .orc-wrow__note{margin:1px 0 2px 30px;color:var(--orc-fg3);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif)}
 .orc-wrow__confirm{padding:7px 9px;border:1px solid var(--orc-line);border-radius:8px;background:var(--orc-layer2);color:var(--orc-fg2)}
 .orc-wrow__confirm span{flex:1 1 100%}
 .orc-wrow__confirm .orc-danger{color:var(--orc-error)}
-/* Three CLI families read as three rows, not three cramped cards: name, state, the login command,
-   and the check button on the right edge — the same rhythm as the worker rows below. */
-.orc-family{display:flex;flex-direction:column;margin:10px 0 6px;border:1px solid var(--orc-hair);border-radius:9px;background:var(--orc-bg);overflow:hidden}
-.orc-family__item{display:grid;grid-template-columns:96px minmax(0,1fr) auto;align-items:center;gap:10px;min-width:0;padding:8px 10px}
-.orc-family__item + .orc-family__item{border-top:1px solid var(--orc-hair)}
-.orc-family__name{font-weight:600}
-.orc-family__state{color:var(--orc-fg3);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.orc-family code{grid-column:2;grid-row:2;color:var(--orc-fg3);font:11px/16px var(--orc-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.orc-family button{grid-column:3;grid-row:1 / span 2;align-self:center;min-height:24px;padding:3px 9px;font-size:11px;white-space:nowrap}
-.orc-family button:disabled,.orc-add button:disabled{opacity:.5;cursor:default}
+.orc-add button:disabled,.orc-models button:disabled{opacity:.5;cursor:default}
+/* «Add models» (pv1): the CLI's models, then the efforts; one worker per ticked pair. */
+.orc-models{margin:6px 0 10px}
+.orc-models fieldset{display:flex;flex-direction:column;gap:4px;grid-column:1 / -1;min-width:0;margin:0;padding:0;border:0}
+.orc-models legend{margin-bottom:4px;color:var(--orc-fg2);font-weight:600}
+.orc-models__item{display:flex;align-items:center;gap:8px;min-width:0}
+.orc-models__item code{color:var(--orc-fg3);font:11px/16px var(--orc-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.orc-wgroup__via{color:var(--orc-fg3);font-weight:400}
+/* A dsh model the catalog no longer lists (pv1): kept in its lists, marked so its failing runs are no surprise. */
+.orc-wrow__missing{display:inline-block;margin-top:1px;padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--orc-warn) 16%,transparent);color:var(--orc-fg);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif)}
 .orc-add{margin-top:13px;padding-top:10px;border-top:1px solid var(--orc-sep)}
 .orc-add .orc-add__trigger{border-style:dashed;color:var(--orc-accent)}
 .orc-add__form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px;margin-top:9px;padding:12px;border:1px solid var(--orc-line);border-radius:10px;background:var(--orc-bg)}
@@ -1114,23 +1238,16 @@ const CSS = `
 .orc-add__check span{color:var(--orc-fg3);font-size:11px}
 .orc-add__buttons{justify-content:flex-end;padding-top:8px;border-top:1px solid var(--orc-sep)}
 .orc-add__buttons button:first-child{color:var(--orc-accent)}
-@media(max-width:570px){.orc-family{grid-template-columns:1fr}.orc-family__item{grid-template-columns:1fr 1fr}.orc-add__form{grid-template-columns:1fr}}
-.orc-wrow__who{display:flex;align-items:center;gap:8px;min-width:0}
-.orc-wrow__who .orc-wk{margin-right:0}
+@media(max-width:570px){.orc-add__form{grid-template-columns:1fr}}
 .orc-wrow__name{flex:1 1 auto;min-width:0}
 .orc-wrow__label,.orc-wrow__id{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .orc-wrow__id{color:var(--orc-fg3);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif)}
-.orc-wrow__bill{color:var(--orc-fg3);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif)}
 /* The usage list wraps inside its column — a truncated «…» would hide which classes a worker serves. */
 .orc-wrow__use{min-width:0;color:var(--orc-fg3);font:var(--dsw-font-xxxs-11,11px/15px system-ui,sans-serif)}
-.orc-wrow--off .orc-wrow__name,.orc-wrow--off .orc-wrow__bill,.orc-wrow--off .orc-wrow__use{color:var(--orc-fg3)}
 /* The reason field is part of its row: indented under the name, capped short of the dialog width. */
 .orc-wrow__reason{display:block;width:min(320px,calc(100% - 30px));margin:2px 0 3px 30px}
-.orc-wgroup{margin-top:14px;padding-top:8px;border-top:1px solid var(--orc-sep)}
-.orc-wgroup:first-of-type{margin-top:8px;padding-top:0;border-top:0}
-.orc-wgroup__name{margin:0;color:var(--orc-fg3);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);
-  font-weight:600;text-transform:uppercase;letter-spacing:.05em}
-.orc-extra{margin-top:14px;padding-top:8px;border-top:1px solid var(--orc-sep)}
+.orc-cli .orc-wrow__actions,.orc-cli .orc-wrow__edit,.orc-cli .orc-wrow__confirm{margin-left:30px}
+.orc-extra__body{margin-top:4px}
 .orc-disclose{display:flex;align-items:center;gap:6px;padding:4px 0;border:0;background:transparent;
   color:var(--orc-fg2);font:inherit;cursor:pointer}
 .orc-disclose:hover{color:var(--orc-fg)}
@@ -1164,7 +1281,9 @@ const CSS = `
 .orc-ord__row--grab .orc-grip{cursor:grabbing}
 .orc-ord__row .orc-wk{margin-right:0}
 .orc-ord__name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.orc-ord__off{flex:1 1 auto;min-width:0;color:var(--orc-fg3);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* wo1: an entry this machine cannot run stays in its preset, marked, and links back to the worker. */
+.orc-ord__na{flex:1 1 auto;min-width:0;padding:0;border:0;background:none;color:var(--orc-fg2);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);text-align:left;text-decoration:underline dotted;text-underline-offset:2px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.orc-ord__na:hover{color:var(--orc-fg)}
 .orc-ord__btns{display:flex;flex:none;gap:2px;margin-left:auto}
 .orc-step{min-width:22px;min-height:22px;padding:0 4px;border:0;border-radius:6px;background:transparent;color:var(--orc-fg3);font:inherit;line-height:1;cursor:pointer}
 .orc-step:hover{background:var(--orc-hover);color:var(--orc-fg)}
@@ -1188,6 +1307,7 @@ const CSS = `
 .orc-queue__x:hover{background:var(--orc-hover);color:var(--orc-fg)}
 .orc-queue__empty{padding:0 14px}
 .orc-queue__list{display:flex;flex-direction:column;gap:6px;margin:0;padding:4px 14px 12px;list-style:none}
+.orc-queue__section{color:var(--orc-fg2);font:var(--dsw-font-xxs-12,12px/18px system-ui,sans-serif);text-transform:uppercase;letter-spacing:.03em;padding:2px 0 0}
 .orc-queue__other .orc-block__head{margin-bottom:0;padding:4px 14px 0}
 .orc-qrow{border:1px solid var(--orc-hair);border-radius:9px;background:var(--orc-layer2);padding:7px 9px}
 .orc-qrow__top{display:flex;align-items:baseline;gap:6px;width:100%;min-height:24px;padding:0;border:0;border-radius:4px;
@@ -1200,7 +1320,13 @@ const CSS = `
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .orc-qrow__verdict{display:block;margin-top:2px;color:var(--orc-fg2);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .orc-qrow__verdict .orc-verdict__mark{margin-right:5px}
+.orc-qrow__conflicts{display:block;margin-top:2px;color:var(--orc-warn);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.orc-conflicts{margin-top:8px;padding:7px 9px;border-radius:7px;background:var(--orc-layer2);color:var(--orc-fg2);font-size:12px;line-height:18px;overflow-wrap:anywhere}.orc-conflicts strong{color:var(--orc-warn);font-weight:650}.orc-conflicts ul{margin:4px 0;padding-left:18px}
 .orc-qrow__detail{margin-top:6px}
+.orc-file{display:flex;align-items:baseline;gap:6px;min-width:0}.orc-file .orc-link{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.orc-file__status{flex:none;width:14px;font:600 11px/16px var(--orc-mono);text-align:center;color:var(--orc-fg2)}.orc-file__status--A{color:var(--orc-ok)}.orc-file__status--D{color:var(--orc-error)}.orc-file__status--M{color:var(--orc-warn)}
+.orc-file__counts{flex:none;margin-left:auto;font:11px/16px var(--orc-mono);white-space:nowrap}.orc-file__added{color:var(--orc-ok)}.orc-file__deleted{color:var(--orc-error)}
+.orc-prev-run{border:1px solid var(--orc-line);border-radius:7px;padding:6px 10px;background:var(--orc-layer1)}.orc-prev-run+.orc-prev-run{margin-top:6px}.orc-prev-run summary{cursor:pointer;font-weight:600;color:var(--orc-fg2)}.orc-prev-run p{margin:6px 0}.orc-prev-run__reason{color:var(--orc-fg);white-space:pre-wrap}
 .orc-qrow__files{margin:0;padding:0;list-style:none;color:var(--orc-fg2);
   font:var(--dsw-font-xxxs-11,11px/16px ui-monospace,monospace);font-family:var(--orc-mono)}
 .orc-qrow__files li{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 0}
@@ -1312,6 +1438,7 @@ const CSS = `
 .orc-welcome__empty{display:flex;gap:8px;align-items:end;margin-top:19px;padding-top:18px;border-top:1px solid var(--orc-hair)}
 .orc-welcome__empty label{flex:1;min-width:0;color:var(--orc-fg3);font-size:12px}
 .orc-welcome__empty input{display:block;width:100%;margin-top:5px}
+.orc-welcome__task{flex-direction:column;align-items:stretch}.orc-welcome__task textarea{display:block;width:100%;min-height:64px;margin-top:5px;padding:8px 10px;border:1px solid var(--orc-line);border-radius:6px;background:var(--orc-bg);color:var(--orc-fg);font:inherit;resize:vertical}.orc-welcome__task button{align-self:flex-start}
 .orc-welcome__empty input,.orc-welcome__form input,.orc-welcome__form textarea,.orc-welcome__form select{padding:8px 10px;border:1px solid var(--orc-line);border-radius:6px;background:var(--orc-bg);color:var(--orc-fg);font:inherit}
 .orc-welcome__empty button,.orc-welcome__form button{padding:8px 11px;border:1px solid var(--orc-line);border-radius:6px;background:var(--orc-layer2);color:var(--orc-fg);cursor:pointer;font:inherit}
 .orc-welcome__hint{color:var(--orc-fg3);font-size:11px}
@@ -1330,6 +1457,8 @@ const CSS = `
 .orc-welcome__form textarea.orc-spec__paste{min-height:180px;font-family:var(--dsw-font-mono,ui-monospace,monospace);font-size:12px}
 .orc-welcome__form select[size]{padding:4px}
 .orc-welcome__form .orc-spec__submit:disabled{opacity:.5;cursor:default}
+.orc-spec__worker{display:grid;gap:4px}
+.orc-spec__worker p{overflow-wrap:anywhere}
 .orc-welcome__form>div:last-child{display:flex;gap:8px}
 .orc-tour{position:fixed;z-index:65;width:min(320px,calc(100vw - 28px));padding:16px;border:1px solid var(--orc-accent);border-radius:11px;background:var(--orc-layer2);box-shadow:0 10px 35px #0008;color:var(--orc-fg)}
 .orc-tour p{margin:0 0 14px}.orc-tour__count{color:var(--orc-accent);font-size:11px;font-weight:700}
@@ -1395,12 +1524,14 @@ export function statusTone(status: ViewStatus): StatusTone {
 }
 
 /** Human decisions keep the ◆ of the spec whatever their status. */
-export function taskTone(task: { status: ViewStatus; kind: string; closed?: 'negative'; check?: CheckState; byOrchestrator?: true; preparing?: true }): StatusTone {
+export function taskTone(task: { status: ViewStatus; kind: string; closed?: 'negative'; check?: CheckState; byOrchestrator?: true; preparing?: true; needsContract?: true }): StatusTone {
   if (task.closed === 'negative') return { label: t('status.closedNegative'), glyph: '○', color: 'var(--orc-fg3)' }
   // Finished work the orchestrator is still checking: calm, not yet the person's turn (vr1).
   if (task.status === 'in_review' && isChecking(task.check)) return { label: t('status.checking'), glyph: '◌', color: 'var(--orc-fg2)' }
   // A decision the orchestrator still prepares (rt1): calm too, not yet the person's turn.
   if (task.preparing) return { label: t('status.preparing'), glyph: '◆', color: 'var(--orc-fg2)' }
+  // Open work with no contract yet (ct1): not ready to start until one is attached.
+  if (task.needsContract && task.status === 'ready') return { label: t('status.needsContract'), glyph: '○', color: 'var(--orc-fg2)' }
   const tone = statusTone(task.status)
   // The orchestrator's own work (rt1) keeps ▣ whatever its status, like ◆ for decisions.
   if (task.kind === 'root') return { ...tone, glyph: '▣', ...(task.byOrchestrator ? { label: t('status.byOrchestrator') } : {}) }

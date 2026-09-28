@@ -26,7 +26,9 @@ it.each([
   ['disputed', 'Спорно'],
 ] as const)('shows the %s verdict supplied by core', async (kind, label) => {
   panel(makeDetail({ id: 'a', verdict: { kind, why: 'negative', mismatch: 'no_files', facts: [{ code: 'files_changed', count: 2, tone: 'ok' }] } }))
-  const band = await screen.findByRole('status')
+  await screen.findByText(label)
+  const band = document.querySelector('.orc-verdict')!
+  expect(band.closest('.orc-panel__fixed')).toBeTruthy()
   expect(band.textContent).toContain(label)
   expect(band.querySelector('.orc-verdict__mark')?.getAttribute('aria-hidden')).toBe('true')
   expect(band.querySelector('.orc-verdict__mark')?.textContent).toBe(kind === 'result' ? '✓' : kind === 'negative' ? '−' : '?')
@@ -127,8 +129,8 @@ it('keeps two acceptance actions and sends negative acceptance to the native-con
   const calls = panel(makeDetail({ id: 'a', verdict: { kind: 'negative', why: 'negative', facts: [] } }))
   await screen.findByRole('status')
   const actions = screen.getByRole('complementary').querySelector('.orc-sec--actions > .orc-actions')!
-  expect(within(actions as HTMLElement).getAllByRole('button').map((b) => b.textContent)).toEqual(['Принять', 'Вернуть…'])
-  await userEvent.setup().click(within(actions as HTMLElement).getByRole('button', { name: 'Принять' }))
+  expect(within(actions as HTMLElement).getAllByRole('button').map((b) => b.textContent)).toEqual(['Вернуть…', 'Принять без результата'])
+  await userEvent.setup().click(within(actions as HTMLElement).getByRole('button', { name: 'Принять без результата' }))
   await waitFor(() => expect(calls.filter((call: FetchCall) => call.method === 'POST' && call.url.includes('/api/accept'))).toHaveLength(1))
 })
 
@@ -140,6 +142,18 @@ it('highlights lexical risk lines without changing the worker text', async () =>
   expect(report.querySelectorAll('.orc-report__risk')).toHaveLength(1)
   expect(report.querySelector('.orc-report__risk')?.textContent).toBe('Не удалось проверить')
   expect([...report.querySelectorAll('li')].map((item) => item.textContent)).toEqual(['Готово', 'Не удалось проверить', 'Всё собрано'])
+})
+
+it('previews a worker report during review and opens the full evidence on request', async () => {
+  const text = 'Result: blocked\nThe shared component does not support this shape.\n\n## Evidence\n- Browser scenario failed\n- Implementation notes saved'
+  panel(makeDetail({ id: 'a', status: 'in_review', report: { runId: 'r', text, source: 'section', truncated: false } }))
+  const report = await screen.findByRole('region', { name: 'Итог работы' })
+  const toggle = within(report).getByRole('button', { name: 'Итог работы' })
+  expect(toggle.getAttribute('aria-expanded')).toBe('false')
+  expect(within(report).queryByText('Evidence')).toBeNull()
+  await userEvent.setup().click(toggle)
+  expect(toggle.getAttribute('aria-expanded')).toBe('true')
+  expect(within(report).getByText('Evidence')).toBeTruthy()
 })
 
 it('marks a dependent on board and graph when its predecessor closed without a result', async () => {

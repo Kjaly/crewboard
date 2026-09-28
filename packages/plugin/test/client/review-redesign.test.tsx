@@ -91,6 +91,26 @@ it('shows a measured zero as a value and an unobserved measure as «Not observed
   expect(screen.getByRole('region', { name: 'Elapsed since first run' }).textContent).toContain('Review waitNot observed')
 })
 
+it('separates orchestrator session metrics, unknown fields and pending bills from worker money', () => {
+  setLang('en')
+  const value = cost([run('worker', { agent: 'dsh', cashUsd: { value: 0.25, currency: 'USD', source: 'bill' }, availability: { input: 'unavailable', output: 'unavailable', cacheRead: 'unavailable', cacheWrite: 'unavailable', reasoning: 'unavailable', cash: 'known' } })], {
+    orchestrator: { actor: 'orchestrator', scope: 'session_lifetime', availability: 'available', coverage: { bound: 1, observed: 1, pending: 0 }, sessions: [{ actor: 'orchestrator', scope: 'session_lifetime', sessionId: 'root', state: 'observed', calls: 1, cash: { value: 100, state: 'known', source: 'dsh_bill_records', calls: 1 }, metrics: { input: { value: 0, state: 'known', source: 'dsh_bill_records' }, output: { state: 'unavailable', source: 'dsh_bill_records' }, cacheWrite: { state: 'unavailable', source: 'dsh_bill_records' } } }] },
+  })
+  const view = render(<ReviewView {...props(undefined, value)} />)
+  const section = screen.getByRole('region', { name: 'Orchestrator usage' })
+  expect(section.textContent).toContain('not allocated to this plan')
+  expect(section.textContent).toContain('Input 0 · output unavailable')
+  expect(section.textContent).toContain('reported cache write unavailable')
+  const workerMoney = screen.getByRole('region', { name: 'Money and quota' })
+  expect(workerMoney.textContent).toContain('USD 0.250')
+  expect(workerMoney.textContent).not.toContain('USD 100')
+  view.unmount()
+  render(<ReviewView {...props(undefined, cost([], { orchestrator: { actor: 'orchestrator', scope: 'session_lifetime', availability: 'pending', coverage: { bound: 1, observed: 0, pending: 1 }, sessions: [{ actor: 'orchestrator', scope: 'session_lifetime', sessionId: 'root', state: 'pending', reason: 'bill_not_recorded_yet' }] } }))} />)
+  const awaiting = screen.getByRole('region', { name: 'Orchestrator usage' })
+  expect(awaiting.textContent).toContain('awaiting dsh-bill')
+  expect(awaiting.textContent).not.toContain('Input 0')
+})
+
 it('draws the row strip from ledger kinds and keeps its problems visible', () => {
   setLang('en')
   render(<RowStrip steps={{ strip: 'HMMTT!..EC', total: 40, counts: { request: 1, model: 20, tool: 15, problem: 1, edit: 2, check: 1 }, problems: 1, timing: 'elapsed', completeness: 'partial' }} />)
@@ -123,14 +143,15 @@ it('keeps the band amber for decisions and separates failed follow-ups from acce
   setLang('en')
   const repo = makeRepo([makeTask({ id: 'w', title: 'Waiting one', status: 'in_review' }), makeTask({ id: 'f', title: 'Broken', status: 'ready', lastOutcome: 'failed' })])
   const view = render(<ReviewView {...props(repo)} />)
-  const band = screen.getByRole('region', { name: '1 decision is waiting for you' })
+  // at2: the band says why the work waits — a review is not called a decision (D44).
+  const band = screen.getByRole('region', { name: '1 task waits for review' })
   expect(band.className).toContain('orc-needs--warn')
   expect(within(band).getByRole('button', { name: 'Waiting one →' })).toBeTruthy()
   expect(band.textContent).toContain('1 failed task needs a follow-up; it is not accepted.')
   view.unmount()
   render(<ReviewView {...props(makeRepo([makeTask({ id: 'f', status: 'ready', lastOutcome: 'failed' })]))} />)
   // No decision waits, but failed work keeps the band from turning calm-green.
-  expect(screen.getByRole('region', { name: 'No decision is waiting for you' }).className).toContain('orc-needs--neutral')
+  expect(screen.getByRole('region', { name: 'The review queue is clear' }).className).toContain('orc-needs--neutral')
 })
 
 function mountApp(runs: PlanRunCost[]) {

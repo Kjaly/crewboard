@@ -44,7 +44,7 @@ async function setup(answer: boolean, path = PATH) {
   const backend: RunBackend = {
     id: 'dsh',
     launch: async () => 'run_dsh-y',
-    events: async (id) => id === 'run_a' ? [{ ts: NOW.toISOString(), type: 'final', data: 'Результат: отрицательный' }] : [],
+    events: async (id) => id === 'run_a' ? [{ ts: NOW.toISOString(), type: 'final', data: 'Результат: отрицательный' }] : id === 'run_c' ? [{ ts: NOW.toISOString(), type: 'final', data: 'Результат: получен' }] : [],
     status: async () => ({ status: 'running', terminal: false, exitCode: null }),
     steer: async () => {},
     cancel: async () => {},
@@ -72,51 +72,67 @@ async function setup(answer: boolean, path = PATH) {
 }
 
 describe('POST /accept-batch', () => {
-  it('accepts reviewed tasks and decisions after one native confirmation listing them', async () => {
+  it('accepts reviewed tasks after one native confirmation listing them', async () => {
     const { root, post, dialogs } = await setup(true)
-    expect(await post({ repo: root, tasks: ['a', 'b', 'd'] })).toMatchObject({ status: 200, json: { ok: true, value: { accepted: ['a', 'b', 'd'] } } })
+    expect(await post({ repo: root, tasks: ['a', 'b'] })).toMatchObject({ status: 200, json: { ok: true, value: { accepted: ['a', 'b'] } } })
     expect(dialogs).toHaveLength(1)
     expect(dialogs[0]?.[0]).toContain('a — Задача A')
-    expect(dialogs[0]?.[0]).toContain('d — Решение D')
+    expect(dialogs[0]?.[0]).not.toContain('d — Решение D')
     expect(dialogs[0]?.[0]).toContain('a — Negative result: a negative result was reported')
     expect(dialogs[0]?.[0]).toContain('b — Disputed: the report makes no explicit result claim')
-    expect(dialogs[0]?.[1]).toBe('Accept 3')
-    expect(dialogs[0]?.[0]).toContain('Accept 3 tasks? 0 clean, 3 at risk.')
-    expect((await loadPlan(root)).tasks.filter((t) => t.status === 'accepted').map((t) => t.id)).toEqual(['a', 'b', 'd'])
+    expect(dialogs[0]?.[1]).toBe('Accept 2')
+    expect(dialogs[0]?.[0]).toContain('Accept 2 tasks? 0 clean, 2 at risk.')
+    expect((await loadPlan(root)).tasks.filter((t) => t.status === 'accepted').map((t) => t.id)).toEqual(['a', 'b'])
     expect((await loadPlan(root)).tasks.find((t) => t.id === 'a')?.notes.at(-1)?.verdict).toMatchObject({ kind: 'negative', why: 'negative' })
   })
 
-  // rt1: a decision or root task without the orchestrator's «done» is named before anything is accepted.
-  it('names decisions and root tasks the orchestrator has not checked, and only those', async () => {
+  // dc1: a decision never closes in a batch — the whole list is refused before the dialog, atomically,
+  // and the decision stays where the person can confirm it by itself.
+  it('refuses a batch that lists a decision, without a dialog or a partial write', async () => {
+    const { root, post, dialogs } = await setup(true)
+    const res = await post({ repo: root, tasks: ['a', 'd'] })
+    expect(res).toMatchObject({ status: 409, json: { error: 'decision_batch' } })
+    expect(String(res.json.message)).toContain('d')
+    expect(dialogs).toHaveLength(0)
+    const plan = await loadPlan(root)
+    expect(plan.tasks.find((t) => t.id === 'a')?.status).toBe('in_review')
+    expect(plan.tasks.find((t) => t.id === 'd')?.status).toBe('ready')
+    // Alone, too — a decision is confirmed one by one in the panel or recorded from chat.
+    expect(await post({ repo: root, tasks: ['d'] })).toMatchObject({ status: 409, json: { error: 'decision_batch' } })
+    expect((await loadPlan(root)).tasks.find((t) => t.id === 'd')?.status).toBe('ready')
+  })
+
+  // rt1: a root task without the orchestrator's «done» is named before anything is accepted.
+  it('names root tasks the orchestrator has not checked, and only those', async () => {
     const { root, post, dialogs } = await setup(true)
     await updatePlan(root, (p) => {
       p.tasks.push(
-        { ...newTask({ id: 'e', title: 'Решение E', kind: 'decision' }), check: { state: 'checked', at: NOW.toISOString(), note: 'options' } },
-        { ...newTask({ id: 'i1', title: 'Стенд I1', kind: 'root' }), status: 'in_review', check: { state: 'checked', at: NOW.toISOString(), note: 'Result: received' } },
+        { ...newTask({ id: 'i1', title: 'Стенд I1', kind: 'root' }), status: 'in_review' },
+        { ...newTask({ id: 'i2', title: 'Стенд I2', kind: 'root' }), status: 'in_review', check: { state: 'checked', at: NOW.toISOString(), note: 'Result: received' } },
       )
       return p
     })
-    expect(await post({ repo: root, tasks: ['a', 'd', 'e', 'i1'] })).toMatchObject({ status: 200 })
+    expect(await post({ repo: root, tasks: ['a', 'i1', 'i2'] })).toMatchObject({ status: 200 })
     const [message] = dialogs[0] ?? []
     const unchecked = message?.split('Not checked by the orchestrator')[1] ?? ''
-    expect(unchecked).toContain('d — Решение D')
-    expect(unchecked).not.toContain('e — ')
-    expect(unchecked).not.toContain('i1 — ')
+    expect(unchecked).toContain('i1 — Стенд I1')
+    expect(unchecked).not.toContain('i2 — ')
     expect(unchecked).not.toContain('a — ')
   })
 
   it('counts clean and risky work in the confirmation (w1b, B03)', async () => {
     const { root, post, dialogs } = await setup(true)
     await updatePlan(root, (p) => {
-      p.tasks.push({ ...newTask({ id: 'e', title: 'Решение E', kind: 'decision' }), check: { state: 'checked', at: NOW.toISOString(), note: 'options' } })
+      p.tasks.push({ ...newTask({ id: 'e', title: 'Работа E' }), status: 'in_review', runs: [{ runId: 'run_c', agent: 'dsh', startedAt: NOW.toISOString(), finishedAt: NOW.toISOString(), outcome: 'completed' }] })
       return p
     })
     expect(await post({ repo: root, tasks: ['a', 'b', 'e'] })).toMatchObject({ status: 200 })
-    // a is negative, b makes no claim, e is a prepared decision: one clean item, two at risk.
-    expect(dialogs[0]?.[0]).toContain('Accept 3 tasks? 1 clean, 2 at risk.')
+    // a is negative, b makes no claim, e claimed a result with no changed files: all at risk.
+    expect(dialogs[0]?.[0]).toContain('Accept 3 tasks? 0 clean, 3 at risk.')
+    expect(dialogs[0]?.[0]).toContain('e — Disputed')
   })
 
-  it('asks nothing extra when every decision in the batch was prepared', async () => {
+  it('names no unchecked own work when the batch holds only worker tasks', async () => {
     const { root, post, dialogs } = await setup(true)
     expect(await post({ repo: root, tasks: ['a', 'b'] })).toMatchObject({ status: 200 })
     expect(dialogs[0]?.[0]).not.toContain('Not checked by the orchestrator')

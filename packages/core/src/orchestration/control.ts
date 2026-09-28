@@ -9,6 +9,8 @@ import { TERMINAL_STATUSES } from '../plan/graph.js'
 import type { Backends } from './backends.js'
 import { launchError } from './launch.js'
 import { readSteer, transitionSteer, withSteerLock, writeSteer, type SteerRecord, type SteerState } from '../runs/steers.js'
+import { ANTHROPIC_POLICY_REVISION, isIdentifiedAnthropicRoute } from '../routing/anthropic-policy.js'
+import type { Backend } from '../preflight/preflight.js'
 
 export type SteerInput = ({ message: string } | { file: string }) & { mode?: 'auto' | 'queue' | 'interrupt' }
 
@@ -23,8 +25,18 @@ function lastRun(plan: Plan, taskId: string) {
 export type SteerResult =
   | { delivery: 'delivered'; runId: string; file: string; message: string; steerId: string; state: SteerState }
   | { delivery: 'abandoned'; runId: string; file: string; message: string; steerId: string; state: 'abandoned'; reason: string }
-  | { delivery: 'refused'; runId: string; state: 'refused'; runState: string; message: string; file: string; steerId: string }
+  | { delivery: 'refused'; runId: string; state: 'refused'; runState: string; message: string; file: string; steerId: string; reason?: 'legacy_unverified_policy' }
   | { delivery: 'failed'; runId: string; reason: string; message: string; steerId: string; state: null }
+
+/** A run whose resolved backend reaches Claude: the direct backend id, or a model/provider that names Anthropic. */
+const BACKEND_OF_RUN: Partial<Record<string, Backend>> = { claude: 'claude-code', codex: 'codex-cli', opencode: 'opencode', cursor: 'cursor-agent', gemini: 'gemini-cli', grok: 'grok-build', dsh: 'dsh', devin: 'devin-cli' }
+/** A run this build launched through the guarded API-key channel, with the *current* policy revision recorded. */
+const policyGuarded = (run: { authChannel?: string; policyRevision?: string }): boolean => run.authChannel === 'anthropic-api-key' && run.policyRevision === ANTHROPIC_POLICY_REVISION
+/** The resolved backend (not the id name) decides: an arbitrary legacy id on the Claude backend is still Claude. */
+const reachesAnthropic = (backendId: string, run: { model?: string; agent: string }): boolean => {
+  const backend = BACKEND_OF_RUN[backendId]
+  return backend !== undefined && isIdentifiedAnthropicRoute({ backend, model: run.model, id: run.agent })
+}
 
 /** The note is an audit record of the write outcome, not a claim that the worker acted on it. */
 export async function steerTask(root: string, taskId: string, input: SteerInput, backends: Backends, now: Date, planId?: string): Promise<SteerResult> {
@@ -65,6 +77,18 @@ export async function steerTask(root: string, taskId: string, input: SteerInput,
     await writeSteer(runDir, record(file, 'refused'))
     await note('refused', runState)
     return { delivery: 'refused', runId: run.runId, state: 'refused', runState, message, file, steerId }
+  }
+  // A running Claude run launched before the API-only policy carries no recorded channel. Its worker keeps
+  // whatever credential it authenticated with, so a steer would hand fresh input to it; the new launch's API
+  // key changes nothing about that old child. The resolved backend is the authority — an arbitrary legacy id
+  // on the Claude backend is still Claude, and a historical Anthropic model on opencode/dsh is caught by its
+  // model. Fail closed — unverified, not an accusation — while Stop stays available and the files are
+  // preserved. A genuinely new guarded run records `authChannel` and still steers.
+  if (reachesAnthropic(backend.id, run) && !policyGuarded(run)) {
+    const file = await retain()
+    await writeSteer(runDir, record(file, 'refused'))
+    await note('refused', 'legacy_unverified_policy')
+    return { delivery: 'refused', runId: run.runId, state: 'refused', runState: 'unverified', reason: 'legacy_unverified_policy', message, file, steerId }
   }
   let file: string
   try {

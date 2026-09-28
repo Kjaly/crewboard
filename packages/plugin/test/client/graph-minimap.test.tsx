@@ -1,66 +1,90 @@
 // @vitest-environment jsdom
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, expect, it } from 'vitest'
+import { readManualFolds, writeManualFold } from '../../src/client/fold.js'
 import { setLang } from '../../src/client/i18n.js'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, expect, it } from 'vitest'
 import { createCamera } from '../../src/client/views/graph/camera.js'
 import { GraphView } from '../../src/client/views/graph/index.js'
-import { MAP_H, MAP_W, mapProjection } from '../../src/client/views/graph/minimap.js'
 import { installMatchMedia, makeRepo, makeTask } from './helpers.js'
 
+/**
+ * mm1: the minimap in the corner names the live lanes, dims History and folded lanes, marks the
+ * selected task's lane, and a click on a label scrolls to (and unfolds) it.
+ */
+
+beforeEach(() => { setLang('en'); localStorage.clear(); installMatchMedia(true) })
 afterEach(() => cleanup())
 
-const repo = makeRepo([
-  makeTask({ id: 'a', title: 'Первая задача', status: 'accepted' }),
-  makeTask({ id: 'b', title: 'Вторая задача', status: 'running', deps: ['a'] }),
-  makeTask({ id: 'c', title: 'Третья задача', deps: ['b'] }),
-])
+const frames = (n: number) => act(() => new Promise<void>((resolve) => {
+  let left = n
+  const tick = () => (--left <= 0 ? resolve() : requestAnimationFrame(tick))
+  requestAnimationFrame(tick)
+}))
 
-it('maps the whole plan into the minimap box without upscaling it', () => {
-  const p = mapProjection({ minX: 0, minY: 0, maxX: 2000, maxY: 1200 })
-  expect(p.scale).toBeLessThan(1)
-  expect(2000 * p.scale + p.dx).toBeLessThanOrEqual(MAP_W)
-  expect(1200 * p.scale + p.dy).toBeLessThanOrEqual(MAP_H)
-  expect(mapProjection({ minX: 0, minY: 0, maxX: 10, maxY: 10 }).scale).toBe(1)
-})
+const mapLabels = (container: HTMLElement) => [...container.querySelectorAll('.orc-gmap__label')].map((el) => el.textContent)
 
-it('draws a card per task and a frame for the visible area', async () => {
-  setLang('ru')
-  installMatchMedia(true)
+it('labels the live lanes on the minimap, short and by name', async () => {
+  const repo = makeRepo([
+    makeTask({ id: 'a', title: 'Alpha', lane: 'Build', status: 'ready' }),
+    makeTask({ id: 'b', title: 'Beta', lane: 'Ship', status: 'running' }),
+  ])
   const { container } = render(<GraphView repo={repo} selectedId={null} onSelect={() => {}} density="overview" />)
-  await screen.findByRole('button', { name: /Вторая задача/ })
-
-  const map = screen.getByLabelText('Миникарта плана')
-  expect(map.querySelectorAll('.orc-gmap__node')).toHaveLength(3)
-  const frame = container.querySelector<HTMLElement>('.orc-gmap__frame')
-  expect(frame).not.toBeNull()
-  await waitFor(() => expect(Number.parseFloat(frame?.style.width ?? '0')).toBeGreaterThan(0))
+  await screen.findByRole('button', { name: /Alpha/ })
+  await frames(3)
+  expect(mapLabels(container)).toEqual(expect.arrayContaining(['Build', 'Ship']))
 })
 
-it('moves the camera when the frame is dragged across the map', async () => {
-  setLang('ru')
-  installMatchMedia(true)
-  const { container } = render(<GraphView repo={repo} selectedId={null} onSelect={() => {}} density="overview" />)
-  await screen.findByRole('button', { name: /Вторая задача/ })
+it('dims a finished lane and drops its label — unless it holds the selected task', async () => {
+  const repo = makeRepo([
+    makeTask({ id: 'a', title: 'Alpha', lane: 'Build', status: 'ready' }),
+    makeTask({ id: 'h', title: 'Old work', lane: 'Old', status: 'accepted' }),
+  ])
+  const { container, rerender } = render(<GraphView repo={repo} selectedId={null} onSelect={() => {}} density="overview" />)
+  await screen.findByRole('button', { name: /Alpha/ })
+  await frames(3)
+  expect(mapLabels(container)).toEqual(['Build'])
+  expect(container.querySelector('.orc-gmap__node--dim')).toBeTruthy()
 
-  const world = container.querySelector<HTMLElement>('.orc-gworld')
-  const map = screen.getByLabelText('Миникарта плана')
-  await waitFor(() => expect(world?.style.transform).toBeTruthy())
-  const before = world?.style.transform
-
-  const options = { bubbles: true, clientX: MAP_W - 4, clientY: MAP_H - 4, button: 0, buttons: 1 }
-  map.dispatchEvent(new window.PointerEvent('pointerdown', options))
-  map.dispatchEvent(new window.PointerEvent('pointermove', options))
-  map.dispatchEvent(new window.PointerEvent('pointerup', { ...options, buttons: 0 }))
-
-  await waitFor(() => expect(world?.style.transform).not.toBe(before))
+  rerender(<GraphView repo={repo} selectedId="h" onSelect={() => {}} density="overview" />)
+  await frames(3)
+  expect(mapLabels(container)).toEqual(expect.arrayContaining(['Build', 'Old']))
 })
 
-it('keeps the camera inside the plan when the minimap is dragged past its edge', () => {
+it('a click on a lane label unfolds the lane and scrolls the canvas there', async () => {
+  const build = Array.from({ length: 3 }, (_, i) => makeTask({ id: `b${i}`, title: `Build ${i}`, lane: 'Build', status: 'ready', deps: i ? [`b${i - 1}`] : [] }))
+  const repo = makeRepo([...build, makeTask({ id: 's0', title: 'Ship 0', lane: 'Ship', status: 'ready' })])
+  writeManualFold(repo, 'Build', true)
   const camera = createCamera()
-  camera.setViewport(900, 500)
-  camera.setContent({ minX: 0, minY: 0, maxX: 1200, maxY: 800 })
-  camera.centerOn(100_000, 100_000, true)
+  render(<GraphView repo={repo} selectedId={null} onSelect={() => {}} density="overview" camera={camera} />)
+  await screen.findByRole('button', { name: 'Expand lane Build' })
+  await frames(3)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Go to lane Build' }))
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Expand lane Build' })).toBeNull())
+  expect(readManualFolds(repo)).toMatchObject({ Build: false })
+  const card = await screen.findByRole('button', { name: /Build 0/ })
+  await frames(6)
+  const [, , y] = card.parentElement!.style.transform.match(/translate\(([-\d.]+)px,([-\d.]+)px\)/)!.map(Number)
   const view = camera.viewBox()
-  expect(view.minX).toBeLessThan(1200)
-  expect(view.minY).toBeLessThan(800)
+  expect(y).toBeGreaterThanOrEqual(view.minY)
+  expect(y).toBeLessThanOrEqual(view.maxY)
+})
+
+it('keeps a pinned card inside its own lane when a lane above it folds', async () => {
+  const above = Array.from({ length: 4 }, (_, i) => makeTask({ id: `a${i}`, title: `Above ${i}`, lane: 'Above', status: 'ready', deps: i ? [`a${i - 1}`] : [] }))
+  const pinned = makeTask({ id: 'p', title: 'Pinned card', lane: 'Below', status: 'ready', pos: { x: 0, y: 40 } })
+  const repo = makeRepo([...above, pinned])
+  render(<GraphView repo={repo} selectedId={null} onSelect={() => {}} density="overview" />)
+  await screen.findByRole('button', { name: /Pinned card/ })
+  await frames(6)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Collapse lane Above' }))
+  await screen.findByRole('button', { name: 'Expand lane Above' })
+  await frames(6)
+
+  const foldedBand = [...document.querySelectorAll('.orc-glane')].find((el) => !el.querySelector('.orc-glane__head')) as HTMLElement
+  const foldedBottom = Number.parseFloat(foldedBand.style.top) + Number.parseFloat(foldedBand.style.height)
+  const card = screen.getByRole('button', { name: /Pinned card/ })
+  const [, , y] = card.parentElement!.style.transform.match(/translate\(([-\d.]+)px,([-\d.]+)px\)/)!.map(Number)
+  expect(y).toBeGreaterThanOrEqual(foldedBottom)
 })

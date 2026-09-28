@@ -11,10 +11,11 @@ import { BUILD_ID } from '../shared/build.js'
 import { LensChip } from './lens-chips.js'
 import { RepoSidebar } from './sidebar.js'
 import { OrchestraSettings, Welcome, Tour, DraftReview, DraftJobView, ReviewView, ReviewDrilldown, TraceScreen, TaskPanel, TaskMenu, GraphView } from './lazy-views.js'
-import { markTourSeen, tourSeen } from './tour.js'
-import { api, type DraftJobSummary, type DraftSummary } from './api.js'
+import { markTourSeen, TOUR_STEPS, tourSeen } from './tour.js'
+import { api, type DraftJobSummary, type DraftSummary, shared, taskVersion } from './api.js'
 import { ReviewQueue } from './queue.js'
-import { repoName, reviewWaiting } from './review.js'
+import { repoName } from './review.js'
+import { reasonsText, scopeText, waitingOf } from './waiting.js'
 import { repoError } from './summary.js'
 import { ensureStyles } from './styles.js'
 import { orchestraStore, type ViewKind, useOrchestra } from './store.js'
@@ -25,6 +26,7 @@ import type { ViewProps } from './views/types.js'
 import type { MenuRequest } from './task-menu.js'
 import { formatRoute, parseRoute } from './route.js'
 import { WorkerSettingsBanner } from './worker-settings-banner.js'
+import { ProcessStatus, processStripEligible } from './process-status.js'
 
 const VIEWS: Array<{ key: ViewKind; label: string }> = [
   { key: 'graph', label: 'panel.app.graph' },
@@ -90,6 +92,8 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [presetOpen, setPresetOpen] = useState(0)
   const [tourStep, setTourStep] = useState<number | null>(null)
+  // «Done» on the tour's last step leaves the person on the welcome it pointed at (nb1), until they move on.
+  const [welcomeAfterTour, setWelcomeAfterTour] = useState(false)
   const [drafts, setDrafts] = useState<DraftSummary[]>([])
   const [draftJobs, setDraftJobs] = useState<DraftJobSummary[]>([])
   const [draftsLoaded, setDraftsLoaded] = useState(false)
@@ -115,7 +119,7 @@ export function App() {
     if (route.task && route.tab) setPanelTab((old) => ({ tab: route.tab as TabKey, seq: (old?.seq ?? 0) + 1 }))
     if (!route.run || !route.task) return
     let live = true
-    void api.task(repo.root, route.task).then((result) => {
+    void shared.task(repo.root, route.task, taskVersion(repo, route.task)).then((result) => {
       if (!live || !result.ok) return
       const run = result.value.runs.find((item) => item.runId === route.run)
       if (!run) { orchestraStore.navigate({ run: undefined }, 'replace'); return }
@@ -123,25 +127,22 @@ export function App() {
     }).catch(() => {})
     return () => { live = false }
   }, [routeRequest?.seq, repo?.root, repo?.planId])
+  // Drafts and draft jobs are asked for once per change on disk (pf1): the snapshot's drafts stamp moves when either
+  // does — a running job too, which the host's refresh advances — and a person's approve or discard asks again.
   // biome-ignore lint/correctness/useExhaustiveDependencies: The selected identity and request keys intentionally control this hook’s refresh cadence.
   useEffect(() => {
     if (!repo) { setDrafts([]); setDraftJobs([]); setDraftsLoaded(false); return }
     let live = true
     setDraftsLoaded(false)
-    void Promise.all([api.planDrafts(repo.root), api.planDraftJobs(repo.root).catch(() => null)]).then(([result, jobs]) => {
+    const version = `${repo.draftsStamp ?? ''}:${draftRefresh}`
+    void Promise.all([shared.planDrafts(repo.root, version), shared.planDraftJobs(repo.root, version).catch(() => null)]).then(([result, jobs]) => {
       if (!live) return
       if (result.ok && Array.isArray(result.value)) setDrafts(result.value)
       if (jobs?.ok && Array.isArray(jobs.value)) setDraftJobs(jobs.value)
       setDraftsLoaded(true)
     }).catch(() => { if (live) setDraftsLoaded(true) })
     return () => { live = false }
-  }, [snapshot, repo?.root, draftRefresh])
-  // A running draft job is also polled: asking for the list advances it even when no snapshot arrives.
-  useEffect(() => {
-    if (!draftJobs.some((job) => job.status === 'running')) return
-    const timer = setTimeout(() => setDraftRefresh((n) => n + 1), 4000)
-    return () => clearTimeout(timer)
-  }, [draftJobs])
+  }, [repo?.draftsStamp, repo?.root, draftRefresh])
   const selectedJob = draftJobs.find((job) => job.id === draftId)
   const openDraft = useCallback((id: string) => { setDraftId(id); orchestraStore.navigate({ draft: id }, 'replace') }, [])
   // biome-ignore lint/correctness/useExhaustiveDependencies: repo is read only for its root at the moment the selection disappears.
@@ -262,7 +263,9 @@ export function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [select, toggleDensity, trace, queueOpen, setQueueOpen, lens, setLens, setView, view, plansOpen, togglePlans])
 
-  const closeTour = () => { markTourSeen(); setTourStep(null) }
+  const closeTour = () => { if (tourStep === TOUR_STEPS - 1) setWelcomeAfterTour(true); markTourSeen(); setTourStep(null) }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Any move to another plan, view or task leaves the post-tour welcome.
+  useEffect(() => { setWelcomeAfterTour(false) }, [repo?.root, repo?.planId, view, selectedId])
   const moveTour = (step: number) => setTourStep(step)
   // Every way into a step (start, reload, Back / Next, «show introduction») opens the view it talks about.
   // biome-ignore lint/correctness/useExhaustiveDependencies: Only a step change navigates; later snapshots must not pull the user back.
@@ -270,7 +273,8 @@ export function App() {
     if (tourStep === 0) { setView('graph'); select('build') }
     else if (tourStep === 1) { setView('work'); select(null) }
     else if (tourStep === 2) { setView('review'); select('build') }
-    else if (tourStep === 3) select(null)
+    // The last step points at the welcome: no example view stays active behind it (UX1-19).
+    else if (tourStep === 3) { setView('graph'); select(null) }
   }, [tourStep])
   const selected = repo?.tasks.find((t) => t.id === selectedId)
 
@@ -290,16 +294,20 @@ export function App() {
     return (
       <div className="orc-root">
         <WorkerSettingsBanner issue={snapshot.workerSettings} onOpenSettings={() => setSettingsOpen(true)} />
-        <Welcome onPreset={() => {}} onExample={() => {}} onDraft={() => {}} onWorkers={() => setSettingsOpen(true)} />
+        <Welcome onPreset={() => {}} onExample={() => {}} onDraft={() => {}} onWorkers={() => setSettingsOpen(true)} onRepoAdded={(root) => orchestraStore.openFirstWaiting(root)} />
       </div>
     )
   }
 
+  // A plan with no task yet asks for its first task; no plan (and the tour's end) shows the ways to start (nb1).
+  const welcomeMode = repo.hasPlan === false || tourStep === 3 || welcomeAfterTour ? 'start' as const : repo.tasks.length === 0 ? 'emptyPlan' as const : undefined
   const attentionCount = repo.example ? 0 : repo.attention.length
   const runningCount = repo.example ? 0 : repo.tasks.filter((t) => t.status === 'running').length
   const readyCount = repo.example ? 0 : repo.tasks.filter((t) => t.status === 'ready').length
   // The pill counts the open plan in full (in_review plus human decisions); background plans
-  const queueCount = reviewWaiting(repo)
+  // The chip says the one waiting number with its scope (at2): «in this plan 7 · all 13», as the sidebar and Review do.
+  const waiting = waitingOf(snapshot, { root: repo.root, planId: repo.planId })
+  const queueCount = waiting.all
   // Picking a task anywhere hands the right column back to the task panel.
   const pick = (id: string | null) => {
     setMultiIds([])
@@ -375,7 +383,7 @@ export function App() {
   return (
     /* biome-ignore lint/a11y/noStaticElementInteractions: The root delegates context menu and keyboard events to its child controls. */
     <div className={`orc-root${plansOpen ? ' orc-root--rail-open' : ' orc-root--rail-shut'}`} onContextMenu={showTaskMenu} onClickCapture={multiSelect} onKeyDown={showKeyboardMenu}>
-      <RepoSidebar snapshot={snapshot} repo={repo} open={plansOpen} onToggle={togglePlans} lanes={{ highlight: view === 'graph' ? laneInView : lane?.lane ?? null, onPick: focusLane, link: orchestraStore.laneLink }} drafts={drafts} draftJobs={draftJobs} selectedDraft={draftId} onDraft={(id) => { setDraftId(id); select(null); setQueueOpen(false); setTrace(null); orchestraStore.navigate({ draft: id, task: undefined, tab: undefined, run: undefined }) }} onPlan={() => { setDraftId(null); orchestraStore.navigate({ draft: undefined }) }} />
+      <RepoSidebar snapshot={snapshot} repo={repo} open={plansOpen} onToggle={togglePlans} lanes={{ highlight: view === 'graph' ? laneInView : lane?.lane ?? null, selected: selectedId, onPick: focusLane, link: orchestraStore.laneLink }} drafts={drafts} draftJobs={draftJobs} selectedDraft={draftId} onDraft={(id) => { setDraftId(id); select(null); setQueueOpen(false); setTrace(null); orchestraStore.navigate({ draft: id, task: undefined, tab: undefined, run: undefined }) }} onPlan={() => { setDraftId(null); orchestraStore.navigate({ draft: undefined }) }} />
       <div className="orc-main">
         <WorkerSettingsBanner issue={snapshot.workerSettings} onOpenSettings={() => { setSettingsOpen(true); orchestraStore.navigate({ view: 'settings' }) }} />
         <header className="orc-top">
@@ -414,21 +422,23 @@ export function App() {
           <span className="orc-top__spacer" />
           {/* Status chips list what they count; a non-zero alarm never folds into a menu. */}
           <LensChip kind="attention" count={attentionCount} repo={repo} active={lens === 'attention'} onLens={setLens} onPick={pickFromChip} />
-          <LensChip kind="running" count={runningCount} repo={repo} active={lens === 'running'} onLens={setLens} onPick={pickFromChip} />
+          {/* One running element per screen: where the process strip is eligible its Running stage
+              is the lens chip; in example/archived/partial repos the header keeps it. */}
+          {processStripEligible(repo) ? null : <LensChip kind="running" count={runningCount} repo={repo} active={lens === 'running'} onLens={setLens} onPick={pickFromChip} />}
           <LensChip kind="ready" count={readyCount} repo={repo} active={lens === 'ready'} onLens={setLens} onPick={pickFromChip} />
 
           <button
             type="button"
             className={`orc-chip${queueCount > 0 ? ' orc-chip--review' : ' orc-chip--idle'}`}
             aria-pressed={queueOpen}
-            title={t('panel.app.queueTitle')}
+            title={[t('panel.app.queueTitle'), reasonsText(waiting.reasons)].filter(Boolean).join('\n')}
             onClick={() => setQueueOpen(!queueOpen)}
           >
-            <span aria-hidden="true">◐</span> {queueCount > 0 ? t('panel.app.queueCount', { count: queueCount }) : t('panel.app.queueEmpty')}
+            <span aria-hidden="true">◐</span> {queueCount > 0 ? t('panel.app.queueCount', { count: scopeText(waiting) }) : t('panel.app.queueEmpty')}
           </button>
 
           {repo.example ? null : <OutsidePresetChip tasks={repo.tasks} onPick={pickFromChip} />}
-          <PresetPickers repo={repo.root} planId={repo.planId} planTitle={repo.goal} effective={snapshot.repos.find((item) => item.root === repo.root)?.effectiveRouting} check={repo.orchestratorCheck} workers={snapshot.workers} openRequest={presetOpen} onOpenSettings={() => setSettingsOpen(true)} />
+          <PresetPickers repo={repo.root} planId={repo.planId} planTitle={repo.goal} effective={snapshot.repos.find((item) => item.root === repo.root)?.effectiveRouting} check={repo.orchestratorCheck} defaultBase={repo.defaultBase} workers={snapshot.workers} openRequest={presetOpen} onOpenSettings={() => setSettingsOpen(true)} />
 
           {snapshot.build && BUILD_ID !== 'dev' && snapshot.build !== BUILD_ID ? (
             <span className="orc-conn orc-conn--stale" role="status" title={t('panel.app.hostStaleHint')}>{t('panel.app.hostStale')}</span>
@@ -440,10 +450,11 @@ export function App() {
           ) : null}
         </header>
 
+        <ProcessStatus repo={repo} lens={lens} onLens={setLens} onPick={pickFromChip} />
         <div className="orc-body">
-          <main ref={reviewMain} className={`orc-view${view === 'graph' && !trace && !draftId && !settingsOpen && repo.hasPlan !== false && repo.tasks.length > 0 && tourStep !== 3 ? ' orc-view--bleed' : ''}`}>
+          <main ref={reviewMain} className={`orc-view${view === 'graph' && !trace && !draftId && !settingsOpen && !welcomeMode ? ' orc-view--bleed' : ''}`}>
             <PartBoundary area={t('panel.app.areaMain')}>
-            {settingsOpen ? <SettingsScreen onClose={() => { setSettingsOpen(false); orchestraStore.navigate({ view: 'graph' }) }} /> : !draftId && !trace && (repo.hasPlan === false || repo.tasks.length === 0 || tourStep === 3) ? <Welcome repo={repo} onPreset={() => setPresetOpen((n) => n + 1)} onExample={() => { void api.exampleCreate(repo.root, getLang()).then((r) => { if (r.ok) { setTourStep(0); setView('graph') } }) }} onDraft={(id) => { setDraftId(id); orchestraStore.navigate({ draft: id }) }} onWorkers={() => { setSettingsOpen(true); orchestraStore.navigate({ view: 'settings' }) }} /> : draftId && selectedJob ? <DraftJobView key={`${repo.root}:${draftId}`} repo={repo.root} job={selectedJob} onDraft={openDraft} onClose={() => { setDraftId(null); orchestraStore.navigate({ draft: undefined }) }} onDiscarded={() => { setDraftId(null); setDraftRefresh((n) => n + 1); orchestraStore.navigate({ draft: undefined }) }} /> : draftId?.startsWith('dj-') ? null : draftId ? <DraftReview key={`${repo.root}:${draftId}`} repo={repo.root} id={draftId} onClose={() => { setDraftId(null); orchestraStore.navigate({ draft: undefined }) }} onDiscarded={() => { setDraftId(null); setDraftRefresh((n) => n + 1); orchestraStore.navigate({ draft: undefined }) }} onApproved={() => { setDraftId(null); setDraftRefresh((n) => n + 1); orchestraStore.navigate({ draft: undefined }) }} /> : trace ? (
+            {settingsOpen ? <SettingsScreen onClose={() => { setSettingsOpen(false); orchestraStore.navigate({ view: 'graph' }) }} /> : !draftId && !trace && welcomeMode ? <Welcome repo={repo} mode={welcomeMode} onTaskAdded={(id) => select(id)} onPreset={() => setPresetOpen((n) => n + 1)} onExample={() => { void api.exampleCreate(repo.root, getLang()).then((r) => { if (r.ok) { setTourStep(0); setView('graph') } }) }} onDraft={(id) => { setDraftId(id); orchestraStore.navigate({ draft: id }) }} onWorkers={() => { setSettingsOpen(true); orchestraStore.navigate({ view: 'settings' }) }} /> : draftId && selectedJob ? <DraftJobView key={`${repo.root}:${draftId}`} repo={repo.root} job={selectedJob} onDraft={openDraft} onClose={() => { setDraftId(null); orchestraStore.navigate({ draft: undefined }) }} onDiscarded={() => { setDraftId(null); setDraftRefresh((n) => n + 1); orchestraStore.navigate({ draft: undefined }) }} /> : draftId?.startsWith('dj-') ? null : draftId ? <DraftReview key={`${repo.root}:${draftId}`} repo={repo.root} id={draftId} onClose={() => { setDraftId(null); orchestraStore.navigate({ draft: undefined }) }} onDiscarded={() => { setDraftId(null); setDraftRefresh((n) => n + 1); orchestraStore.navigate({ draft: undefined }) }} onApproved={() => { setDraftId(null); setDraftRefresh((n) => n + 1); orchestraStore.navigate({ draft: undefined }) }} /> : trace ? (
               <TraceScreen
                 repo={snapshot.repos.find((item) => item.root === repo.root) ?? repo}
                 workers={snapshot.workers}
@@ -459,7 +470,7 @@ export function App() {
               <>
                 {view === 'graph' ? <GraphView {...viewProps} /> : null}
                 {view === 'work' ? <WorkView {...viewProps} onOpenQueue={() => setQueueOpen(true)} /> : null}
-                {view === 'review' ? <><div style={{ display: currentReview && !reviewBeside ? 'none' : undefined }}><ReviewView {...viewProps} selectedRunId={reviewBeside && currentReview?.detail.kind === 'run' ? currentReview.detail.runId : undefined} detail={reviewBeside ? reviewDrilldown : undefined} onTrace={(target) => { setTrace(target); orchestraStore.navigate({ task: target.taskId, run: target.run.runId }) }} onReviewRun={(run, summary) => { document.querySelectorAll('[data-review-origin]').forEach((node) => { node.removeAttribute('data-review-origin') }); document.querySelector(`[data-review-run="${CSS.escape(run.runId)}"]`)?.setAttribute('data-review-origin', 'true'); const replace = !!reviewBeside && reviewStackRef.current.length === 1; if (!replace) pick(run.taskId); pushReview({ detail: { kind: 'run', taskId: run.taskId, runId: run.runId, expanded: false }, run, summary }, replace) }} onReviewTask={(taskId, summary) => { document.querySelectorAll('[data-review-origin]').forEach((node) => { node.removeAttribute('data-review-origin') }); document.querySelector(`[data-review-task="${CSS.escape(taskId)}"]`)?.setAttribute('data-review-origin', 'true'); pick(taskId); pushReview({ detail: { kind: 'task', taskId }, summary }) }} /></div>{currentReview && !reviewBeside ? reviewDrilldown : null}</> : null}
+                {view === 'review' ? <><div style={{ display: currentReview && !reviewBeside ? 'none' : undefined }}><ReviewView {...viewProps} waiting={waiting} selectedRunId={reviewBeside && currentReview?.detail.kind === 'run' ? currentReview.detail.runId : undefined} detail={reviewBeside ? reviewDrilldown : undefined} onTrace={(target) => { setTrace(target); orchestraStore.navigate({ task: target.taskId, run: target.run.runId }) }} onReviewRun={(run, summary) => { document.querySelectorAll('[data-review-origin]').forEach((node) => { node.removeAttribute('data-review-origin') }); document.querySelector(`[data-review-run="${CSS.escape(run.runId)}"]`)?.setAttribute('data-review-origin', 'true'); const replace = !!reviewBeside && reviewStackRef.current.length === 1; if (!replace) pick(run.taskId); pushReview({ detail: { kind: 'run', taskId: run.taskId, runId: run.runId, expanded: false }, run, summary }, replace) }} onReviewTask={(taskId, summary) => { document.querySelectorAll('[data-review-origin]').forEach((node) => { node.removeAttribute('data-review-origin') }); document.querySelector(`[data-review-task="${CSS.escape(taskId)}"]`)?.setAttribute('data-review-origin', 'true'); pick(taskId); pushReview({ detail: { kind: 'task', taskId }, summary }) }} /></div>{currentReview && !reviewBeside ? reviewDrilldown : null}</> : null}
               </>
             )}
           </PartBoundary>
@@ -486,7 +497,7 @@ export function App() {
         </div>
       </div>
       {tourStep !== null && repo.example ? <Tour step={tourStep} onStep={moveTour} onClose={closeTour} /> : null}
-      {menu && !repo.example ? <TaskMenu key={`${menu.taskId}:${menu.x}:${menu.y}`} request={menu} repo={repo} workers={snapshot.workers} onClose={() => setMenu(null)} onSelect={pick} onTab={(tab) => setPanelTab((old) => ({ tab, seq: (old?.seq ?? 0) + 1 }))} onTrace={(known?: TaskDetail) => { const show = (detail: TaskDetail) => { const run = detail.runs.at(-1); if (run) setTrace({ taskId: detail.id, taskTitle: detail.title, run: { runId: run.runId, agent: run.agent, startedAt: run.startedAt, active: !run.finishedAt } }) }; if (known) show(known); else void api.task(repo.root, menu.taskId).then((result) => { if (result.ok) show(result.value) }) }} onGraph={() => { setView('graph'); pick(menu.taskId); setWalk((old) => ({ id: menu.taskId, seq: (old?.seq ?? 0) + 1 })) }} /> : null}
+      {menu && !repo.example ? <TaskMenu key={`${menu.taskId}:${menu.x}:${menu.y}`} request={menu} repo={repo} workers={snapshot.workers} onClose={() => setMenu(null)} onSelect={pick} onTab={(tab) => setPanelTab((old) => ({ tab, seq: (old?.seq ?? 0) + 1 }))} onTrace={(known?: TaskDetail) => { const show = (detail: TaskDetail) => { const run = detail.runs.at(-1); if (run) setTrace({ taskId: detail.id, taskTitle: detail.title, run: { runId: run.runId, agent: run.agent, startedAt: run.startedAt, active: !run.finishedAt } }) }; if (known) show(known); else void shared.task(repo.root, menu.taskId, taskVersion(repo, menu.taskId)).then((result) => { if (result.ok) show(result.value) }) }} onGraph={() => { setView('graph'); pick(menu.taskId); setWalk((old) => ({ id: menu.taskId, seq: (old?.seq ?? 0) + 1 })) }} /> : null}
     </div>
   )
 }

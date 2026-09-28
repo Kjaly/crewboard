@@ -1,3 +1,5 @@
+import type { StoredFailure } from '../runs/failure.js'
+import { backInPreparation } from './notes.js'
 import type { CheckState, Plan, Run, Task } from './schema.js'
 
 export const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'superseded', 'incomplete', 'rejected'])
@@ -6,7 +8,8 @@ export const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 's
  * `orphan`: the run's supervisor died but its worker still lives (B19); the backend is stopping it, and the run
  * stays live until it is gone, so no second worker is started in the same copy.
  */
-export type RunState = { status: string; terminal: boolean; exitCode: number | null; finishedAt?: string; orphan?: { workerPid: number } }
+/** `failure` (fo1): why a failed run failed, as its backend read it; recorded on the run when it finishes. */
+export type RunState = { status: string; terminal: boolean; exitCode: number | null; finishedAt?: string; orphan?: { workerPid: number }; failure?: StoredFailure }
 export type RunStateMap = Record<string, RunState>
 /** `dropped` (w1f): a person closed the task as no longer needed. */
 export type ViewStatus = 'backlog' | 'ready' | 'running' | 'in_review' | 'accepted' | 'closed' | 'blocked' | 'superseded' | 'dropped'
@@ -30,13 +33,20 @@ export type TaskView = {
   waitingMerge?: string[]
   /** Accepted work whose branch has not reached the base branch yet (w1d): «Accepted, not merged». */
   unmerged?: true
+  /**
+   * Open work a worker would run, with no contract yet (ct1): `run` refuses it until one is attached, so it is
+   * not counted as ready to start.
+   */
+  needsContract?: true
 }
 
 /**
  * Decisions (rt1) reach the person only once the orchestrator prepared them (`verify <id> --done`).
  * `prepareDecisions` follows «Orchestrator checks finished work» (check-setting.ts): off — a plan run by
  * hand from the CLI, without an orchestrator chat — keeps the older rule, a decision waits once its
- * dependencies are closed.
+ * dependencies are closed. The exception is a decision explicitly sent back to preparation (dc1):
+ * `decision prepare` leaves a `decision_prepare` record, and the question goes back to the orchestrator
+ * whatever the setting.
  */
 export type DeriveOptions = { prepareDecisions?: boolean }
 
@@ -57,6 +67,28 @@ export const isOwnWork = (kind: Task['kind']): boolean => kind === 'decision' ||
 
 /** A decision or a root task the orchestrator has not reported or prepared (`verify --done`) — accepting it is said out loud. */
 export const ownWorkUnchecked = (kind: Task['kind'], check: CheckState | undefined): boolean => isOwnWork(kind) && check !== 'checked'
+
+/**
+ * What a worker's task in review says about the orchestrator's check (vc1), in one of four states:
+ * `pending` — waiting for it, `checking` — the orchestrator took it, `checked` — done, `off` — no check for
+ * this plan. `source` is where «Orchestrator checks finished work» comes from (check-setting.ts); with `off`
+ * it is the reason: `plan` and `repository` — turned off there, `default` — the plan has no orchestrator chat.
+ * A check the orchestrator ran anyway (`verify` with the setting off) still reads `checked`.
+ */
+export type ReviewCheckState = CheckState | 'off'
+export type ReviewCheck = { state: ReviewCheckState; source: 'plan' | 'repository' | 'chat' | 'default' }
+
+/**
+ * The review check of a task, or undefined when there is none to show: the task is not in review, or it is
+ * the orchestrator's own work or a decision (their «done» and «prepared» read as before). `check` is the
+ * view's check (`checkOf`); `setting` the plan's resolved setting.
+ */
+export function reviewCheckOf(item: { status: ViewStatus; kind: Task['kind']; check?: CheckState }, setting: { enabled: boolean; source: ReviewCheck['source'] } | undefined): ReviewCheck | undefined {
+  if (item.status !== 'in_review' || isOwnWork(item.kind) || !setting) return undefined
+  // With the setting on, a check that is not recorded yet is due: sync marks it pending with the run's end.
+  const state: ReviewCheckState = item.check ?? (setting.enabled ? 'pending' : 'off')
+  return { state, source: setting.source }
+}
 
 /** The task's check while it applies: stored for the run under review; a later run makes it stale. */
 export function checkOf(task: Pick<Task, 'check' | 'runs'>): CheckState | undefined {
@@ -98,7 +130,12 @@ export function findCycle(tasks: Pick<Task, 'id' | 'deps'>[]): string[] | null {
 /** Accepted with a negative verdict: done, with no result to use. */
 export function closedNegative(task: Pick<Task, 'notes'>): boolean {
   const note = task.notes.filter((n) => n.type === 'accept').at(-1)
-  return note?.verdict ? note.verdict.kind === 'negative' : note?.text.includes('вердикт: negative') ?? false
+  return note?.verdict ? note.verdict.kind === 'negative' : /(?:вердикт|verdict):\s*negative/i.test(note?.text ?? '')
+}
+/** Explicit negative acceptance closes without result; disputed acceptance keeps its prior accepted/merge semantics. */
+export function closedWithoutResult(task: Pick<Task, 'notes'>): boolean {
+  const note = task.notes.filter((n) => n.type === 'accept').at(-1)
+  return note?.verdict ? note.verdict.kind === 'negative' : /(?:вердикт|verdict):\s*negative/i.test(note?.text ?? '')
 }
 
 /**
@@ -107,7 +144,7 @@ export function closedNegative(task: Pick<Task, 'notes'>): boolean {
  * from the repository's HEAD and would start without it.
  */
 export function awaitsMerge(task: Pick<Task, 'status' | 'worktree' | 'merged' | 'notes'>): boolean {
-  return task.status === 'accepted' && !!task.worktree && !task.merged && !closedNegative(task)
+  return task.status === 'accepted' && !!task.worktree && !task.merged && !closedWithoutResult(task)
 }
 
 export function deriveViews(plan: Plan, runs: RunStateMap = {}, options: DeriveOptions = {}): TaskView[] {
@@ -117,7 +154,13 @@ export function deriveViews(plan: Plan, runs: RunStateMap = {}, options: DeriveO
     // A dependency is done only once accepted and merged: accepted work still in its copy is not in the base yet.
     // Only an open task waits for a merge: accepted, superseded and dropped ones start nothing more.
     const open = task.status !== 'accepted' && task.status !== 'superseded' && task.status !== 'dropped'
-    const blockedBy = task.deps.filter((dep) => byId.get(dep)?.status !== 'accepted' || (open && pendingMerge(dep)))
+    const dependencyReady = (depId: string) => {
+      const dep = byId.get(depId)
+      if (!dep || dep.status !== 'accepted') return false
+      // Decisions and root work retain closure semantics; a negative implementation is closed, but supplies no work.
+      return dep.kind === 'decision' || dep.kind === 'root' || !closedWithoutResult(dep)
+    }
+    const blockedBy = task.deps.filter((dep) => !dependencyReady(dep) || (open && pendingMerge(dep)))
     const waitingMerge = blockedBy.filter(pendingMerge)
     const last = task.runs.at(-1)
     const liveRun = last && !last.finishedAt ? last : undefined
@@ -130,7 +173,7 @@ export function deriveViews(plan: Plan, runs: RunStateMap = {}, options: DeriveO
     let status: ViewStatus
     if (task.status === 'superseded') status = 'superseded'
     else if (task.status === 'dropped') status = 'dropped'
-    else if (task.status === 'accepted') status = closedNegative(task) ? 'closed' : 'accepted'
+    else if (task.status === 'accepted') status = closedWithoutResult(task) ? 'closed' : 'accepted'
     else if (activeRunId || ownWork) status = 'running'
     else if (task.status === 'in_review' || justCompleted) status = 'in_review'
     else if (task.status === 'backlog') status = 'backlog'
@@ -138,6 +181,7 @@ export function deriveViews(plan: Plan, runs: RunStateMap = {}, options: DeriveO
     else status = 'ready'
     const check = checkOf(task)
     const prepared = task.kind === 'decision' && check === 'checked'
+    const needsContract = !isOwnWork(task.kind) && !task.contract?.trim() && (status === 'ready' || status === 'backlog' || status === 'blocked')
 
     return {
       task,
@@ -148,15 +192,17 @@ export function deriveViews(plan: Plan, runs: RunStateMap = {}, options: DeriveO
       lastOutcome: last?.outcome,
       ...((status === 'in_review' && check) || prepared ? { check } : {}),
       ...(ownWork ? { byOrchestrator: true as const } : {}),
-      ...(task.kind === 'decision' && status === 'ready' && !prepared && options.prepareDecisions ? { preparing: true as const } : {}),
+      // dc1: an explicit `decision prepare` record marks preparation even without the check setting.
+      ...(task.kind === 'decision' && status === 'ready' && !prepared && (options.prepareDecisions || backInPreparation(task)) ? { preparing: true as const } : {}),
       ...(waitingMerge.length ? { waitingMerge } : {}),
       ...(awaitsMerge(task) ? { unmerged: true as const } : {}),
+      ...(needsContract ? { needsContract: true as const } : {}),
     }
   })
 }
 
 export function readySet(views: TaskView[]): string[] {
-  return views.filter((v) => v.status === 'ready' && !isOwnWork(v.task.kind)).map((v) => v.task.id)
+  return views.filter((v) => v.status === 'ready' && !isOwnWork(v.task.kind) && !v.needsContract).map((v) => v.task.id)
 }
 
 export function criticalPath(plan: Plan): string[] {
@@ -232,6 +278,8 @@ export function syncRuns(plan: Plan, runs: RunStateMap, now: Date, incomplete: R
         : state.status === 'completed' && (state.exitCode ?? 0) === 0
           ? 'completed'
           : 'failed'
+    // The reason sits next to the outcome (fo1); a backend that knows nothing about it says `worker_error`.
+    if (run.outcome === 'failed') run.failure = state.failure ?? { reason: 'worker_error' }
     const unfinished = run.outcome === 'completed' ? incomplete.get(run.runId) : undefined
     if (unfinished) {
       run.outcome = 'incomplete'

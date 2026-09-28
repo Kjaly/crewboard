@@ -5,6 +5,7 @@ import { api, type DraftJobSummary, type DraftSummary } from './api.js'
 import { isBlocking } from './draft-findings.js'
 import { planHandoff } from './handoff.js'
 import { relativeTime, t, useLang } from './i18n.js'
+import { checkShort, checkText, verdictText } from './review-signals.js'
 import { openSession } from './layout.js'
 import { repoName, type WaitingTarget } from './review.js'
 import {
@@ -16,9 +17,11 @@ import {
   type SidePlan,
   defaultGroupOpen,
   groupCounts,
-  inboxCount,
   inboxItems,
   splitInbox,
+  inboxGroups,
+  INBOX_TOP,
+  type InboxGroup,
   isFinishedPlan,
   moveRow,
   planCounts,
@@ -31,6 +34,9 @@ import {
   writeSideFolds,
 } from './sidebar-model.js'
 import { orchestraStore } from './store.js'
+import { attentionText } from './summary.js'
+import { reasonsText, reasonTag, scopeText } from './waiting.js'
+import { waitingCounts } from '../../../core/src/orchestration/needs-you.js'
 import { PlanLanes, firstLaneGroupKey } from './sidebar-lanes.js'
 
 /**
@@ -379,7 +385,7 @@ export function RepoSidebar(props: {
   onDraft?(id: string): void
   onPlan?(): void
   /** The open plan's lane tree: which lane to highlight, what a click does, the lane's link. */
-  lanes?: { highlight: string | null; onPick(lane: string): void; link(lane: string): string }
+  lanes?: { highlight: string | null; selected?: string | null; onPick(lane: string): void; link(lane: string): string }
 }) {
   const { snapshot, repo, open, onToggle } = props
   const drafts = props.drafts ?? []
@@ -408,8 +414,12 @@ export function RepoSidebar(props: {
 
   const tree = useMemo(() => sidebarTree(snapshot, Date.now(), order), [snapshot, order])
   const inbox = useMemo(() => inboxItems(snapshot, { root: repo.root, planId: repo.planId }), [snapshot, repo.root, repo.planId])
-  const waitingCount = inboxCount(inbox)
+  // The heading names its scope (at2): «in this plan 7 · all 13», the same numbers as the tab, the toasts, the chip and Review.
+  const waiting = useMemo(() => waitingCounts(inbox, { root: repo.root, planId: repo.planId }), [inbox, repo.root, repo.planId])
+  const waitingCount = waiting.all
   const inboxRows = useMemo(() => splitInbox(inbox), [inbox])
+  const groups = useMemo(() => ({ real: inboxGroups(inboxRows.real), example: inboxGroups(inboxRows.example) }), [inboxRows])
+  const [inboxMore, setInboxMore] = useState<Record<string, boolean>>({})
   const hits = useMemo(() => searchSnapshot(snapshot, query), [snapshot, query])
 
   const isOpen = (key: string, fallback: boolean) => folds[key] ?? fallback
@@ -759,7 +769,7 @@ export function RepoSidebar(props: {
   const pickPlan = (entry: RepoEntry, plan: SidePlan) => {
     props.onPlan?.()
     const target: WaitingTarget = { root: entry.repo.root, planId: plan.id }
-    if (plan.waitingHuman > 0) orchestraStore.openWaiting(target)
+    if (plan.waitingHuman > 0 && !plan.archived) orchestraStore.openWaiting(target)
     else if (!plan.current || entry.repo.root !== repo.root) orchestraStore.openPlan(entry.repo.root, plan.id)
     if (open && narrowRail()) onToggle()
   }
@@ -856,7 +866,7 @@ export function RepoSidebar(props: {
     if (item.kind === 'plan') return t('panel.app.repoWaiting', { count: item.count ?? 0 })
     if (item.kind === 'decision') return t('queue.decisionYours')
     if (item.kind === 'unmerged') return t('side.inboxUnmerged')
-    if (item.kind === 'attention') return item.message ?? t('panel.app.attentionCount', { count: item.count ?? 1 })
+    if (item.kind === 'attention') return item.attention ? attentionText(item.attention) : item.message ?? t('panel.app.attentionCount', { count: item.count ?? 1 })
     return t('panel.status.inReview')
   }
 
@@ -869,7 +879,7 @@ export function RepoSidebar(props: {
         data-srow
         data-skey={skey(`inbox:${item.key}`)}
         className={`orc-ibrow${item.alert ? ' orc-ibrow--alert' : ''}${item.example ? ' orc-ibrow--example' : ''}`}
-        title={`${item.title || item.id}\n${item.repo} · ${inboxLabel(item)}${item.example ? ` · ${t('welcome.exampleLabel')}` : ''}`}
+        title={`${item.title || item.id}\n${item.repo} · ${inboxLabel(item)}${item.example ? ` · ${t('welcome.exampleLabel')}` : ''}${item.verdict ? `\n${verdictText(item.verdict)}` : ''}${item.check ? `\n${checkText(item.check)}` : ''}`}
         onClick={() => {
           orchestraStore.openWaiting({ root: item.root, planId: item.planId, taskId: item.taskId })
           if (open && narrowRail()) onToggle()
@@ -877,12 +887,40 @@ export function RepoSidebar(props: {
       >
         <i className={`orc-sdot orc-sdot--${item.alert ? 'failed' : 'waiting'}`} aria-hidden="true" />
         <span className="orc-ibrow__line">{item.title || <span className="orc-ibrow__id">{item.id}</span>}</span>
+        {item.reason ? <span className={`orc-ibrow__tag orc-ibrow__tag--${item.reason}`}>{reasonTag(item.reason)}</span> : null}
         <span className="orc-ibrow__meta">
-          {item.example ? item.repo : `${item.repo} · ${item.at ? relativeTime(Date.parse(item.at)) : '—'}`}
+          {item.background
+            ? reasonsText(item.reasons ?? {})
+            : [item.at ? relativeTime(Date.parse(item.at)) : '', item.verdict ? verdictText(item.verdict) : '', item.check ? checkShort(item.check) : ''].filter(Boolean).join(' · ')}
         </span>
       </button>
     </li>
   )
+
+  // One group per repository and plan (at2): its name and reason summary, the first rows, then «N more».
+  const inboxGroup = (group: InboxGroup) => {
+    const first = group.plan ?? group.items[0]
+    const name = [first?.repo, group.title].filter(Boolean).join(' · ')
+    const more = !!inboxMore[group.key]
+    const hidden = group.items.length - INBOX_TOP
+    return [
+      <li key={`${group.key}:head`} className="orc-inbox__group" title={`${name}\n${reasonsText(group.reasons)}`}>
+        <span className="orc-inbox__gname">{name}</span>
+        {group.items.length ? <span className="orc-inbox__gsum">{reasonsText(group.reasons)}</span> : null}
+      </li>,
+      ...(group.plan ? [inboxRow(group.plan)] : []),
+      ...(more ? group.items : group.items.slice(0, INBOX_TOP)).map(inboxRow),
+      ...(hidden > 0
+        ? [
+            <li key={`${group.key}:more`}>
+              <button type="button" className="orc-inbox__more" aria-expanded={more} onClick={() => setInboxMore((prev) => ({ ...prev, [group.key]: !more }))}>
+                {more ? t('waiting.less') : t('waiting.more', { count: hidden })}
+              </button>
+            </li>,
+          ]
+        : []),
+    ]
+  }
 
   const planRow = (entry: RepoEntry, plan: SidePlan, parentKey: string, dragList?: string) => {
     const key = planRowKey(entry.repo.root, plan.id)
@@ -940,7 +978,7 @@ export function RepoSidebar(props: {
             <EllipsisGlyph />
           </button>
         </div>
-        {laneChild && props.lanes ? <PlanLanes repo={repo} parentKey={skey(`plan:${key}`)} highlight={props.lanes.highlight} onPick={pickLane} onMenu={laneMenu} /> : null}
+        {laneChild && props.lanes ? <PlanLanes repo={repo} parentKey={skey(`plan:${key}`)} highlight={props.lanes.highlight} selected={props.lanes.selected} onPick={pickLane} onMenu={laneMenu} /> : null}
       </li>
     )
   }
@@ -1022,7 +1060,14 @@ export function RepoSidebar(props: {
             className="orc-srow__main orc-srow__main--repo"
             title={`${group.name}\n${group.id}\n${missing ? t('side.missingHint') : t('side.plans', { count: group.plans.length })}${agg ? `\n${agg}` : ''}`}
             onClick={() => {
-              if (!suppressClick.current) toggleFold(key, fallback)
+              if (suppressClick.current) return
+              toggleFold(key, fallback)
+              // A repository without a plan has nothing to unfold: the click opens its welcome, where the first task starts (nb1).
+              if (group.plans.length === 0 && primary) {
+                props.onPlan?.()
+                orchestraStore.openFirstWaiting(primary.repo.root)
+                if (narrowRail()) onToggle()
+              }
             }}
           >
             <span className={`orc-srow__slot orc-srow__glyph${open && isCurrentGroup ? ' orc-srow__glyph--active' : ''}`} aria-hidden="true">
@@ -1253,19 +1298,19 @@ export function RepoSidebar(props: {
         <section className="orc-inbox" aria-label={t('side.inbox')} title={t('side.inboxHint')}>
           <h3 className="orc-side__head">
             {t('side.inbox')}
-            {waitingCount > 0 ? ` · ${waitingCount}` : ''}
+            {waiting.all > 0 ? ` · ${scopeText(waiting)}` : ''}
           </h3>
           {inbox.length === 0 ? (
             <p className="orc-side__calm">{t('side.inboxEmpty')}</p>
           ) : (
             <ul className="orc-inbox__list">
-              {inboxRows.real.map(inboxRow)}
+              {groups.real.flatMap(inboxGroup)}
               {inboxRows.example.length > 0 ? (
                 <li className="orc-inbox__divider" role="presentation">
                   {t('welcome.exampleLabel')}
                 </li>
               ) : null}
-              {inboxRows.example.map(inboxRow)}
+              {groups.example.flatMap(inboxGroup)}
             </ul>
           )}
         </section>

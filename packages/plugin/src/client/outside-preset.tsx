@@ -4,14 +4,24 @@ import { t, useLang } from './i18n.js'
 import { outsidePresetTasks, workerChoiceOf } from './workers.js'
 
 /**
- * «N outside preset» next to the preset chip: tasks whose assigned worker the current preset does not
- * route to. A person's pick runs anyway (hand-picked); an agent's pick gives way to the preset at launch.
+ * The preset chips next to the preset picker. «Outside preset · N» (red) lists agent assignments the current
+ * preset no longer routes to — at launch the preset decides for them. A person's own pick is not an alarm
+ * (nb1): «Hand-picked · N» is a neutral chip, and those tasks run as chosen.
  */
 export function OutsidePresetChip({ tasks, onPick }: { tasks: readonly TaskSnapshot[]; onPick(id: string): void }) {
   useLang()
+  const rows = outsidePresetTasks(tasks)
+  const agents = rows.filter((task) => workerChoiceOf(task) !== 'person')
+  const people = rows.filter((task) => workerChoiceOf(task) === 'person')
+  return <>
+    {agents.length ? <PresetChipList rows={agents} tone="warn" label={t('panel.app.outsidePreset', { count: agents.length })} hint={t('panel.app.outsidePresetHint')} onPick={onPick} /> : null}
+    {people.length ? <PresetChipList rows={people} tone="neutral" label={t('panel.app.handPicked', { count: people.length })} hint={t('panel.app.handPickedHint')} onPick={onPick} /> : null}
+  </>
+}
+
+function PresetChipList({ rows, tone, label, hint, onPick }: { rows: readonly TaskSnapshot[]; tone: 'warn' | 'neutral'; label: string; hint: string; onPick(id: string): void }) {
   const [open, setOpen] = useState(false)
   const box = useRef<HTMLSpanElement>(null)
-  const rows = outsidePresetTasks(tasks)
   useEffect(() => {
     if (!open) return
     const onPointerDown = (event: MouseEvent) => {
@@ -20,13 +30,11 @@ export function OutsidePresetChip({ tasks, onPick }: { tasks: readonly TaskSnaps
     document.addEventListener('mousedown', onPointerDown)
     return () => document.removeEventListener('mousedown', onPointerDown)
   }, [open])
-  if (rows.length === 0) return null
-  const label = t('panel.app.outsidePreset', { count: rows.length })
   return (
     <span ref={box} className="orc-lenschip orc-outside">
-      <button type="button" className="orc-chip orc-chip--warn" aria-expanded={open} title={t('panel.app.outsidePresetHint')} onClick={() => setOpen(!open)}>
-        <span aria-hidden="true">⚑</span> <span className="orc-chip__label">{label}</span>
-        <span className="orc-chip__compact" aria-hidden="true">{rows.length}</span>
+      {/* The label carries the count: no second compact number beside it (UX1-21). */}
+      <button type="button" className={`orc-chip${tone === 'warn' ? ' orc-chip--warn' : ''}`} aria-expanded={open} title={hint} onClick={() => setOpen(!open)}>
+        {tone === 'warn' ? <span aria-hidden="true">⚑</span> : null} <span className="orc-chip__label">{label}</span>
       </button>
       {open ? (
         // biome-ignore lint/a11y/noStaticElementInteractions: Escape on the list closes it; the rows are buttons.

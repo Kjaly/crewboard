@@ -24,7 +24,9 @@ import {
   type ReviewRow,
   type ReviewSort,
 } from './review-index.js'
-import { moneySummary, needsYou, planProgress, quotaWindows, timeSummary, unionMs } from './review-model.js'
+import { moneySummary, needsYou, planProgress, planWaiting, quotaWindows, timeSummary, unionMs } from './review-model.js'
+import type { WaitingCounts } from '../../../../core/src/orchestration/needs-you.js'
+import { reasonsText, scopeText, waitingOf } from '../waiting.js'
 import { RowStrip, StatusWord, StripLegend, useRunSteps } from './review-parts.js'
 import { NeedsBand, ProgressPanel, ResourcesPanel, TimePanel, pp, quotaName, shortDate, usd } from './review-summary.js'
 
@@ -37,6 +39,8 @@ export type ReviewProps = ViewProps & {
   /** The open run, rendered beside the list on a wide screen; the app owns its route and history. */
   detail?: ReactNode
   selectedRunId?: string
+  /** The one waiting model over the whole snapshot (at2), so Review's scope label matches the sidebar and the chip. */
+  waiting?: WaitingCounts
 }
 type State = {
   filters: ReviewFilters
@@ -121,6 +125,7 @@ export function ReviewView({
   detail,
   selectedRunId,
   lane = null,
+  waiting,
 }: ReviewProps) {
   useLang()
   const key = `${repo.root}\n${repo.planId ?? ''}`
@@ -299,6 +304,10 @@ export function ReviewView({
   const snapshot = cost.generatedAt
   const progress = planProgress(repo, cost)
   const needs = needsYou(repo)
+  const open = { root: repo.root, planId: repo.planId }
+  const planWait = planWaiting(repo)
+  // The example shows its own work but counts toward nothing, so it names no scope (ui3).
+  const scope = repo.example ? undefined : scopeText(waiting ?? waitingOf({ repos: [repo] }, open))
   const time = timeSummary(repo, cost)
   const money = moneySummary(cost)
   const running = repo.tasks.filter((task) => task.status === 'running').length
@@ -440,7 +449,16 @@ export function ReviewView({
         <h1>{t('review.title')}</h1>
         <p>{t('review.updated', { time: shortDate(snapshot) })} · {repo.goal || repo.root}</p>
       </header>
+      {cost.orchestrator ? <section className="orc-review__overview" aria-label={t('review.orchestratorUsage')}>
+        <div><strong>{t('review.orchestratorUsage')}</strong><p className="orc-meta">{cost.orchestrator.scope === 'session_lifetime' ? t('review.orchestratorScope') : ''}</p></div>
+        <div><strong>{cost.orchestrator.availability === 'unavailable' ? t('review.orchestratorUnavailable') : cost.orchestrator.availability === 'pending' ? t('review.orchestratorPending', { count: cost.orchestrator.coverage.pending }) : t('review.orchestratorCoverage', { observed: cost.orchestrator.coverage.observed, bound: cost.orchestrator.coverage.bound })}</strong>
+          {cost.orchestrator.sessions.some((session) => session.metrics) ? <p className="orc-meta">{t('review.orchestratorTokens', { input: orchestratorMetric(cost.orchestrator, 'input'), output: orchestratorMetric(cost.orchestrator, 'output'), cacheRead: orchestratorMetric(cost.orchestrator, 'cacheRead'), cacheWrite: orchestratorMetric(cost.orchestrator, 'cacheWrite') })}</p> : null}
+        </div>
+      </section> : null}
       <NeedsBand
+        count={planWait.count}
+        summary={reasonsText(planWait.reasons)}
+        scope={scope}
         waiting={needs.waiting}
         failed={needs.failed}
         unmerged={needs.unmerged}
@@ -718,4 +736,11 @@ export function ReviewView({
       </details>
     </div>
   )
+}
+
+function orchestratorMetric(cost: NonNullable<PlanCost['orchestrator']>, key: 'input' | 'output' | 'cacheRead' | 'cacheWrite'): string {
+  const metrics = cost.sessions.map((session) => session.metrics?.[key]).filter((value): value is NonNullable<typeof value> => !!value)
+  if (!metrics.length || metrics.every((metric) => metric.state === 'unavailable')) return t('review.orchestratorUnknown')
+  const value = metrics.reduce((sum, metric) => sum + (metric.value ?? 0), 0)
+  return `${metrics.some((metric) => metric.state !== 'known') || metrics.length < cost.coverage.bound ? '≥' : ''}${value}`
 }

@@ -26,7 +26,8 @@ describe('plugin build', () => {
     // Keep screens opened after first paint out of the always loaded bundle. The ceiling is the measured
     // size plus ~5% (296.0 KiB, 2026-09-24, after opt2); scripts/release-check.mjs holds the same number.
     // Client measured after wave 1 (w1a–w1f), 2026-09-24: 312.8 KiB → 329; host index.js 459.4 KiB → 483.
-    expect(Buffer.byteLength(client)).toBeLessThan(329 * 1024)
+    // Client re-measured after wave 2 (2026-09-25): 334.8 KiB → 352.
+    expect(Buffer.byteLength(client)).toBeLessThan(352 * 1024)
     expect(client).not.toContain('Task actions')
     expect(client).not.toContain('Действия с задачей')
     for (const lang of ['en', 'ru']) expect((await readFile(`${pkg}/lib/dict-${lang}.js`, 'utf8')).length).toBeGreaterThan(1000)
@@ -70,7 +71,14 @@ describe('plugin build', () => {
   // the worker's process group): growth past them is a decision to make on purpose, not
   // something to discover later — measure it and move the number with the new size.
   it('keeps the host and runner bundles within their weight and free of classic zod', async () => {
-    for (const [name, ceiling] of [['index.js', 483], ['cli-runner-main.js', 29], ['runner-main.js', 10]] as const) {
+    // Host re-measured after wave 2 (2026-09-25): index.js 571.8 KiB → 601, runners 28.0 / 8.8 KiB.
+    // cli-runner-main re-measured after cm1 (2026-09-25, the commit nudge and its own git-status check): 30.6 KiB → 32.
+    // Re-measured after rb1 (2026-09-25, four new worker kinds/CLIs in the host): index.js 613.4 KiB → 644,
+    // cli-runner-main 41.6 KiB → 44.
+    // Result attestation added current proof/receipt verification (2026-09-28): index.js 657.0 KiB → 691.
+    // API-only Claude policy (2026-09-28): cli-runner-main carries its own resolved-route guard so a direct
+    // `runCliRun`/stale args file refuses an unsupported channel before any worker child — 44 → 50 KiB.
+    for (const [name, ceiling] of [['index.js', 691], ['cli-runner-main.js', 50], ['runner-main.js', 10]] as const) {
       expect(Buffer.byteLength(await readFile(`${pkg}/lib/${name}`)), name).toBeLessThan(ceiling * 1024)
     }
     // Classic zod registers `ZodString`/`ZodObject`; zod/mini registers `ZodMini…`. No bundle — host,

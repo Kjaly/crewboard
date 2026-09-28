@@ -8,12 +8,14 @@ import { run } from '../src/cli.js'
 import { programOf } from '../src/i18n.js'
 import { makeHarness } from './harness.js'
 
-const OPUS_FLOOR = '2.1.280'
+// The model declares 2.1.280, but the API-only `--bare` policy floor (2.1.281) is the binding minimum.
+const OPUS_FLOOR = '2.1.281'
 
 /** `claude` answers with the given version (or is missing) and is logged in; everything else is real. */
 const fakeClaude = (version?: string): Exec => async (cmd, args, opts) => {
   if (cmd !== 'claude') return nodeExec(cmd, args, opts)
   if (args[0] === '--version') return version ? { code: 0, stdout: `${version} (Claude Code)\n`, stderr: '', timedOut: false } : { code: 127, stdout: '', stderr: '', timedOut: false }
+  if (args[0] === '--help') return { code: 0, stdout: 'Usage: claude [options]\n  --bare  Minimal mode', stderr: '', timedOut: false }
   return { code: 0, stdout: JSON.stringify({ loggedIn: true }), stderr: '', timedOut: false }
 }
 
@@ -26,17 +28,54 @@ async function homeWith(profiles: Record<string, unknown>, workers: string[] = [
 }
 
 describe('the program name', () => {
-  it('help and usage lines repeat the invoked name, with the columns kept aligned', async () => {
-    const column = (text: string) => {
-      const lines = text.split('\n')
-      const accept = lines.find((l) => l.includes('human only (interactive terminal)')) ?? ''
-      const continuation = lines.find((l) => l.includes('orchestrator: run in background')) ?? ''
-      return [accept.indexOf('human only'), continuation.search(/\S/)]
-    }
+  it('the short --help page names the invoked program and points at help all (cl2)', async () => {
     const short = makeHarness({ cwd: '/tmp', env: {} })
     short.io.program = 'orch'
     expect(await run(['--lang', 'en', '--help'], short.io)).toBe(0)
     expect(short.out()).toContain('Crewboard — plans and worker runs')
+    expect(short.out()).toContain('\n  orch run <id>')
+    expect(short.out()).toContain('orch help all')
+    expect(short.out()).not.toMatch(/\bcrewboard /)
+    // No args and `help` (without `all`) are the same short page as `--help`.
+    const bare = makeHarness({ cwd: '/tmp', env: {} })
+    expect(await run([], bare.io)).toBe(0)
+    expect(bare.out()).toContain('\n  crewboard run <id>')
+    expect(bare.out()).toContain('crewboard help all')
+    const named = makeHarness({ cwd: '/tmp', env: {} })
+    expect(await run(['help'], named.io)).toBe(0)
+    expect(named.out()).toBe(bare.out())
+
+    const long = makeHarness({ cwd: '/tmp', env: {} })
+    long.io.program = 'crewboard'
+    expect(await run(['--lang', 'en', '--help'], long.io)).toBe(0)
+    expect(long.out()).toContain('\n  crewboard run <id>')
+    expect(long.out()).not.toMatch(/\borch /)
+
+    const russian = makeHarness({ cwd: '/tmp', env: {} })
+    russian.io.program = 'orch'
+    expect(await run(['--lang', 'ru', '--help'], russian.io)).toBe(0)
+    expect(russian.out()).toContain('Crewboard — планы и запуски воркеров')
+    expect(russian.out()).toContain('Всё целиком: orch help all')
+    expect(russian.out()).not.toMatch(/\bcrewboard /)
+
+    const usage = makeHarness({ cwd: '/tmp', env: {} })
+    usage.io.program = 'orch'
+    expect(await run(['--lang', 'en', 'accept'], usage.io)).toBe(2)
+    expect(usage.err()).toMatch(/orch accept/)
+  })
+
+  it('help all repeats the invoked name, with the columns kept aligned', async () => {
+    const column = (text: string) => {
+      const lines = text.split('\n')
+      const accept = lines.find((l) => l.includes('--auto closes routine checked work')) ?? ''
+      const continuation = lines.find((l) => l.includes('orchestrator: run in background')) ?? ''
+      return [accept.indexOf('--auto closes'), continuation.search(/\S/)]
+    }
+    const short = makeHarness({ cwd: '/tmp', env: {} })
+    short.io.program = 'orch'
+    expect(await run(['--lang', 'en', 'help', 'all'], short.io)).toBe(0)
+    expect(short.out()).toContain('Crewboard — plans and worker runs')
+    expect(short.out()).toContain('verify <id> --attest --verdict result|negative|disputed --report <file> --note <note>')
     expect(short.out()).toContain('\n  orch run <id>')
     expect(short.out()).not.toMatch(/\bcrewboard /)
     const [a, b] = column(short.out())
@@ -44,7 +83,7 @@ describe('the program name', () => {
 
     const long = makeHarness({ cwd: '/tmp', env: {} })
     long.io.program = 'crewboard'
-    expect(await run(['--lang', 'en', '--help'], long.io)).toBe(0)
+    expect(await run(['--lang', 'en', 'help', 'all'], long.io)).toBe(0)
     expect(long.out()).toContain('\n  crewboard run <id>')
     expect(long.out()).not.toMatch(/\borch /)
     const [c, d] = column(long.out())
@@ -53,15 +92,11 @@ describe('the program name', () => {
 
     const russian = makeHarness({ cwd: '/tmp', env: {} })
     russian.io.program = 'orch'
-    expect(await run(['--lang', 'ru', '--help'], russian.io)).toBe(0)
+    expect(await run(['--lang', 'ru', 'help', 'all'], russian.io)).toBe(0)
     expect(russian.out()).toContain('Crewboard — планы и запуски воркеров')
+    expect(russian.out()).toContain('verify <id> --attest --verdict result|negative|disputed --report <файл> --note <сводка>')
     expect(russian.out()).toContain('Использование: orch plan draft')
     expect(russian.out()).not.toMatch(/\bcrewboard /)
-
-    const usage = makeHarness({ cwd: '/tmp', env: {} })
-    usage.io.program = 'orch'
-    expect(await run(['--lang', 'en', 'accept'], usage.io)).toBe(2)
-    expect(usage.err()).toMatch(/orch accept/)
   })
 
   it('names the alias only when started through it', () => {
@@ -100,7 +135,7 @@ describe('launch refusals in both languages', () => {
   it.each([
     ['decision', ['run', 'plan', '-a', 'devin', '--skip-preflight'], 'This is a human decision: close it with crewboard accept.', 'Это решение человека: закрывается через crewboard accept.'],
     ['waiting', ['run', 'waits', '-a', 'devin', '--skip-preflight'], 'The task is waiting for: plan.', 'Задача ждёт: plan.'],
-    ['no contract', ['run', 'bare', '-a', 'devin', '--skip-preflight'], 'No contract: pass --contract or run crewboard task set <id> --contract <file>.', 'Нет контракта: укажи --contract или crewboard task set <id> --contract <файл>.'],
+    ['no contract', ['run', 'bare', '-a', 'devin', '--skip-preflight'], 'Task bare needs a contract before it runs. Write one from the template and edit it: crewboard task set bare --template — or attach a file: crewboard task set bare --contract <file>.', 'Задаче bare нужен контракт до запуска. Создай его из шаблона и допиши: crewboard task set bare --template — или укажи файл: crewboard task set bare --contract <файл>.'],
   ])('%s', async (_name, argv, en, ru) => {
     for (const [lang, text] of [['en', en], ['ru', ru]] as const) {
       const r = await refusal(lang, argv)

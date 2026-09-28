@@ -1,4 +1,6 @@
+import { type NeedsYouReason, type NeedsYouReasons, NEEDS_YOU_REASONS } from '../../../core/src/orchestration/needs-you.js'
 import { t } from './i18n.js'
+import { reasonsText } from './waiting.js'
 
 /**
  * The browser-level attention channel that lives beside the in-app toasts: the tab-title count,
@@ -22,20 +24,56 @@ export type ReviewItem = {
   count: number
   /** Human-decision task — the toast asks for a decision, not an acceptance. */
   decision?: boolean
+  /** A task item: why it waits (at2). */
+  reason?: NeedsYouReason
+  /** A background plan item: what newly waits there, by reason (at2). */
+  reasons?: Partial<NeedsYouReasons>
+  /** The goal of the plan the item belongs to; for a background item it is `title`. */
+  plan?: string
+  /** Open the plan's «Needs you» (its review queue) rather than one task: a grouped notification (at2). */
+  needs?: true
 }
 
-/** The text of one grouped notification; also the toast body, so the two never drift. */
+/** What newly waits in one plan, by reason — the unit a grouped toast or notification says. */
+export type ReviewGroup = { root: string; planId?: string; plan: string; reasons: Partial<NeedsYouReasons> }
+
+/** Arrivals grouped by plan, in arrival order; a task counts once for its reason, a plan item by its reasons. */
+export function reviewGroups(items: readonly ReviewItem[]): ReviewGroup[] {
+  const groups = new Map<string, ReviewGroup>()
+  for (const item of items) {
+    const key = `${item.root}\n${item.planId ?? ''}`
+    const group = groups.get(key) ?? { root: item.root, ...(item.planId ? { planId: item.planId } : {}), plan: item.plan ?? (item.taskId ? '' : item.title), reasons: {} }
+    const add: Partial<NeedsYouReasons> = item.taskId ? { [item.reason ?? (item.decision ? 'decision' : 'review')]: 1 } : item.reasons ?? { review: item.count }
+    for (const reason of NEEDS_YOU_REASONS) if (add[reason]) group.reasons[reason] = (group.reasons[reason] ?? 0) + (add[reason] ?? 0)
+    groups.set(key, group)
+  }
+  return [...groups.values()]
+}
+
+/**
+ * Where a notification or a toast opens: its only task, else the latest plan's «Needs you» — a grouped
+ * notification stands for a plan, not for one of its tasks (at2).
+ */
+export function openTarget(items: readonly ReviewItem[]): ReviewItem | undefined {
+  const last = items.at(-1)
+  if (!last || (items.length === 1 && last.taskId)) return last
+  const { taskId: _taskId, ...plan } = last
+  return { ...plan, needs: true }
+}
+
+/**
+ * The text of one grouped notification; also the toast body, so the two never drift. One task says its own
+ * title; anything more is grouped by plan and reason (at2): «3 tasks wait for review · 1 decision in “Plan”».
+ */
 export function toastText(items: ReviewItem[]): string {
   const first = items[0]
-  if (items.length === 1 && first) {
-    if (first.taskId)
-      return first.decision
-        ? t('notify.decision', { id: first.taskId, title: first.title })
-        : t('notify.ready', { id: first.taskId, title: first.title })
-    return t('notify.planWaiting', { title: first.title, count: first.count })
-  }
-  const total = items.reduce((n, i) => n + i.count, 0)
-  return t('notify.waitingCount', { n: total })
+  if (items.length === 1 && first?.taskId)
+    return first.decision
+      ? t('notify.decision', { id: first.taskId, title: first.title })
+      : t('notify.ready', { id: first.taskId, title: first.title })
+  return reviewGroups(items)
+    .map((group) => (group.plan ? t('waiting.inPlan', { summary: reasonsText(group.reasons), plan: group.plan }) : reasonsText(group.reasons)))
+    .join('; ')
 }
 
 /* ------------------------------------------------------------------ settings */
@@ -383,7 +421,7 @@ export function createBrowserNotifier(opts: BrowserNotifierOptions): BrowserNoti
       } catch {
         /* focus may be refused outside a gesture; opening the item still matters */
       }
-      const target = [...group.items].reverse().find((i) => i.taskId) ?? group.items[0]
+      const target = openTarget(group.items)
       if (target) opts.open(target)
       try {
         notification.close()
@@ -408,18 +446,16 @@ export function createBrowserNotifier(opts: BrowserNotifierOptions): BrowserNoti
         }
         groups.delete(tag)
       }
+      // One notification per plan per change: a burst that arrives together is said once, grouped (at2).
+      const touched = new Map<string, NotifyGroup>()
       for (const item of items) {
         const tag = tagOf(item)
-        const group = groups.get(tag)
-        if (group) {
-          group.items.push(item)
-          show(tag, group)
-        } else {
-          const fresh: NotifyGroup = { items: [item], startedAt: at }
-          groups.set(tag, fresh)
-          show(tag, fresh)
-        }
+        const group = groups.get(tag) ?? { items: [], startedAt: at }
+        group.items.push(item)
+        groups.set(tag, group)
+        touched.set(tag, group)
       }
+      for (const [tag, group] of touched) show(tag, group)
     },
     dispose() {
       for (const group of groups.values()) {

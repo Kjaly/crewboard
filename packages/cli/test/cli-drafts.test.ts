@@ -1,4 +1,5 @@
-import { readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { type Backends, type RunBackend, loadDraft, loadPlan, nodeExec } from '@crewboard/core'
@@ -15,7 +16,8 @@ it('parses a research worker final answer into a draft without approving it', as
   const backend: RunBackend = { id: 'dsh', launch: async ({ promptFile }) => { expect(await readFile(promptFile, 'utf8')).toContain('Build it'); return 'run_fake' }, status: async () => ({ status: 'completed', terminal: true, exitCode: 0 }), events: async () => [{ ts: '', type: 'final', data: JSON.stringify(answer) }], steer: async () => {}, cancel: async () => {} }
   const backends: Backends = { forAgent: async (agent) => { expect(agent).toBe('dsh'); return backend } }
   const drafting = makeHarness({ cwd: root })
-  expect(await cmdPlanDraft(['draft', '--from', spec, '-a', 'dsh'], drafting.io, nodeExec, () => backends)).toBe(0)
+  expect(await cmdPlanDraft(['draft', '--from', spec, '-a', 'dsh', '--skip-preflight'], drafting.io, nodeExec, () => backends)).toBe(0)
+  expect(drafting.out()).toContain('The draft will be written by: dsh')
   expect(await loadDraft(root, 'spec-plan')).toMatchObject({ source: { name: 'spec.md', hash: expect.any(String) } })
   await expect(loadPlan(root, 'spec-plan')).rejects.toThrow()
   const bot = makeHarness({ cwd: root })
@@ -42,12 +44,31 @@ it('follows a draft job with --wait, keeps a refused answer and repairs it from 
   }
   const backends: Backends = { forAgent: async () => backend }
   const first = makeHarness({ cwd: root })
-  expect(await cmdPlanDraft(['draft', '--from', 'bye.txt', '-a', 'codex/gpt', '--wait'], first.io, nodeExec, () => backends)).toBe(1)
+  expect(await cmdPlanDraft(['draft', '--from', 'bye.txt', '-a', 'codex/gpt', '--wait', '--skip-preflight'], first.io, nodeExec, () => backends)).toBe(1)
   expect(first.out()).toContain('needs repair')
   expect(first.out()).toContain('decisions[0]')
   const job = /Draft job (dj-[a-z0-9-]+) started/.exec(first.out())?.[1] ?? ''
   const fix = makeHarness({ cwd: root })
-  expect(await cmdPlanDraft(['draft', 'repair', job, '--wait'], fix.io, nodeExec, () => backends)).toBe(0)
+  expect(await cmdPlanDraft(['draft', 'retry', job, '--wait'], fix.io, nodeExec, () => backends)).toBe(0)
   expect(prompts[1]).toContain('Wave?')
   expect(await loadDraft(root, 'bye-plan')).toMatchObject({ decisions: ['Wave?'], source: { name: 'bye.txt' } })
+})
+
+it('prints the first line of a failed attempt with a hint and the retry command', async () => {
+  const root = await makeRepo()
+  await writeFile(join(root, 'bye.txt'), '# Bye')
+  const backend: RunBackend = {
+    id: 'claude', readOnlyLaunch: true,
+    launch: async ({ readOnly }) => { expect(readOnly).toBe(true); return 'run_fake-1' },
+    status: async () => ({ status: 'failed', terminal: true, exitCode: 1 }),
+    events: async () => [{ ts: '', type: 'run_failed', data: 'Invalid API key · Please run /login\nstack' }],
+    steer: async () => {}, cancel: async () => {},
+  }
+  // A home of its own: the machine's worker settings (a disabled worker) must not decide this test.
+  const h = makeHarness({ cwd: root, env: { PATH: process.env.PATH, HOME: await mkdtemp(join(tmpdir(), 'orch-home-')), LANG: 'en_US.UTF-8', ANTHROPIC_API_KEY: 'sk-ant-api03-test' } })
+  expect(await cmdPlanDraft(['draft', '--from', 'bye.txt', '-a', 'claude/opus', '--wait', '--skip-preflight'], h.io, nodeExec, () => ({ forAgent: async () => backend }))).toBe(1)
+  expect(h.out()).toContain('failed: Invalid API key · Please run /login. Try again:')
+  expect(h.out()).toContain('plan draft retry dj-')
+  expect(h.out()).toContain('Hint: claude/opus is not logged in')
+  expect(h.out()).not.toContain('stack')
 })

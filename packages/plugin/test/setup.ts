@@ -10,7 +10,9 @@ import { installDictionary } from '../src/client/i18n.js'
 installDictionary('en', en)
 installDictionary('ru', ru)
 
-beforeEach(() => setLang('en'))
+import { forgetAll } from '../src/client/api.js'
+
+beforeEach(() => { setLang('en'); forgetAll() })
 afterEach(() => setLang('en'))
 
 process.env.HOME = mkdtempSync(join(tmpdir(), 'orch-plugin-test-home-'))

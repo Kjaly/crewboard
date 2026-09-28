@@ -1,13 +1,17 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { readFile, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   type Backends,
   BackendUnavailableError,
+  ChecksError,
+  runContractChecks,
   isSchemaError,
   ExamplePlanError,
   PlanArchivedError,
+  PlanLockBusyError,
+  stateFileError,
   PlanIncompatibleError,
   backendsForPlan,
   MAX_SPEC_BYTES,
@@ -37,6 +41,12 @@ import {
   type DshWorkspace,
   type Exec,
   LaunchError,
+  chooseDraftWorker,
+  MergeError,
+  checkMarkMerged,
+  checkMerge,
+  markMerged,
+  mergeTask,
   orchText,
   PlanConflictError,
   PlanIdError,
@@ -47,6 +57,11 @@ import {
   TASK_CLASSES,
   acceptTask,
   approveDraft,
+  contractPathFor,
+  contractTemplate,
+  followUpContext,
+  requiredChecks,
+  writeNewContract,
   isBlocking,
   acceptTasks,
   buildTrajectory,
@@ -60,6 +75,7 @@ import {
   claudeProjectsDir,
   claudeProjectSlug,
   dshBillRecordsPath,
+  orchestratorUsage,
   createPlan,
   checkDraft,
   currentPlanId,
@@ -88,6 +104,11 @@ import {
   loadRouting,
   loadRegistry,
   registryPath,
+  entryEffort,
+  runEffort,
+  workerLabel,
+  cliKindOf,
+  isDshAgent,
   saveWorker,
   saveWorkerProfile,
   removeWorker,
@@ -116,6 +137,7 @@ import {
   planPath,
   profileStorePath,
   rejectTask,
+  sendBackAndRerun,
   dropTask,
   relaunchTask,
   continueTask,
@@ -125,13 +147,17 @@ import {
   openPlan,
   setPlanArchived,
   splitPlan,
+  SplitError,
   loadPlan as loadStoredPlan,
   setTaskPositions,
   waitsForHuman,
   deriveViews,
-  isChecking,
   ownWorkUnchecked,
+  reviewCheckOf,
   resolveOrchestratorCheck,
+  resolveDefaultBase,
+  setPlanDefaultBase,
+  setRepositoryDefaultBase,
   setPlanOrchestratorCheck,
   setRepositoryOrchestratorCheck,
   steerTask,
@@ -140,15 +166,43 @@ import {
   usageForRun,
   verdictOf,
   cleanToAccept,
+  type DshCatalog,
+  DSH_DEFAULT_PROVIDER,
+  dshSelectionOf,
+  dshSelectionOfId,
+  readDshCatalog,
+  type Transport,
+  placeWorkers,
+  cliRuns,
+  SUBSCRIPTION_CLIS,
+  collectWorkerFacts,
+  dshEntrySelection,
+  billingOfTransport,
+  adoptImportedProfile,
+  forgetWorkerId,
+  EFFORT_LEVELS,
+  SubscriptionModelsError,
+  addSubscriptionWorkers,
+  isSubscriptionKind,
+  listSubscriptionModels,
+  subscriptionEntries,
+  type WorkerPreset,
 } from '@crewboard/core'
 import { API_PREFIX, PROFILE_ALIASES, type PlanCost, type PlanRunCost, type WorkerInfo } from '../shared/types.js'
 import { reviewCoverage } from '../shared/review-coverage.js'
-import { ChatBindingError, type ChatDeps, bindChat, openChat, setWake, unbindChat } from './chat.js'
+import { ChatBindingError, type ChatDeps, bindChat, openChat, readChats, setWake, unbindChat } from './chat.js'
 import type { Route, SessionControllerFace } from './dsh.js'
 import type { Native } from './native.js'
 import type { OrchestraService } from './service.js'
-import { BILLING_PROMO, BILLING_SUBSCRIPTION, PROVIDER_OTHER, hostT, type HostLang } from './i18n.js'
-import type { Verdict } from '@crewboard/core'
+import { BILLING_OTHER, BILLING_PROMO, BILLING_SUBSCRIPTION, PROVIDER_OTHER, hostT, type HostLang } from './i18n.js'
+import type { ReviewCheck, Verdict } from '@crewboard/core'
+
+/** The accept dialog's one line on the orchestrator's check (vc1); a check's note is shortened to a clause. */
+export function acceptCheckLine(lang: HostLang, check: ReviewCheck, task: string, note?: string): string {
+  if (check.state === 'checked') return hostT(lang, 'check.accept.checked', { note: note ? ` — ${note.length > 120 ? `${note.slice(0, 119)}…` : note}` : '' })
+  if (check.state === 'off') return hostT(lang, `check.accept.off.${check.source}`)
+  return hostT(lang, 'check.accept.unchecked', { task })
+}
 
 function verdictReason(lang: HostLang, verdict: Verdict): string {
   return verdict.why || verdict.mismatch ? hostT(lang, `verdict.reason.${verdict.why ?? verdict.mismatch}`) : hostT(lang, 'actions.defaultMismatch')
@@ -210,12 +264,16 @@ function unionReviewIntervals(intervals: Array<{ from: string; to?: string }>, s
 
 function toHttpError(err: unknown): HttpError {
   if (err instanceof HttpError) return err
+  // A full, forbidden or read-only disk: one sentence with the path (sf1), not Node's errno text.
+  const disk = stateFileError(err)
+  if (disk) return new HttpError(disk.reason === 'no_space' ? 507 : 409, disk.code, disk.message)
+  if (err instanceof PlanLockBusyError) return new HttpError(409, err.code, err.message)
   if (isSchemaError(err)) return new HttpError(400, 'bad_request', err.message)
   if (err instanceof ExamplePlanError) return new HttpError(409, err.code, err.message)
   if (err instanceof PlanArchivedError) return new HttpError(409, err.code, err.message)
   if (err instanceof PlanIncompatibleError) return new HttpError(409, err.code, err.message)
   if (err instanceof BackendUnavailableError) return new HttpError(409, err.code, err.message)
-  if (err instanceof DraftJobError) return new HttpError(err.reason === 'not_found' ? 404 : err.reason === 'not_repairable' ? 409 : 400, err.reason, err.message)
+  if (err instanceof DraftJobError) return new HttpError(err.reason === 'not_found' ? 404 : err.reason === 'not_repairable' || err.reason === 'no_isolation' ? 409 : 400, err.reason, err.detail ? `${err.message}: ${err.detail}` : err.message)
   if (err instanceof LegacyRunReadOnlyError) return new HttpError(409, err.code, err.message)
   if (err instanceof ChatBindingError) return new HttpError(404, err.code, err.message)
   if (err instanceof LaunchError) {
@@ -223,8 +281,12 @@ function toHttpError(err: unknown): HttpError {
   }
   if (err instanceof SpecUploadError) return new HttpError(err.code === 'too_large' ? 413 : err.code === 'unsupported_type' ? 415 : 400, err.code, err.message)
   if (err instanceof DetailError) return new HttpError(404, err.code, err.message)
+  if (err instanceof ChecksError) return new HttpError(err.code === 'unknown_task' ? 404 : 409, `checks_${err.code}`, err.message)
+  if (err instanceof SplitError) return new HttpError(400, err.code, err.message)
+  if (err instanceof MergeError) return new HttpError(err.code === 'unknown_task' ? 404 : 409, err.code, err.message)
   if (err instanceof FilePreviewError) return new HttpError(err.code === 'too_large' ? 413 : 404, err.code, err.message)
   if (err instanceof PlanIdError) return new HttpError(400, 'bad_plan', err.message)
+  if (err instanceof SubscriptionModelsError) return new HttpError(502, err.code, err.message)
   if (err instanceof RangeError) return new HttpError(400, 'bad_request', err.message)
   if (err instanceof TypeError) return new HttpError(400, 'bad_request', err.message)
   return new HttpError(500, 'internal', err instanceof Error ? err.message : String(err))
@@ -261,20 +323,29 @@ const text = (v: unknown, field: string): string => {
   return v
 }
 
-const workerProvider = (id: string, backend?: string): WorkerInfo['provider'] => {
-  if (id === 'dsh' || id.startsWith('dsh/') || backend === 'dsh') return 'DeepSeek'
-  if (id.startsWith('claude/') || id.startsWith('claude-') || backend === 'claude-code') return 'Claude'
-  if (id === 'codex' || id.startsWith('codex/') || id.startsWith('codex-') || backend === 'codex-cli') return 'Codex'
-  if (id === 'devin' || backend === 'devin-cli') return 'Devin'
+/** The provider mark of a worker, by the transport it runs on (wo1) — a dsh model of another provider is not DeepSeek's. */
+const workerProvider = (id: string, transport: Transport | undefined, model?: string): WorkerInfo['provider'] => {
+  if (transport === 'dsh') return ((model ? dshSelectionOf(model) : dshSelectionOfId(id))?.provider ?? DSH_DEFAULT_PROVIDER).startsWith('deepseek') ? 'DeepSeek' : PROVIDER_OTHER
+  if (transport === 'claude-cli') return 'Claude'
+  if (transport === 'codex-cli') return 'Codex'
+  if (transport === 'devin-acp') return 'Devin'
   return PROVIDER_OTHER
 }
 
-const workerBilling = (id: string): WorkerInfo['billing'] => {
-  const name = id.toLowerCase()
-  if (name.startsWith('claude') || name.startsWith('codex')) return BILLING_SUBSCRIPTION
-  if (name.startsWith('devin')) return BILLING_PROMO
-  return 'API'
+/** Billing follows the transport (wo1): a subscription CLI, API through dsh, or — for an id nothing defines — other. */
+const workerBilling = (transport: Transport | undefined): WorkerInfo['billing'] => {
+  const billing = billingOfTransport(transport)
+  if (billing === 'api-dsh' || billing === 'api-claude') return 'API'
+  if (billing === 'other') return BILLING_OTHER
+  return transport === 'devin-acp' ? BILLING_PROMO : BILLING_SUBSCRIPTION
 }
+
+/** The CLI an access check runs, by the block's name (wo1: every subscription CLI block has one). */
+const CHECK_BACKEND: Record<string, Backend | undefined> = { claude: 'claude-code', codex: 'codex-cli', devin: 'devin-cli', dsh: 'dsh', opencode: 'opencode', cursor: 'cursor-agent', gemini: 'gemini-cli', grok: 'grok-build' }
+
+/** «Add models»: the backend whose `EFFORT_LEVELS` gate a kind's efforts; `undefined` takes none. */
+const EFFORT_BACKEND: Record<string, Backend | undefined> = { claude: 'claude-code', codex: 'codex-cli', devin: undefined, opencode: 'opencode', cursor: undefined, gemini: undefined, grok: 'grok-build' }
+const SUBSCRIPTION_KIND_LIST = 'claude, codex, devin, opencode, cursor, gemini or grok'
 
 /** 1-based positions inside the routing classes; a saved alias counts towards its direct backend. */
 const workerUsedIn = (routing: Routing, id: string): WorkerInfo['usedIn'] => {
@@ -304,12 +375,17 @@ const humanLabel = (id: string): string =>
     .join(' ')
 
 /**
- * The settings list: direct backends plus saved profiles, duplicates folded into their direct row
- * (PROFILE_ALIASES). Profiles the owner never wired into routing and that aren't the everyday `devin`
- * are demoted to `main: false` — the client hides them behind a disclosure instead of listing 26 rows.
+ * The settings list: direct backends, dsh's catalog, saved profiles and ids the lists name — saved aliases
+ * folded into their direct row (PROFILE_ALIASES). Each lands in exactly one section by its transport
+ * (wo1, `placeWorkers`): duplicates by transport, model and effort, an older tool's profile nothing uses and an
+ * id nothing defines go to «Other / imported» and are `main: false`.
  */
-function describeWorkers(routing: Routing, profiles: Array<import('@crewboard/core').AgentProfile>, labels: Map<string, string>, direct: import('@crewboard/core').WorkerEntry[]): WorkerInfo[] {
-  const referenced = new Set([...Object.values(routing.classes).flat(), ...Object.keys(routing.disabled)])
+type DescribeExtra = { catalog?: DshCatalog; presets?: WorkerPreset[]; lang?: HostLang }
+type HostProfile = import('@crewboard/core').AgentProfile & { transport: Transport; origin?: string }
+
+function describeWorkers(routing: Routing, profiles: HostProfile[], labels: Map<string, string>, direct: import('@crewboard/core').WorkerEntry[], extra: DescribeExtra = {}): WorkerInfo[] {
+  // A worker a saved preset names is wired in too (pv1): it stays in the main list, and a gone dsh model shows as missing.
+  const referenced = new Set([...Object.values(routing.classes).flat(), ...Object.keys(routing.disabled), ...(extra.presets ?? []).flatMap((preset) => Object.values(preset.routing).flat())])
   // Several saved profiles can fold onto one direct backend (`codex` and `codex-gpt-6-astra` both
   // mean gpt-6-astra); the surviving row takes the first alias label its aliases carry.
   const profileAliases = new Map<string, string[]>()
@@ -326,49 +402,82 @@ function describeWorkers(routing: Routing, profiles: Array<import('@crewboard/co
     }
     return labels.get(id) ?? registered?.label ?? humanLabel(id)
   }
-  const workers: WorkerInfo[] = []
-  const seen = new Set<string>()
-  const push = (w: WorkerInfo) => {
-    if (!seen.has(w.id)) {
-      seen.add(w.id)
-      workers.push(w)
-    }
+  // The effort the worker runs with, resolved as a launch resolves it (resolveProfile): the registry entry,
+  // else — for an id that is not a direct `claude/…`, `codex/…` or dsh worker — the saved profile (ef1).
+  const effortFor = (id: string): string | undefined => {
+    const registered = direct.find((worker) => worker.id === id)
+    if (registered) return entryEffort(registered)
+    if (isDshAgent(id) || cliKindOf(id)) return undefined
+    const profile = profiles.find((item) => item.id === id)
+    return profile ? runEffort(profile.backend, profile.effort) : undefined
   }
-  for (const { id } of direct) {
-    push({
-      id,
-      label: labelFor(id),
-      provider: workerProvider(id),
-      billing: workerBilling(id),
+  const facts = collectWorkerFacts({
+    registry: direct,
+    profiles: profiles.map((profile) => ({ id: profile.id, transport: profile.transport, model: profile.model, ...(profile.effort ? { effort: profile.effort } : {}), ...(profile.origin ? { origin: profile.origin } : {}) })),
+    referenced,
+    catalog: (extra.catalog?.groups ?? []).flatMap((group) => group.models.map((model) => ({ provider: group.id, model: model.id }))),
+    aliases: PROFILE_ALIASES,
+  })
+  const workers = facts.map((item) => {
+    const name = labelFor(item.id)
+    const effort = item.transport ? runEffort(backendForTransport(item.transport), item.effort) : undefined
+    return {
+      id: item.id,
+      // A catalog model is named by dsh (withDsh); everything else carries its effort in its name (ef1).
+      label: item.catalog ? name : workerLabel(name, effortFor(item.id)),
+      name,
+      provider: workerProvider(item.id, item.transport, item.model),
+      billing: workerBilling(item.transport),
       main: true,
-      usedIn: workerUsedIn(routing, id),
-    })
-  }
-  for (const profile of profiles) {
-    if (PROFILE_ALIASES[profile.id]) continue
-    push({
-      id: profile.id,
-      label: labelFor(profile.id),
-      provider: workerProvider(profile.id, profile.backend),
-      billing: workerBilling(profile.id),
-      main: profile.id === 'devin' || referenced.has(profile.id),
-      usedIn: workerUsedIn(routing, profile.id),
-    })
-  }
-  for (const id of referenced) {
-    if (PROFILE_ALIASES[id]) continue
-    push({ id, label: labelFor(id), provider: workerProvider(id), billing: workerBilling(id), main: true, usedIn: workerUsedIn(routing, id) })
-  }
-  return workers
+      usedIn: workerUsedIn(routing, item.id),
+      ...(item.transport ? { transport: item.transport } : {}),
+      ...(item.model ? { model: item.model } : {}),
+      ...(effort ? { effort } : {}),
+      facts: item,
+    }
+  })
+  const placed = placeWorkers(workers.map((worker) => worker.facts))
+  return workers.map(({ facts: _facts, ...worker }) => {
+    const place = placed.get(worker.id) ?? { section: 'other' as const, other: 'stale' as const }
+    // wo2: a worker of a CLI Crewboard has no runner for is listed for reference, never offered in a picker.
+    const runs = !place.cli || cliRuns(place.cli)
+    return withDsh({ ...worker, main: place.section !== 'other' && runs, section: place.section, ...(place.cli ? { cli: place.cli } : {}), ...(runs ? {} : { runs: false as const }), ...(place.other ? { other: place.other } : {}), ...(place.duplicateOf ? { duplicateOf: place.duplicateOf } : {}) }, direct, extra)
+  })
+}
+
+/**
+ * Names a dsh worker after dsh's catalog — «DeepSeek V4 Flash · via dsh» — unless the owner renamed it, and marks
+ * one the catalog no longer lists as missing. Without a catalog (an older dsh, or the CLI) nothing is claimed.
+ */
+function withDsh(worker: WorkerInfo, direct: import('@crewboard/core').WorkerEntry[], extra: DescribeExtra): WorkerInfo {
+  const entry = direct.find((item) => item.id === worker.id)
+  const selection = entry ? dshEntrySelection(entry) : dshSelectionOfId(worker.id)
+  if (!selection) return worker
+  const group = extra.catalog?.groups.find((item) => item.id === selection.provider)
+  const model = group?.models.find((item) => item.id === selection.model)
+  // A provider that failed to list its models says nothing about this one.
+  const failed = extra.catalog?.failures.some((failure) => failure.id === selection.provider)
+  const missing = Boolean(extra.catalog && !model && !failed)
+  const builtIn = DEFAULT_WORKERS.find((item) => item.id === worker.id)
+  const ownName = entry && entry.label !== builtIn?.label
+  // Without a catalog name a registered entry keeps its own label rather than a bare model id.
+  const label = ownName || (entry && !model) ? worker.label : hostT(extra.lang ?? 'en', 'workers.viaDsh', { model: model?.name ?? selection.model })
+  return { ...worker, label, name: label, dsh: { provider: selection.provider, providerName: group?.name ?? extra.catalog?.failures.find((failure) => failure.id === selection.provider)?.name ?? selection.provider, model: selection.model, ...(missing ? { missing: true as const } : {}), ...(builtIn && !ownName ? { builtin: builtIn.label.replace(/ \(dsh\)$/, '') } : {}) } }
+}
+
+/** dsh's model catalog through its session controller (pv1); absent on a dsh without one, or when it fails. */
+export async function dshCatalogOf(controller: SessionControllerFace | undefined): Promise<DshCatalog | undefined> {
+  if (!controller?.modelCatalog) return undefined
+  return readDshCatalog(await controller.modelCatalog().catch(() => undefined))
 }
 
 /** Resolve the same worker list for snapshots and the settings endpoint. */
-export async function resolvedWorkers(env: NodeJS.ProcessEnv, home: string): Promise<WorkerInfo[]> {
+export async function resolvedWorkers(env: NodeJS.ProcessEnv, home: string, extra: Omit<DescribeExtra, 'presets'> = {}): Promise<WorkerInfo[]> {
   const path = profileStorePath(env, home)
   const file = registryPath(env, home)
   await recoverWorkerDeletion(file, path)
   const store = await loadProfileStore(env, home)
-  const profiles = Object.entries(store.profiles).map(([id, profile]) => ({ id, backend: backendForTransport(profile.transport), model: profile.model, enabled: profile.enabled }))
+  const profiles = Object.entries(store.profiles).map(([id, profile]) => ({ id, backend: backendForTransport(profile.transport), transport: profile.transport, model: profile.model, enabled: profile.enabled, ...(profile.effort ? { effort: profile.effort } : {}), ...(profile.origin ? { origin: profile.origin } : {}) }))
   const routing = await loadRouting(path, env, home)
   // A background snapshot must not create the default registry after host disposal.
   const direct = await readFile(file, 'utf8').then((raw) => {
@@ -379,7 +488,8 @@ export async function resolvedWorkers(env: NodeJS.ProcessEnv, home: string): Pro
     if (error.code === 'ENOENT') return DEFAULT_WORKERS
     throw error
   })
-  return describeWorkers(routing, profiles, await profileLabels(env, home), direct)
+  const presets = await listPresets({ ...env, HOME: home }).catch(() => [])
+  return describeWorkers(routing, profiles, await profileLabels(env, home), direct, { ...extra, presets })
 }
 
 type PlanTask = Awaited<ReturnType<typeof loadPlan>>['tasks'][number]
@@ -398,6 +508,8 @@ async function runLedgerExtras(root: string, task: PlanTask, run: PlanTask['runs
     ...evidence.checks.map((check) => ({ at: evidence.capturedAt, kind: 'check' as const, label: check.command, state: check.state, isError: check.state === 'not_run', output: check.state })),
     ...evidence.files.map((file) => ({ at: evidence.capturedAt, kind: 'edit' as const, label: file.path, output: `+${file.added ?? '—'} −${file.deleted ?? '—'}` })),
     ...(evidence.report ? [{ at: evidence.capturedAt, kind: 'final' as const, label: evidence.claimLine ?? 'Report', output: evidence.finalAnswer }] : []),
+    // vr2: a reply to a direction queued after the report is shown after it, not read as the report.
+    ...(evidence.followUp ? [{ at: evidence.capturedAt, kind: 'final' as const, label: 'Follow-up', output: evidence.followUp }] : []),
   ] : []
   extras.push(...steerNotes.map((note) => ({ at: note.at, kind: 'steer' as const, label: note.text, state: note.type === 'steer' ? 'sent' : 'abandoned', input: note.text, isError: note.type !== 'steer' })))
   if (acceptedNote?.verdict) extras.push({ at: acceptedNote.at, kind: 'final', label: `Verdict: ${acceptedNote.verdict.kind}`, output: acceptedNote.text })
@@ -421,22 +533,34 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
     const e = toHttpError(err)
     const lang = deps.lang?.() ?? 'en'
     // A refusal that kept its vars reads in the host's language, whoever raised it.
-    const vars = err instanceof DetailError ? err.vars : err instanceof LaunchError ? err.vars : undefined
-    const message = vars && (err instanceof DetailError || err instanceof LaunchError)
+    const vars = err instanceof DetailError || err instanceof SplitError ? err.vars : err instanceof LaunchError ? err.vars : undefined
+    const message = err instanceof MergeError
+      ? orchText(lang, `merge.${err.code}`, err.vars)
+      : err instanceof ChecksError ? orchText(lang, `checks.${err.code}`, err.vars)
+      : vars && (err instanceof DetailError || err instanceof LaunchError || err instanceof SplitError)
       ? [orchText(lang, err.code, vars), err instanceof LaunchError ? err.detail : undefined].filter(Boolean).join('\n')
       : e.message.startsWith('Unknown preset: ')
       ? hostT(lang, 'presets.unknown', { id: e.message.slice('Unknown preset: '.length) })
       : e.message === 'The builtin preset cannot be deleted'
         ? hostT(lang, 'presets.builtinDelete')
         : e.message.startsWith('Invalid preset') ? hostT(lang, 'presets.invalid') : e.message
-    send(res, e.status, { ok: false, error: e.code, message })
+    // A failed command's output travels as fields — the file, its size and the tail — never whole (tk1).
+    const output = err instanceof LaunchError ? err.output : undefined
+    send(res, e.status, { ok: false, error: e.code, message, ...(output ? { output } : {}), ...(err instanceof LaunchError && err.vars ? { vars: err.vars } : {}), ...(err instanceof MergeError && err.paths ? { paths: err.paths } : {}) })
   }
 
-  const draftFromSpec = async (root: string, spec: string) => {
-    const routing = await resolveRouting(root, undefined, { ...deps.env, HOME: deps.home })
-    const worker = routing.routing.research[0]
-    if (!worker) throw new HttpError(409, 'no_worker', 'Choose a research worker first')
-    return summarizeDraftJob(await startDraftJob({ root, spec, agent: worker, backends: deps.backendsFor(root), now: deps.now() }))
+  // The draft worker is picked like a run's (dr2): preflight, then the research preset order. A person's
+  // explicit choice is checked the same way and refused, never silently replaced.
+  const draftWorker = (root: string, agent?: unknown) => chooseDraftWorker({
+    root, env: deps.env, home: deps.home, exec, now: () => deps.now(), lang: deps.lang?.() ?? 'en', ...(typeof agent === 'string' && agent ? { agent } : {}),
+  })
+  const draftFromSpec = async (root: string, spec: string, agent?: unknown) => {
+    const choice = await draftWorker(root, agent)
+    return summarizeDraftJob(await startDraftJob({ root, spec, agent: choice.agent, pick: choice.origin, backends: deps.backendsFor(root), now: deps.now(), exec }))
+  }
+  const retryDraftJob = async (root: string, id: string, agent?: unknown) => {
+    const chosen = typeof agent === 'string' && agent && agent !== 'auto' ? (await draftWorker(root, agent)).agent : undefined
+    return repairDraftJob({ root, id, backends: deps.backendsFor(root), now: deps.now(), exec, choose: async () => (await draftWorker(root)).agent, ...(chosen ? { agent: chosen } : {}) })
   }
 
   const post = (name: string, fn: (body: Body, root: string) => Promise<unknown>): Route => ({
@@ -448,7 +572,7 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
         const body = await readBody(req, name === 'spec-upload' ? MAX_SPEC_BODY_BYTES : MAX_BODY_BYTES)
         // The repository list routes act on the list itself: the path they name is not (yet, or any more) a served repository.
         const root = LIST_ROUTES.has(name) ? '' : repoOf(body.repo)
-        if (new Set(['run', 'relaunch', 'continue', 'steer', 'stop', 'accept', 'accept-batch', 'reject', 'drop', 'pos', 'task-upsert', 'task-status']).has(name) && (await loadPlan(root)).example) throw new ExamplePlanError()
+        if (new Set(['run', 'run-checks', 'relaunch', 'continue', 'steer', 'stop', 'accept', 'accept-batch', 'merge', 'mark-merged', 'reject', 'drop', 'pos', 'task-upsert', 'task-status']).has(name) && (await loadPlan(root)).example) throw new ExamplePlanError()
         const value = await fn(body, root)
         await deps.service.refresh(root || undefined)
         send(res, 200, { ok: true, value: value ?? null })
@@ -552,6 +676,17 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       await deps.service.refresh(root)
       return resolveOrchestratorCheck(root, planId)
     }),
+    // bs1: the base new copies branch from. `value` a branch name, or null to fall back to the next level.
+    post('default-base', async (b, root) => {
+      if (b.value !== null && typeof b.value !== 'string') throw new HttpError(400, 'bad_request', 'value must be a branch name or null')
+      const value = b.value === null ? undefined : b.value.trim() || undefined
+      const planId = typeof b.planId === 'string' && b.planId ? b.planId : currentPlanId(root)
+      if (b.scope === 'repo') await setRepositoryDefaultBase(root, value)
+      else if (b.scope === 'plan') await setPlanDefaultBase(root, planId, value)
+      else throw new HttpError(400, 'bad_request', 'scope must be repo or plan')
+      await deps.service.refresh(root)
+      return resolveDefaultBase(root, exec, { planId })
+    }),
     post('plan-preset', async (b, root) => { const planId = text(b.planId, 'planId'); await setPlanPreset(root, planId, typeof b.id === 'string' ? b.id : undefined, { ...deps.env, HOME: deps.home }); return resolveRouting(root, planId, { ...deps.env, HOME: deps.home }) }),
     // «ready» is the launch's own preflight passing — the profile, binary, login and key a run would use;
     // a check that could not run is «not checked», never «ready».
@@ -563,7 +698,7 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
         const profile = await resolveProfile(env, deps.home, worker.id).catch(() => undefined)
         const result = profile ? await preflightAgent(profile, { exec, lang: deps.lang?.() ?? 'en', env, commands: workerCommands(env) }).catch(() => null) : null
         const failed = (name: string) => result?.checks.some((check) => check.name === name && !check.ok)
-        const state = !result ? 'unchecked' : result.ok ? 'ready' : failed('binary') ? 'missing' : failed('auth') || failed('key') ? 'sign_in' : 'not_ready'
+        const state = !result ? 'unchecked' : result.ok ? 'ready' : failed('binary') ? 'missing' : failed('channel') ? 'not_ready' : failed('auth') || failed('key') ? 'sign_in' : 'not_ready'
         return { id: worker.id, label: worker.label, status: state, checks: result?.checks ?? [] }
       }))
       return status
@@ -587,7 +722,19 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       return [...saved.filter((entry) => entry.isFile() && SPEC_EXTENSIONS.some((ext) => entry.name.toLowerCase().endsWith(ext))).map((entry) => `${SPECS_DIR}/${entry.name}`).sort().reverse(), ...files.sort()]
     }),
     // A draft from a spec is a background job: the answer comes back through GET plan-draft-jobs, never through this request.
-    post('plan-draft-from', async (b, root) => ({ job: await draftFromSpec(root, text(b.file, 'file')) })),
+    post('plan-draft-from', async (b, root) => ({ job: await draftFromSpec(root, text(b.file, 'file'), b.agent) })),
+    // Who would write a draft now, and who was passed over and why; the spec picker shows it before anything starts.
+    get('draft-worker', async (_q, root) => {
+      const routing = await resolveRouting(root, undefined, { ...deps.env, HOME: deps.home })
+      const options = [...new Set([...routing.routing.research, ...Object.values(routing.routing).flat()])]
+      try {
+        const choice = await draftWorker(root)
+        return { agent: choice.agent, skipped: choice.skipped, options }
+      } catch (err) {
+        if (!(err instanceof LaunchError)) throw err
+        return { agent: null, skipped: [], options, message: err.message, ...(err.detail ? { detail: err.detail } : {}) }
+      }
+    }),
     // An uploaded or pasted spec is saved into the repository first, then drafted exactly like a repository file.
     post('spec-upload', async (b, root) => {
       if (typeof b.text !== 'string') throw new HttpError(400, 'bad_request', 'text is required')
@@ -595,7 +742,7 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       const path = await saveUploadedSpec(root, { ...(typeof b.name === 'string' ? { name: b.name } : {}), text: b.text, now: deps.now() })
       // Keeps the saved spec out of `git status`; a folder that is not a git checkout still gets its spec.
       await ensureGitExclude(root, exec).catch(() => false)
-      return { path, job: await draftFromSpec(root, path) }
+      return { path, job: await draftFromSpec(root, path, b.agent) }
     }),
     post('example-create', async (body, root) => { await ensureGitExclude(root, exec); const plan = await createExamplePlan(root, deps.now(), body.lang === 'ru' || body.lang === 'en' ? body.lang : deps.lang?.() === 'ru' ? 'ru' : 'en'); return { plan: plan.goal } }),
     post('example-remove', async (_b, root) => { await removeExample(root); return null }),
@@ -690,7 +837,10 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
         return { taskId: task.id, title: task.title, ...(task.class ? { taskClass: task.class } : { currentClassFallback: true }), state: taskRuns.some((run) => !run.finishedAt) ? 'running' : task.status, runIds: sorted.map(r=>r.runId), attemptIndexes: sorted.map((r,i)=>r.attemptIndex ?? i+1), ...(sorted.length ? { elapsedSec: Math.max(0, (Date.parse(legacyAccept?.at ?? deps.now().toISOString())-Date.parse(sorted[0]!.startedAt))/1000) } : {}), workerSec, reviewWaitMs: unionReviewIntervals(reviewIntervals, deps.now().toISOString()), reviewIntervals, executionOutcomes: taskRuns.map(r=>({runId:r.runId,outcome:r.executionOutcome ?? 'unknown'})), decisions, accounting }
       })
       const historyCompleteness = plan.tasks.every(t=>!!t.reviewIntervals || !t.runs.length) ? 'complete' as const : 'partial' as const
-      return { schemaVersion: 2, ...(plan.example ? { synthetic: true as const } : {}), rev: plan.rev, historyCompleteness, generatedAt: deps.now().toISOString(), runs, totals: summarizeCosts(runs), accepted, tasks, coverage: reviewCoverage(runs, historyCompleteness) }
+      const planId = currentPlanId(root)
+      const binding = (await readChats(root))[planId]
+      const orchestrator = await orchestratorUsage(binding ? { [planId]: binding } : {}, dshBillRecordsPath(deps.env, deps.home))
+      return { schemaVersion: 2, ...(plan.example ? { synthetic: true as const } : {}), planId, rev: plan.rev, historyCompleteness, generatedAt: deps.now().toISOString(), runs, totals: summarizeCosts(runs), accepted, tasks, coverage: reviewCoverage(runs, historyCompleteness), orchestrator }
     }),
     // Step strips for the run rows on screen. Kept out of GET cost so the plan summary never reads raw events.
     get('run-steps', async (q, root): Promise<Record<string, RunStepSummary>> => {
@@ -769,19 +919,21 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       const path = profileStorePath(deps.env, deps.home)
       await recoverWorkerDeletion(registryPath(deps.env, deps.home), path)
       const store = await loadProfileStore(deps.env, deps.home)
-      const profiles = Object.entries(store.profiles).map(([id, profile]) => ({ id, backend: backendForTransport(profile.transport), model: profile.model, enabled: profile.enabled }))
+      const profiles = Object.entries(store.profiles).map(([id, profile]) => ({ id, backend: backendForTransport(profile.transport), transport: profile.transport, model: profile.model, enabled: profile.enabled, ...(profile.effort ? { effort: profile.effort } : {}), ...(profile.origin ? { origin: profile.origin } : {}) }))
       const routing = await loadRouting(path, deps.env, deps.home)
       const registry = await loadRegistry(registryPath(deps.env, deps.home))
-      const workers = describeWorkers(routing, profiles, await profileLabels(deps.env, deps.home), registry.workers)
-      const controller = deps.sessions?.()
-      const rawCatalog = controller?.modelCatalog ? await controller.modelCatalog().catch(() => undefined) : undefined
+      const catalog = await dshCatalogOf(deps.sessions?.())
+      const presets = await listPresets({ ...deps.env, HOME: deps.home }).catch(() => [])
+      const workers = describeWorkers(routing, profiles, await profileLabels(deps.env, deps.home), registry.workers, { ...(catalog ? { catalog } : {}), presets, lang: deps.lang?.() ?? 'en' })
       return {
         routing,
         classes: TASK_CLASSES.map((id) => ({ id, label: deps.lang?.() === 'ru' ? CLASS_LABEL_RU[id] : CLASS_LABEL[id] })),
         known: [...new Set([...registry.workers.map((w) => w.id), ...profiles.map((p) => p.id)])],
         workers,
+        // wo2: the CLIs a runner backend exists for; the screen marks every other one «listed for reference».
+        runnableClis: SUBSCRIPTION_CLIS.filter(cliRuns),
         registry: registry.workers,
-        catalog: rawCatalog ? { groups: rawCatalog.groups, failures: rawCatalog.failures } : null,
+        catalog: catalog ?? null,
       }
     }),
     // Worktrees of the repository's tasks: the panel shows them with the reason each one stays.
@@ -812,7 +964,7 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
     }),
     post('worker-check', async (b) => {
       const kind = text(b.kind, 'kind')
-      const backend: Backend | undefined = kind === 'claude' ? 'claude-code' : kind === 'codex' ? 'codex-cli' : kind === 'devin' ? 'devin-cli' : kind === 'dsh' ? 'dsh' : undefined
+      const backend: Backend | undefined = CHECK_BACKEND[kind]
       if (!backend) throw new HttpError(400, 'bad_request', 'Unknown worker type')
       const env = { ...deps.env, HOME: deps.home }
       return preflightAgent({ id: `${kind}/${typeof b.model === 'string' ? b.model : ''}`, backend, model: typeof b.model === 'string' ? b.model : '', enabled: true }, { exec, lang: deps.lang?.() ?? 'en', env, commands: workerCommands(env) })
@@ -824,9 +976,45 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       await saveWorkerProfile(deps.env, deps.home, entry)
       return saveWorker(registryPath(deps.env, deps.home), entry)
     }),
+    // wo1 «Add as worker»: an older tool's profile becomes the person's own and leaves «Other / imported».
+    post('worker-adopt', async (b) => {
+      const id = text(b.id, 'id')
+      if (!(await adoptImportedProfile(deps.env, deps.home, id))) throw new HttpError(404, 'unknown_worker', id)
+      await deps.service.refresh()
+      return { adopted: id }
+    }),
+    // wo1: a stale id — nothing defines it — leaves the routing, its switches and the saved presets.
+    post('worker-forget', async (b) => {
+      const id = text(b.id, 'id')
+      const result = await forgetWorkerId(id, { ...deps.env, HOME: deps.home }, deps.home)
+      await deps.service.refresh()
+      return result
+    }),
     post('worker-delete', async (b) => {
       const id = text(b.id, 'id')
       return removeWorker(registryPath(deps.env, deps.home), profileStorePath(deps.env, deps.home), id, deps.env, deps.home)
+    }),
+    // pv1: the models a signed-in subscription CLI offers, read from the CLI itself (Claude: Crewboard's list).
+    post('worker-models', async (b) => {
+      if (!isSubscriptionKind(b.kind)) throw new HttpError(400, 'bad_request', `kind must be ${SUBSCRIPTION_KIND_LIST}`)
+      const env = { ...deps.env, HOME: deps.home }
+      return listSubscriptionModels(b.kind, { exec, env, commands: workerCommands(env) })
+    }),
+    // pv1: «Add models» — one worker per chosen model and effort, as `crewboard workers add … --effort` makes them.
+    post('worker-add-models', async (b) => {
+      if (!isSubscriptionKind(b.kind)) throw new HttpError(400, 'bad_request', `kind must be ${SUBSCRIPTION_KIND_LIST}`)
+      const kind = b.kind
+      const models = Array.isArray(b.models) ? b.models.flatMap((item) => (item && typeof item === 'object' && typeof (item as Body).model === 'string' && (item as Body).model ? [{ model: String((item as Body).model).trim(), label: typeof (item as Body).label === 'string' && String((item as Body).label).trim() ? String((item as Body).label).trim() : String((item as Body).model).trim() }] : [])) : []
+      if (models.length === 0) throw new HttpError(400, 'bad_request', 'models must list at least one model')
+      const efforts = Array.isArray(b.efforts) ? b.efforts.filter((item): item is string => typeof item === 'string' && item.trim() !== '').map((item) => item.trim()) : []
+      const effortBackend = EFFORT_BACKEND[kind]
+      const accepted = effortBackend ? (EFFORT_LEVELS[effortBackend] ?? []) : []
+      const unknown = efforts.find((effort) => !accepted.includes(effort))
+      if (unknown) throw new HttpError(400, 'bad_request', `${kind} does not take effort “${unknown}”`)
+      await recoverWorkerDeletion(registryPath(deps.env, deps.home), profileStorePath(deps.env, deps.home))
+      const result = await addSubscriptionWorkers(deps.env, deps.home, registryPath(deps.env, deps.home), subscriptionEntries(kind, models, efforts))
+      await deps.service.refresh()
+      return result
     }),
     post('task-upsert', async (b, root) => {
       const title = text(b.title, 'title').trim()
@@ -843,11 +1031,21 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       const taskClass = b.class === 'code' || b.class === 'design' || b.class === 'review' || b.class === 'research' ? b.class : source.class
       const lane = typeof b.lane === 'string' ? b.lane.trim() : source.lane
       const note = typeof b.note === 'string' ? b.note.trim().slice(0, 8000) : ''
-      const findings = (detail.verdict?.facts ?? []).map((fact) => fact.text ?? fact.code).join('\n- ')
-      const contract = `.orchestration/contracts/${currentPlanId(root)}/${id}.md`
-      const content = `# ${title}\n\nFollow-up to ${parent}: ${source.title}\n\nParent report and verdict\n\n${detail.report?.text ?? 'No report yet.'}\n\nVerdict: ${detail.verdict?.kind ?? 'none (a decision)'}\n\nOpen findings\n\n- ${findings || 'None recorded.'}\n\nWhat to do\n\n${note || title}\n`
-      await mkdir(join(root, '.orchestration', 'contracts', currentPlanId(root)), { recursive: true })
-      await writeFile(join(root, contract), content, { flag: 'wx' })
+      const findings = (detail.verdict?.facts ?? []).map((fact) => fact.text ?? fact.code)
+      const contract = contractPathFor(currentPlanId(root), id)
+      // The one contract template (ct1): the parent's report, verdict and findings are the context, the note is
+      // the result, and the parent's checks carry over — the same work is checked the same way.
+      const parentChecks = detail.contract ? requiredChecks(detail.contract.text) : []
+      const lang = deps.lang?.() ?? 'en'
+      const content = contractTemplate({
+        goal: title,
+        context: followUpContext({ id: parent, title: source.title, report: detail.report?.text, verdict: detail.verdict?.kind, findings }, replace, lang),
+        result: note || title,
+        checks: parentChecks,
+        sources: source.contract ? [source.contract] : [],
+        lang,
+      })
+      await writeNewContract(root, contract, content)
       try {
         await updatePlan(root, (current) => {
           if (current.tasks.some((task) => task.id === id)) throw new HttpError(409, 'duplicate_task', id)
@@ -857,6 +1055,30 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
           if (original.pos) created.pos = { x: original.pos.x + 300, y: original.pos.y }
           current.tasks.push(created)
           if (replace) original.status = 'superseded'
+          return current
+        })
+      } catch (error) {
+        await import('node:fs/promises').then(({ rm }) => rm(join(root, contract), { force: true }))
+        throw error
+      }
+      return { id }
+    }),
+    // nb1: the first task of an empty plan, from the screen. The id comes from the title; the contract is the one
+    // template (ct1) with the title as the goal and the person's line as the result, checks left for the person.
+    post('task-add', async (b, root) => {
+      const title = text(b.title, 'title').trim().slice(0, 200)
+      const result = typeof b.result === 'string' ? b.result.trim().slice(0, 8000) : ''
+      const plan = await loadPlan(root)
+      const base = title.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32).replace(/-+$/g, '') || 'task'
+      const taken = new Set(plan.tasks.map((task) => task.id))
+      let id = base
+      for (let n = 2; taken.has(id); n++) id = `${base}-${n}`
+      const contract = contractPathFor(currentPlanId(root), id)
+      await writeNewContract(root, contract, contractTemplate({ goal: title, result: result || title, lang: deps.lang?.() ?? 'en' }))
+      try {
+        await updatePlan(root, (current) => {
+          if (current.tasks.some((task) => task.id === id)) throw new HttpError(409, 'duplicate_task', id)
+          current.tasks.push(newTask({ id, title, contract, status: 'ready' }))
           return current
         })
       } catch (error) {
@@ -886,6 +1108,12 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       if (result.code !== 0) throw new HttpError(409, 'open_failed', result.stderr || 'Could not open worktree')
       return { path }
     }),
+    // «Run checks here» (ck1): Crewboard runs the contract's <checks> in the copy and answers with the task's detail.
+    post('run-checks', async (b, root) => {
+      const task = text(b.task, 'task')
+      await runContractChecks({ root, taskId: task, by: 'person', exec, env: deps.env, now: () => deps.now(), lang: deps.lang?.() })
+      return getTaskDetail(root, task, deps.backendsFor(root), exec)
+    }),
     post('run', (b, root) =>
       launchTask({
         root,
@@ -893,6 +1121,10 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
         ...(typeof b.agent === 'string' && b.agent.trim() ? { agent: b.agent } : {}),
         // A dsh screen action is a person (the client header gates every POST): any worker may be picked.
         caller: callerOf({ kind: 'ui' }),
+        // The person's answer about a copy with uncommitted changes (fo1).
+        ...(b.dirtyCopy === 'keep' || b.dirtyCopy === 'reset' ? { dirtyCopy: b.dirtyCopy } : {}),
+        // bs1: a person chooses the base on purpose from the screen too — the same person-only rule as --base.
+        ...(typeof b.base === 'string' && b.base.trim() ? { base: b.base.trim() } : {}),
         backends: deps.backendsFor(root),
         exec,
         env: deps.env,
@@ -951,11 +1183,13 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
           ? hostT(lang, 'actions.accept.negative', { task, why: verdict.why ? ` ${verdictReason(lang, verdict)}.` : '' })
           : verdict.kind === 'disputed'
             ? hostT(lang, 'actions.accept.disputed', { task, mismatch: verdictReason(lang, verdict) })
-            : hostT(lang, 'actions.accept.normal', { task })
-      // Accepting before the orchestrator finished checking stays possible, but the dialog says so (vr1).
-      const view = deriveViews(await loadPlan(root)).find((v) => v.task.id === task)
-      // The orchestrator's own work and decisions (rt1): accepting before its «done» is said out loud too.
-      const unchecked = isChecking(view?.check) ? hostT(lang, 'actions.accept.unchecked', { task }) : view && ownWorkUnchecked(view.task.kind, view.check) ? hostT(lang, 'actions.accept.ownUnchecked', { task }) : ''
+            : verdict.caution ? hostT(lang, 'actions.accept.caution', { task }) : hostT(lang, 'actions.accept.normal', { task })
+      // One line on the orchestrator's check (vc1): checked, not checked yet — accept anyway, or no check for this
+      // plan and why. The orchestrator's own work and decisions (rt1): accepting before its «done» is said out loud.
+      const plan = await loadPlan(root)
+      const view = deriveViews(plan).find((v) => v.task.id === task)
+      const check = view ? reviewCheckOf({ status: view.status, kind: view.task.kind, check: view.check }, await resolveOrchestratorCheck(root, undefined, plan)) : undefined
+      const unchecked = check ? acceptCheckLine(lang, check, task, view?.task.check?.note) : view && ownWorkUnchecked(view.task.kind, view.check) ? hostT(lang, 'actions.accept.ownUnchecked', { task }) : ''
       // Work the copy holds without a commit is not on the task branch: merging it would not bring it (w1d).
       const count = detail.worktree ? await uncommittedCount(detail.worktree.path, exec) : undefined
       const loose = count ? hostT(lang, 'actions.accept.uncommitted', { task, count }) : ''
@@ -964,6 +1198,31 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       // Acceptance cleans only that task's copy; the feed note is written by gcAfterAccept, not silently.
       const cleanup = await gcAfterAccept(root, [task], { exec, now: deps.now, policyPath: worktreeConfigPath(deps.env, deps.home) })
       return { task, status: 'accepted', verdict, worktreeRemoved: cleanup.removed.includes(task) }
+    }),
+    // mg1: the screen's Merge — the same checks and refusals as `crewboard merge`, then the person's native yes.
+    // Not an agent tool: dsh tools (tools.ts) never reach this route.
+    post('merge', async (b, root) => {
+      const task = text(b.task, 'task')
+      if (b.strategy !== undefined && b.strategy !== 'no-ff' && b.strategy !== 'squash') throw new HttpError(400, 'bad_request', 'strategy must be no-ff or squash')
+      const strategy = b.strategy === 'squash' ? 'squash' as const : 'no-ff' as const
+      const lang = deps.lang?.() ?? 'en'
+      const ready = await checkMerge(root, task, { exec, now: deps.now() })
+      const question = hostT(lang, 'actions.merge', { task, branch: ready.branch, into: ready.into, root, how: hostT(lang, `actions.merge.${strategy}`) })
+      if (!(await deps.native.confirm('crewboard', question, hostT(lang, 'actions.ok.merge'), hostT(lang, 'actions.ok.cancel')))) throw declined()
+      const result = await mergeTask(root, task, { exec, now: deps.now, strategy, policyPath: worktreeConfigPath(deps.env, deps.home) })
+      return { task, into: result.into, strategy, commit: result.commit, copy: result.copy, ...(result.keptBecause ? { keptBecause: result.keptBecause } : {}) }
+    }),
+    // mk1: the screen's Mark as merged… — work that reached the base in a way Crewboard cannot see. The person's
+    // native yes and a reason; git is not touched, a detached HEAD is fine. Not an agent tool, like Merge.
+    post('mark-merged', async (b, root) => {
+      const task = text(b.task, 'task')
+      const reason = text(b.reason, 'reason')
+      const lang = deps.lang?.() ?? 'en'
+      const ready = await checkMarkMerged(root, task, { exec })
+      const question = hostT(lang, 'actions.markMerged', { task, branch: ready.branch, into: ready.into, root, reason })
+      if (!(await deps.native.confirm('crewboard', question, hostT(lang, 'actions.ok.markMerged'), hostT(lang, 'actions.ok.cancel')))) throw declined()
+      await markMerged(root, task, reason, { exec, now: deps.now() })
+      return { task, into: ready.into }
     }),
     post('accept-batch', async (b, root) => {
       const ids = batchIds(b.tasks)
@@ -975,13 +1234,29 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
         return !t || !waitsForHuman(t)
       })
       if (bad.length > 0) throw new HttpError(409, 'not_reviewable', `Not awaiting review: ${bad.join(', ')}`)
+      // dc1: a decision is never closed in a batch — the person confirms it one by one, or the orchestrator
+      // records an answer already given in chat (`decision answer`). Atomic: refuse before the dialog.
+      const decisions = ids.filter((id) => byId.get(id)?.kind === 'decision')
+      if (decisions.length > 0) throw new HttpError(409, 'decision_batch', `Decisions are confirmed one by one, not in a batch: ${decisions.join(', ')}`)
       const lines = ids.slice(0, MAX_LISTED).map((id) => `• ${id} — ${byId.get(id)?.title ?? ''}`)
       if (ids.length > MAX_LISTED) lines.push(`… and ${ids.length - MAX_LISTED} more`)
       const details = await Promise.all(ids.map(async (id) => [id, await getTaskDetail(root, id, deps.backendsFor(root), exec)] as const))
       const lang = deps.lang?.() ?? 'en'
-      const riskLines = details.flatMap(([id, detail]) => !detail.verdict || detail.verdict.kind === 'result' ? [] : [
-        `• ${id} — ${hostT(lang, detail.verdict.kind === 'negative' ? 'actions.accept.riskNegative' : 'actions.accept.riskDisputed', { reason: verdictReason(lang, detail.verdict) })}`,
+      const riskLines = details.flatMap(([id, detail]) => !detail.verdict || (detail.verdict.kind === 'result' && !detail.verdict.caution) ? [] : [
+        `• ${id} — ${detail.verdict.kind === 'result' ? hostT(lang, 'actions.accept.riskCaution') : hostT(lang, detail.verdict.kind === 'negative' ? 'actions.accept.riskNegative' : 'actions.accept.riskDisputed', { reason: verdictReason(lang, detail.verdict) })}`,
       ])
+      // The orchestrator's check in the single dialog's words (vc1), grouped: checked, not checked yet, no check and why.
+      const setting = repo?.orchestratorCheck
+      const checkGroups = new Map<string, string[]>()
+      for (const id of ids) {
+        const t = byId.get(id)
+        const check = t ? t.reviewCheck ?? (setting ? reviewCheckOf(t, setting) : undefined) : undefined
+        if (!check) continue
+        const key = check.state === 'off' ? `check.batch.off.${check.source}` : check.state === 'checked' ? 'check.batch.checked' : 'check.batch.unchecked'
+        checkGroups.set(key, [...(checkGroups.get(key) ?? []), `• ${id} — ${t?.title ?? ''}`])
+      }
+      const checkText = ['check.batch.checked', 'check.batch.unchecked', ...[...checkGroups.keys()].filter((key) => key.startsWith('check.batch.off.'))]
+        .flatMap((key) => checkGroups.get(key)?.length ? [hostT(lang, key, { lines: (checkGroups.get(key) ?? []).join('\n') })] : []).join('')
       // «1 clean, 9 at risk» (w1b, B03): the same rule the sheet uses to pre-select.
       const clean = details.filter(([id, detail]) => { const t = byId.get(id); return !!t && cleanToAccept(t, detail.verdict) }).length
       // A decision or a root task without the orchestrator's «done» (rt1) is named before anything is accepted.
@@ -993,6 +1268,7 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       }
       const question = hostT(lang, 'actions.accept.batch', { count: ids.length, clean, risky: ids.length - clean, lines: lines.join('\n') })
         + (riskLines.length ? hostT(lang, 'actions.accept.batchRisks', { lines: riskLines.join('\n') }) : '')
+        + checkText
         + (uncheckedLines.length ? hostT(lang, 'actions.accept.batchUnchecked', { lines: uncheckedLines.join('\n') }) : '')
         + (looseLines.length ? hostT(lang, 'actions.accept.batchUncommitted', { lines: looseLines.join('\n') }) : '')
       if (!(await deps.native.confirm('crewboard', question, `${hostT(lang, 'actions.ok.accept')} ${ids.length}`, hostT(lang, 'actions.ok.cancel')))) throw declined()
@@ -1002,13 +1278,34 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       const cleanup = await gcAfterAccept(root, accepted, { exec, now: deps.now, policyPath: worktreeConfigPath(deps.env, deps.home) })
       return { accepted, removed: cleanup.removed }
     }),
+    // wk1 (B29): `rerun` sends back and starts the next run at once — the previous run's worker unless the person
+    // picked another; the reason reaches that run's prompt. Refusals come before anything is sent back.
     post('reject', async (b, root) => {
       const task = text(b.task, 'task')
       const reason = text(b.reason, 'reason')
       const lang = deps.lang?.() ?? 'en'
-      if (!(await deps.native.confirm('crewboard', hostT(lang, 'actions.reject', { task, reason }), hostT(lang, 'actions.ok.sendBack'), hostT(lang, 'actions.ok.cancel')))) throw declined()
-      await rejectTask(root, task, reason, deps.now())
-      return { task, status: 'rejected' }
+      const agent = typeof b.agent === 'string' && b.agent.trim() ? b.agent.trim() : undefined
+      if (b.rerun !== true) {
+        if (!(await deps.native.confirm('crewboard', hostT(lang, 'actions.reject', { task, reason }), hostT(lang, 'actions.ok.sendBack'), hostT(lang, 'actions.ok.cancel')))) throw declined()
+        await rejectTask(root, task, reason, deps.now())
+        return { task, status: 'rejected' }
+      }
+      const question = hostT(lang, 'actions.rejectRerun', { task, reason, worker: agent ?? hostT(lang, 'actions.rerunSameWorker') })
+      if (!(await deps.native.confirm('crewboard', question, hostT(lang, 'actions.ok.sendBackRerun'), hostT(lang, 'actions.ok.cancel')))) throw declined()
+      const run = await sendBackAndRerun({
+        root,
+        taskId: task,
+        reason,
+        ...(agent ? { agent } : {}),
+        caller: callerOf({ kind: 'ui' }),
+        backends: deps.backendsFor(root),
+        exec,
+        env: deps.env,
+        home: deps.home,
+        now: () => deps.now(),
+        lang,
+      })
+      return { task, status: 'rejected', run }
     }),
     // w1f: human-only like reject — the native dialog is the person's confirmation; no agent tool reaches it.
     post('drop', async (b, root) => {
@@ -1073,19 +1370,19 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       // Refused before the confirmation: a cycle or a missing dependency cannot become a plan.
       if (checkDraft(draft).some(isBlocking)) throw new HttpError(422, 'draft_invalid', hostT(lang, 'actions.draftBlocked', { id }))
       if (!(await deps.native.confirm('crewboard', hostT(lang, 'actions.draftApprove', { id, count: draft.tasks.length }), hostT(lang, 'actions.draftApproveOk'), hostT(lang, 'actions.ok.cancel')))) throw declined()
-      await approveDraft(root, id, deps.now())
+      await approveDraft(root, id, deps.now(), lang)
       return { plan: id }
     }),
     post('plan-draft-discard', async (b, root) => { await discardDraft(root, text(b.id, 'id')); return null }),
     // Jobs that still need a person: running, refused (needs_repair) or failed. Asking advances them, so polling alone is enough.
-    get('plan-draft-jobs', async (_q, root) => (await advanceDraftJobs(root, deps.backendsFor(root), deps.now())).filter((job) => job.status === 'running' || job.status === 'needs_repair' || job.status === 'failed').map(summarizeDraftJob)),
+    get('plan-draft-jobs', async (_q, root) => (await advanceDraftJobs(root, deps.backendsFor(root), deps.now(), exec)).filter((job) => job.status === 'running' || job.status === 'needs_repair' || job.status === 'failed').map(summarizeDraftJob)),
     get('plan-draft-job', async (q, root) => {
       const job = await loadDraftJob(root, text(q.get('id'), 'id'))
       const answer = await draftJobAnswer(root, job)
       return { job: summarizeDraftJob(job), ...(answer !== undefined ? { answer } : {}) }
     }),
-    post('plan-draft-job-repair', async (b, root) => summarizeDraftJob(await repairDraftJob({ root, id: text(b.id, 'id'), backends: deps.backendsFor(root), now: deps.now() }))),
-    post('plan-draft-job-discard', async (b, root) => summarizeDraftJob(await discardDraftJob(root, text(b.id, 'id'), deps.backendsFor(root), deps.now()))),
+    post('plan-draft-job-repair', async (b, root) => summarizeDraftJob(await retryDraftJob(root, text(b.id, 'id'), b.agent))),
+    post('plan-draft-job-discard', async (b, root) => summarizeDraftJob(await discardDraftJob(root, text(b.id, 'id'), deps.backendsFor(root), deps.now(), exec))),
     // Opening an archived plan only shows it here: `current` stays with the CLI and the agents (B22).
     post('plan-use', async (b, root) => {
       await openPlan(root, text(b.plan, 'plan'))
@@ -1112,12 +1409,15 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       const plan = typeof b.plan === 'string' && b.plan.trim() ? b.plan.trim() : currentPlanId(root)
       const taskId = typeof b.taskId === 'string' && b.taskId.trim() ? b.taskId.trim() : undefined
       const prompt = typeof b.prompt === 'string' && b.prompt.trim() ? b.prompt.trim().slice(0, 2000) : undefined
-      if (prompt && !(await loadPlan(root).catch(() => undefined))) await initPlan(root, 'New plan', deps.now())
+      // «From chat» names the goal before a plan exists (nb1); the plan is created with it, not as «New plan».
+      const goal = typeof b.goal === 'string' && b.goal.trim() ? b.goal.trim().slice(0, 500) : undefined
+      if (prompt && !(await loadPlan(root).catch(() => undefined))) await initPlan(root, goal ?? 'New plan', deps.now())
       const chat: ChatDeps = {
         sessions,
         now: deps.now,
         newId: deps.newId ?? (() => randomUUID()),
         ...(deps.readTask ? { readTask: deps.readTask } : {}),
+        ...(deps.lang ? { lang: deps.lang } : {}),
       }
       return openChat(chat, { root, planId: plan, ...(taskId ? { taskId } : {}), ...(prompt ? { prompt } : {}) })
     }),
@@ -1133,6 +1433,7 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
         now: deps.now,
         newId: deps.newId ?? (() => randomUUID()),
         ...(deps.readTask ? { readTask: deps.readTask } : {}),
+        ...(deps.lang ? { lang: deps.lang } : {}),
       }
       return bindChat(chat, { root, planId: plan, sessionId })
     }),
@@ -1152,7 +1453,7 @@ export function actionRoutes(deps: ActionsDeps): Route[] {
       // Ensure dsh can create the new chat before changing either plan.
       const session = await sessions.create({ cwd: root })
       const result = await splitPlan(root, from, { id, goal, tasks })
-      const chat: ChatDeps = { sessions, now: deps.now, newId: deps.newId ?? (() => randomUUID()) }
+      const chat: ChatDeps = { sessions, now: deps.now, newId: deps.newId ?? (() => randomUUID()), ...(deps.lang ? { lang: deps.lang } : {}) }
       await bindChat(chat, { root, planId: id, sessionId: session.sessionId })
       const child = await loadStoredPlan(root, id)
       const lines = child.tasks.map((task) => `• ${task.id} — ${task.title} (${task.status})`)

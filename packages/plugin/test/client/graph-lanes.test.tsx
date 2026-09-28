@@ -40,7 +40,7 @@ it('stacks live lanes first and folds every finished lane, the closed Decisions 
   expect(laneHeads(container)).toEqual(['Review', 'Busy', 'Quiet'])
   expect(screen.getByRole('button', { name: 'Expand lane Tiny' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Expand lane Old' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Expand lane Decisions' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Expand lane Open questions to you' })).toBeTruthy()
   expect(screen.queryByRole('button', { name: /^Old 0/ })).toBeNull()
 })
 

@@ -1,20 +1,26 @@
 import { mkdir, rename, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { deriveViews, isOwnWork } from '../plan/graph.js'
 import type { Plan, Task } from '../plan/schema.js'
 import { eventNote } from '../plan/notes.js'
 import { CREWBOARD_DIR, ExamplePlanError, currentPlanId, loadPlan, updatePlan } from '../plan/store.js'
 import type { Exec } from '../exec.js'
+import { nodeExec } from '../exec.js'
 import type { Backends } from './backends.js'
 import { getTaskDetail } from './detail.js'
 import type { LaunchResult } from './launch.js'
 import type { Verdict } from './verdict.js'
+import { claimOf, claimLineOf, requiredChecks } from './verdict.js'
+import { uncommittedCount } from '../worktree/merged.js'
+import { readCrewboardChecks } from '../runs/checks-run.js'
+import { readFile } from 'node:fs/promises'
 import { type RelaunchOptions, relaunchTask } from './relaunch.js'
 
 /**
  * The orchestrator's check of finished work (vr1): a finished task first goes to the plan's orchestrating
  * agent, and only its «checked» hands the task to the person. Agents may take, finish and return a check;
- * acceptance stays human-only (review.ts).
+ * routine accepted work may be closed by the orchestrator after the automatic gates pass (auto-close.ts).
  *
  * Root tasks and decisions (rt1) have no worker run: `start` takes a root task in work, and `verify --done`
  * is the orchestrator's «done» — the root task goes to review, the decision counts as prepared — with an
@@ -23,12 +29,76 @@ import { type RelaunchOptions, relaunchTask } from './relaunch.js'
 
 export class CheckError extends Error {
   constructor(
-    readonly code: 'unknown_task' | 'not_in_review' | 'no_note' | 'own_work' | 'not_root' | 'not_ready' | 'closed' | 'report_for_worker',
+    readonly code: 'unknown_task' | 'not_in_review' | 'no_note' | 'own_work' | 'not_root' | 'not_ready' | 'closed' | 'report_for_worker' | 'handoff_not_ready' | 'attestation_not_ready' | 'attestation_claim_mismatch',
     message: string,
   ) {
     super(message)
     this.name = 'CheckError'
   }
+}
+
+export type AttestationVerdict = 'result' | 'negative' | 'disputed'
+const attestationReportRef = (planId: string, taskId: string, runId: string) => `${CREWBOARD_DIR}/reports/${planId}/${taskId}-${runId}-attestation.md`
+
+/** Record a separate orchestrator judgement against the current completed run and observed worktree facts. */
+export async function attestResult(root: string, taskId: string, verdict: AttestationVerdict, report: string, note: string, now: Date, o: CheckOptions & { by: 'orchestrator' }): Promise<Task> {
+  if (!['result', 'negative', 'disputed'].includes(verdict)) throw new CheckError('attestation_not_ready', 'Unknown attestation verdict')
+  if (!note.trim() || !report.trim()) throw new CheckError('no_note', 'A report and a short attestation note are required')
+  const claimLine = claimLineOf(report)
+  const primaryClaim = claimLine ? claimLine.match(/^\s*(?:[-*+•]\s*)?(?:результат|result|ergebnis|résultat|resultat|resultado|risultato|wynik)\s*:\s*(.*)$/iu)?.[1]?.trim().split(/[\s.!?;,]/u, 1)[0]?.toLocaleLowerCase('ru') : undefined
+  const compatibleClaim = verdict === 'result' ? claimOf(claimLine) === 'result'
+    : verdict === 'negative' ? claimOf(claimLine) === 'negative' || claimOf(claimLine) === 'blocked'
+    : primaryClaim === 'disputed' || primaryClaim === 'спорный' || primaryClaim === 'спорно'
+  if (!compatibleClaim) throw new CheckError('attestation_claim_mismatch', `The report's primary Result claim does not match verdict=${verdict}`)
+  const planId = o.planId ?? currentPlanId(root)
+  const before = await loadPlan(root, planId)
+  const task = before.tasks.find((item) => item.id === taskId)
+  const run = task?.runs.at(-1)
+  const wt = task?.worktree?.path
+  if (!task || task.kind === 'root' || task.kind === 'decision' || before.tasks.find((item) => item.id === taskId)?.status !== 'in_review' || !run || run.outcome !== 'completed' || !run.finishedAt || !run.evidence || !wt || o.by !== 'orchestrator')
+    throw new CheckError('attestation_not_ready', `Only a completed worker run in review can be attested: ${taskId}`)
+  const contractPath = run.contractPath ?? task.contract
+  if (!contractPath) throw new CheckError('attestation_not_ready', 'The run has no identified contract path')
+  const contractAbs = resolve(root, contractPath)
+  const contractRel = relative(root, contractAbs)
+  if (!contractRel || contractRel.startsWith('..') || isAbsolute(contractRel)) throw new CheckError('attestation_not_ready', 'The run contract path must stay inside the repository')
+  const contract = await readFile(contractAbs, 'utf8').catch(() => undefined)
+  const revision = contract === undefined ? undefined : createHash('sha256').update(contract).digest('hex')
+  if (!contract || !revision) throw new CheckError('attestation_not_ready', 'The current contract revision cannot be identified')
+  const headResult = await nodeExec('git', ['-C', wt, 'rev-parse', 'HEAD'])
+  const head = headResult.code === 0 ? headResult.stdout.trim() : ''
+  if (!/^[a-f0-9]{40,64}$/.test(head)) throw new CheckError('attestation_not_ready', 'Cannot identify the current worktree HEAD')
+  if (verdict === 'result' && await uncommittedCount(wt, nodeExec) !== 0) throw new CheckError('attestation_not_ready', 'A positive attestation requires a clean committed worktree')
+  const required = requiredChecks(contract)
+  const assertReceipts = async () => {
+    if (verdict !== 'result' || required.length === 0) return
+    const receipts = await readCrewboardChecks(root, run.runId)
+    if (!receipts || receipts.runId !== run.runId || receipts.worktree !== wt || receipts.commit !== head || receipts.contractPath !== contractPath || receipts.contractRevision !== revision || receipts.checks.length !== required.length || receipts.checks.some((item, index) => item.command !== required[index] || item.exitCode !== 0 || item.timedOut))
+      throw new CheckError('attestation_not_ready', 'Positive attestation requires passing current receipts for every mandatory contract check')
+  }
+  await assertReceipts()
+  const storedProof = report.endsWith('\n') ? report : `${report}\n`
+  const proofHash = createHash('sha256').update(storedProof).digest('hex')
+  const reportHash = proofHash.slice(0, 16)
+  const ref = attestationReportRef(planId, taskId, run.runId).replace(/\.md$/, `-${reportHash}-${now.getTime()}-${randomUUID()}.md`)
+  await storeReport(root, ref, report)
+  const checkedAt = now.toISOString()
+  // Refresh every external fact directly before the plan CAS; earlier CLI checks may have gone stale.
+  const freshHead = await nodeExec('git', ['-C', wt, 'rev-parse', 'HEAD'])
+  const freshContract = await readFile(contractAbs, 'utf8').catch(() => undefined)
+  if (freshHead.code !== 0 || freshHead.stdout.trim() !== head || !freshContract || createHash('sha256').update(freshContract).digest('hex') !== revision || (verdict === 'result' && await uncommittedCount(wt, nodeExec) !== 0))
+    throw new CheckError('attestation_not_ready', 'HEAD, worktree cleanliness or contract changed during attestation')
+  await assertReceipts()
+  const saved = await updatePlan(root, (planValue) => {
+    const current = planValue.tasks.find((item) => item.id === taskId)
+    if (planValue.rev !== before.rev || !current || current.status !== 'in_review' || current.runs.at(-1)?.runId !== run.runId || current.runs.at(-1)?.outcome !== 'completed') throw new CheckError('attestation_not_ready', 'The plan or latest run changed during attestation')
+    const attestation = { verdict, report: ref, proofHash, by: 'orchestrator' as const, runId: run.runId, checkedAt, head, contractPath, contractRevision: revision }
+    current.resultAttestations ??= []
+    current.resultAttestations.push(attestation)
+    current.notes.push(eventNote(checkedAt, 'check', { kind: 'result_attested', verdict, report: ref, proofHash: attestation.proofHash, runId: run.runId, head, contractRevision: revision, by: 'orchestrator' }))
+    return planValue
+  }, 5, planId)
+  return saved.tasks.find((item) => item.id === taskId) as Task
 }
 
 type CheckOptions = { planId?: string; by?: string }
@@ -67,6 +137,7 @@ export function setTaskKind(task: Task, kind: Task['kind']): void {
 
 /** Where a root task's or a decision's report is kept, relative to the repository. */
 export const ownReportRef = (planId: string, taskId: string) => `${CREWBOARD_DIR}/reports/${planId}/${taskId}.md`
+const handoffReportRef = (planId: string, taskId: string, runId: string) => `${CREWBOARD_DIR}/reports/${planId}/${taskId}-${runId}-handoff.md`
 
 /** `crewboard start <id>`: the orchestrator takes a ready root task in work. Starting it again is a no-op. */
 export async function startOwnWork(root: string, taskId: string, now: Date, o: CheckOptions = {}): Promise<Task> {
@@ -161,6 +232,32 @@ export async function takeCheck(root: string, taskId: string, now: Date, o: Chec
   return writeCheck(root, taskId, now, o, 'checking')
 }
 
+/**
+ * An older run can finish with a report and preserved files but be marked incomplete solely because the
+ * runner asked for a worker commit or failed to extract a claim from a substantive answer. The orchestrator
+ * may take that preserved copy without launching a second worker. The run stays incomplete, and the check
+ * stays `checking`: neither completion nor human acceptance is implied. A positive orchestrator report,
+ * a clean committed copy and the normal gates are still required before closure.
+ */
+export async function takeUncommittedForCheck(root: string, taskId: string, note: string, now: Date, o: CheckOptions = {}): Promise<Task> {
+  if (!note.trim()) throw new CheckError('no_note', 'A reason for taking the copy is required / Нужна причина передачи копии оркестратору')
+  const saved = await updatePlan(root, (plan) => {
+    const view = viewOf(plan, taskId)
+    const task = view.task
+    const run = task.runs.at(-1)
+    if (view.status !== 'ready' || run?.outcome !== 'incomplete' || (run.incomplete?.reason !== 'left_uncommitted' && run.incomplete?.reason !== 'no_claim') || !run.evidence || !run.incomplete.uncommitted)
+      throw new CheckError('not_ready', `Task ${taskId} has no preserved incomplete run with uncommitted work to take / У задачи ${taskId} нет сохранённого незавершённого запуска с незакоммиченной работой`)
+    const at = now.toISOString()
+    task.status = 'in_review'
+    task.check = { state: 'checking', runId: run.runId, at, ...(o.by ? { by: o.by } : {}), note: note.trim() }
+    task.reviewIntervals ??= []
+    task.reviewIntervals.push({ id: `review:${run.runId}:${at}`, enteredAt: at, runId: run.runId, source: 'human', association: 'exact' })
+    task.notes.push(eventNote(at, 'check', { kind: 'check_taken', ...(o.by ? { by: o.by } : {}) }))
+    return plan
+  }, 5, o.planId)
+  return saved.tasks.find((task) => task.id === taskId) as Task
+}
+
 /** What `verify --done` shows before a worker's task goes to the person (B10): the verdict and the changed files. */
 export type DoneFacts = { verdict: Verdict; files: number; needsConfirm: boolean }
 
@@ -188,7 +285,28 @@ export async function finishCheck(root: string, taskId: string, note: string, no
   if (!note.trim()) throw new CheckError('no_note', 'A short summary of the check is required / Нужна короткая сводка проверки')
   const view = viewOf(await loadPlan(root, o.planId), taskId)
   if (isOwnWork(view.task.kind)) return finishOwnWork(root, taskId, note.trim(), now, o)
-  if (o.report !== undefined) throw new CheckError('report_for_worker', `Task ${taskId} is a worker's: its report is the worker's own final answer / Задача ${taskId} — работа воркера: её отчёт — финальный ответ воркера`)
+  if (o.report !== undefined) {
+    const task = view.task
+    const run = task.runs.at(-1)
+    const copy = task.worktree?.path
+    if (run?.outcome !== 'incomplete' || (run.incomplete?.reason !== 'left_uncommitted' && run.incomplete?.reason !== 'no_claim') || !run.evidence || !run.incomplete.uncommitted || task.check?.state !== 'checking' || task.check.runId !== run.runId || !copy)
+      throw new CheckError('report_for_worker', `Only a preserved uncommitted run can receive an orchestrator final report / Только сохранённый незакоммиченный запуск может получить итоговый отчёт оркестратора`)
+    if (claimOf(o.report) !== 'result' || await uncommittedCount(copy, nodeExec) !== 0)
+      throw new CheckError('handoff_not_ready', `A positive report and a clean committed copy are required / Нужны положительный отчёт и чистая закоммиченная копия`)
+    const head = await nodeExec('git', ['-C', copy, 'rev-parse', 'HEAD'])
+    if (head.code !== 0 || !/^[a-f0-9]{40,64}$/.test(head.stdout.trim())) throw new CheckError('handoff_not_ready', 'Cannot identify the checked commit / Не удалось определить проверенный коммит')
+    const planId = o.planId ?? currentPlanId(root)
+    const ref = handoffReportRef(planId, taskId, run.runId)
+    await storeReport(root, ref, o.report)
+    const saved = await updatePlan(root, (plan) => {
+      const current = reviewedTask(plan, taskId)
+      if (current.runs.at(-1)?.runId !== run.runId || current.check?.state !== 'checking') throw new CheckError('handoff_not_ready', 'The run changed during finalization / Запуск изменился во время завершения')
+      current.check = { state: 'checked', runId: run.runId, at: now.toISOString(), ...(o.by ? { by: o.by } : {}), note: note.trim(), report: ref, commit: head.stdout.trim() }
+      current.notes.push(eventNote(now.toISOString(), 'check', { kind: 'checked', ...(o.by ? { by: o.by } : {}), note: note.trim() }))
+      return plan
+    }, 5, o.planId)
+    return saved.tasks.find((task) => task.id === taskId) as Task
+  }
   return writeCheck(root, taskId, now, o, 'checked', note.trim())
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractUsd, runCost, summarizeCosts } from '../src/cost/cost.js'
+import { extractUsd, runCost, summarizeCosts, summarizeCostsBySlice } from '../src/cost/cost.js'
 
 describe('cost', () => {
   it('I2 leaves initialized CLI counters pending and retains observed cache writes', () => {
@@ -10,6 +10,19 @@ describe('cost', () => {
     const measured = runCost(run, [], { calls: 1, inputTokens: 22, outputTokens: 6453, cacheReadTokens: 960598, cacheWriteTokens: 182687, reasoningTokens: 0, observedAt: '2026-09-23T10:01:00Z' })
     expect(measured.tokens?.cacheWrite).toBe(182687)
     expect(measured.availability?.cacheWrite).toBe('known')
+  })
+  it('keeps cache-write totals absent when unsupported and marks mixed totals partial', () => {
+    const known = { runId: 'known', agent: 'worker', tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 7, reasoning: 0 } }
+    const knownAgain = { runId: 'known-again', agent: 'worker', tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 11, reasoning: 0 } }
+    const missing = { runId: 'missing', agent: 'worker', tokens: { input: 0, output: 0, cacheRead: 0, reasoning: 0 } }
+    expect(summarizeCosts([known])['worker']).toMatchObject({ tokens: { cacheWrite: 7 }, cacheWriteCoverage: { knownRuns: 1, partialRuns: 0, totalRuns: 1 } })
+    expect(summarizeCosts([known, knownAgain])['worker']?.tokens?.cacheWrite).toBe(18)
+    expect(summarizeCosts([missing])['worker']?.tokens).not.toHaveProperty('cacheWrite')
+    expect(summarizeCosts([known, missing])['worker']).toMatchObject({ tokens: { cacheWrite: 7 }, cacheWriteCoverage: { knownRuns: 1, partialRuns: 0, totalRuns: 2 } })
+    expect(summarizeCostsBySlice([known, missing], () => 'worker').worker).toMatchObject({ tokens: { cacheWrite: 7 }, cacheWriteCoverage: { knownRuns: 1, partialRuns: 0, totalRuns: 2 } })
+    const partlyObserved = { ...known, availability: { input: 'known' as const, output: 'known' as const, cacheRead: 'known' as const, cacheWrite: 'partial' as const, reasoning: 'known' as const, cash: 'unavailable' as const } }
+    expect(summarizeCosts([partlyObserved])['worker']).toMatchObject({ tokens: { cacheWrite: 7 }, cacheWriteCoverage: { knownRuns: 0, partialRuns: 1, totalRuns: 1 } })
+    expect(summarizeCosts([partlyObserved, missing])['worker']).toMatchObject({ tokens: { cacheWrite: 7 }, cacheWriteCoverage: { knownRuns: 0, partialRuns: 1, totalRuns: 2 } })
   })
   it('I5 keeps absent money absent for subscription runs', () => {
     const value = runCost({ runId: 'x', agent: 'codex/gpt-6-sol', startedAt: '2026-09-23T10:00:00Z' }, [])
@@ -62,6 +75,7 @@ describe('cost', () => {
     const pending = runCost(run, [], { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, reasoningTokens: 0, pending: true })
     expect(pending).toMatchObject({ pending: true })
     expect(pending.cashUsd).toBeUndefined()
+    expect(pending.availability?.cash).toBe('pending')
     const measuredZero = runCost(run, [], { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, reasoningTokens: 0, observedAt: '2026-09-23T10:00:00Z' })
     expect(measuredZero.availability?.input).toBe('known')
     expect(measuredZero.tokens?.input).toBe(0)
@@ -95,6 +109,39 @@ describe('cost', () => {
     const value = runCost({ runId: 'run_codex-reset', agent: 'codex/gpt-6-sol', startedAt: '2026-09-23T10:00:00Z', quotaBeforePct: 97, quotaAfterPct: 2 }, [])
     expect(value.quotaMeasurements?.[0]?.reset).toBe(true)
     expect(value.quotaDeltaPct).toBeUndefined()
+  })
+})
+
+describe('summarizeCostsBySlice (cs1)', () => {
+  it('groups by an arbitrary key and sums money, tokens and pending runs per slice', () => {
+    const slices = summarizeCostsBySlice(
+      [
+        { runId: 'a', agent: 'claude/opus', durationSec: 60, cashUsd: { value: 0.1, currency: 'USD', source: 'x' }, tokens: { input: 10, output: 2, cacheRead: 1, reasoning: 0 } },
+        { runId: 'b', agent: 'claude/opus', durationSec: 30, cashUsd: { value: 0.2, currency: 'USD', source: 'x' }, pending: true },
+        { runId: 'c', agent: 'codex/gpt-6-sol', durationSec: 15, apiEquivalentUsd: { value: 0.05, currency: 'USD', source: 'x' } },
+      ] as never,
+      (c) => c.agent,
+    )
+    expect(slices['claude/opus']).toMatchObject({ key: 'claude/opus', runs: 2, durationSec: 90, cashUsd: 0.3, pendingRuns: 1, tokens: { input: 10, output: 2, cacheRead: 1, reasoning: 0 } })
+    expect(slices['codex/gpt-6-sol']).toMatchObject({ runs: 1, durationSec: 15, apiEquivalentUsd: 0.05 })
+  })
+
+  // A 5-hour window and a weekly window are different scopes: their deltas must never be blended into one number.
+  it('keeps quota per window instead of summing across windows', () => {
+    const fiveHour = { sampleId: 's1', accountKey: 'acct', provider: 'claude', windowId: '5h', beforePct: 10, afterPct: 25, attribution: 'exclusive' as const }
+    const weekly = { sampleId: 's2', accountKey: 'acct', provider: 'claude', windowId: 'week', beforePct: 40, afterPct: 44, attribution: 'exclusive' as const }
+    const shared = { sampleId: 's3', accountKey: 'acct', provider: 'claude', windowId: '5h', beforePct: 5, afterPct: 90, attribution: 'shared' as const }
+    const resetSample = { sampleId: 's4', accountKey: 'acct', provider: 'claude', windowId: 'week', beforePct: 95, afterPct: 3, reset: true, attribution: 'exclusive' as const }
+    const a = runCost({ runId: 'run_a', agent: 'claude/opus', startedAt: '2026-09-25T10:00:00Z', quotaSamples: [fiveHour, weekly] }, [])
+    const b = runCost({ runId: 'run_b', agent: 'claude/opus', startedAt: '2026-09-25T11:00:00Z', quotaSamples: [shared, resetSample] }, [])
+    const slices = summarizeCostsBySlice([a, b], () => 'claude/opus')
+    expect(slices['claude/opus'].quotaWindows).toEqual(
+      expect.arrayContaining([
+        { provider: 'claude', accountKey: 'acct', windowId: '5h', deltaPct: 15 },
+        { provider: 'claude', accountKey: 'acct', windowId: 'week', deltaPct: 4 },
+      ]),
+    )
+    expect(slices['claude/opus'].quotaWindows).toHaveLength(2)
   })
 })
 

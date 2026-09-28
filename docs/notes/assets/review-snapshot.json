@@ -1,0 +1,3023 @@
+{
+  "snapshotAt": "2026-09-24T00:01:50Z",
+  "sourcePlanUpdatedAt": "2026-09-23T23:59:13.632Z",
+  "planRev": 787,
+  "planGoal": "Плагин dsh-orchestra: планы 1–2f",
+  "source": "../dsh-orchestra/.orchestration/plan.json + runs/*/{state.json,events.jsonl}",
+  "tasksTotal": 158,
+  "taskStatus": {
+    "accepted": 143,
+    "backlog": 4,
+    "superseded": 1,
+    "ready": 9,
+    "rejected": 1
+  },
+  "verdict": {
+    "legacy_unknown": 90,
+    "disputed": 37,
+    "result": 14,
+    "negative": 2
+  },
+  "runsTotal": 142,
+  "runningRuns": 2,
+  "firstRunAt": "2026-09-22T13:32:55.638Z",
+  "workerSeconds": 97173,
+  "quotaDeltaPctLegacy": 39,
+  "observedUsd": 2.468604,
+  "observedUsdRuns": 1,
+  "featured": [
+    {
+      "taskId": "rv5",
+      "taskTitle": "Итоги (Review): дизайн-предложение и прототип",
+      "runId": "run_codex-muerldjt0wji",
+      "worker": "codex/gpt-6-sol",
+      "status": "running",
+      "taskStatus": "ready",
+      "startedAt": "2026-09-23T23:59:13.624Z",
+      "finishedAt": null,
+      "attempt": 1,
+      "quotaDeltaPct": null,
+      "usdObserved": null,
+      "cashUsd": null,
+      "equivalentUsd": null,
+      "usageObserved": false,
+      "steps": [
+        {
+          "kind": "request",
+          "label": "Human request",
+          "at": "2026-09-23T23:59:13.691Z"
+        },
+        {
+          "kind": "problem",
+          "label": "warning",
+          "at": "2026-09-23T23:59:20.309Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T23:59:24.890Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:59:34.735Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:59:34.749Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:59:34.761Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:59:41.631Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:59:41.642Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T23:59:41.651Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:59:41.734Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:59:58.351Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T23:59:58.364Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:59:58.380Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:59:58.426Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-24T00:00:03.515Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-24T00:00:08.750Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-24T00:00:08.758Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-24T00:00:08.758Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-24T00:00:08.781Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-24T00:00:16.063Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-24T00:00:16.071Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-24T00:00:16.080Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-24T00:00:16.090Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-24T00:00:23.729Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-24T00:00:23.764Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-24T00:00:23.787Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-24T00:00:35.434Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-24T00:00:35.438Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-24T00:00:35.438Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-24T00:00:46.567Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-24T00:00:53.748Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-24T00:01:00.263Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-24T00:01:15.786Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-24T00:01:23.741Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-24T00:01:50.902Z"
+        }
+      ],
+      "totalShownSteps": 35
+    },
+    {
+      "taskId": "rn2",
+      "taskTitle": "Переименование в Crewboard: доделать (миграция, сборка, тесты)",
+      "runId": "run_codex-muerhxhah7da",
+      "worker": "codex/gpt-6-luna",
+      "status": "running",
+      "taskStatus": "ready",
+      "startedAt": "2026-09-23T23:56:32.830Z",
+      "finishedAt": null,
+      "attempt": 1,
+      "quotaDeltaPct": null,
+      "usdObserved": null,
+      "cashUsd": null,
+      "equivalentUsd": null,
+      "usageObserved": false,
+      "steps": [
+        {
+          "kind": "request",
+          "label": "Human request",
+          "at": "2026-09-23T23:56:32.860Z"
+        },
+        {
+          "kind": "problem",
+          "label": "warning",
+          "at": "2026-09-23T23:56:36.906Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T23:56:38.974Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:56:40.691Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:56:43.129Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:56:45.990Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T23:56:48.642Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:56:51.072Z"
+        },
+        {
+          "kind": "steer",
+          "label": "Steer / correction",
+          "at": "2026-09-23T23:56:52.670Z"
+        },
+        {
+          "kind": "request",
+          "label": "Human request",
+          "at": "2026-09-23T23:56:55.028Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T23:57:00.203Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:57:01.349Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:57:05.203Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:57:10.235Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:57:14.988Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T23:57:37.082Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T23:57:45.786Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T23:57:50.160Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T23:57:53.901Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T23:57:59.382Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T23:58:07.090Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T23:58:08.349Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:58:14.388Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:58:17.821Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T23:58:26.453Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T23:58:33.575Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T23:58:40.962Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T23:58:44.994Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T23:58:57.723Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T23:59:05.127Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T23:59:08.227Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T23:59:16.126Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T23:59:20.722Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:59:23.960Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:59:46.371Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-24T00:00:13.259Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-24T00:00:16.070Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-24T00:00:23.851Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-24T00:00:26.184Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-24T00:00:31.096Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-24T00:00:33.593Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-24T00:00:34.746Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-24T00:01:09.219Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-24T00:01:17.617Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-24T00:01:21.274Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-24T00:01:48.494Z"
+        }
+      ],
+      "totalShownSteps": 46
+    },
+    {
+      "taskId": "rn1",
+      "taskTitle": "Переименование в Crewboard",
+      "runId": "run_codex-muer9u64ugqu",
+      "worker": "codex/gpt-6-luna",
+      "status": "completed",
+      "taskStatus": "accepted",
+      "startedAt": "2026-09-23T23:50:15.292Z",
+      "finishedAt": "2026-09-23T23:55:10.409Z",
+      "attempt": 1,
+      "quotaDeltaPct": 1,
+      "usdObserved": null,
+      "cashUsd": null,
+      "equivalentUsd": null,
+      "usageObserved": true,
+      "steps": [
+        {
+          "kind": "request",
+          "label": "Human request",
+          "at": "2026-09-23T23:50:15.339Z"
+        },
+        {
+          "kind": "problem",
+          "label": "warning",
+          "at": "2026-09-23T23:50:19.734Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T23:50:23.631Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T23:50:25.182Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:50:33.280Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:50:48.527Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:50:59.040Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T23:51:08.420Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T23:51:10.469Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:51:18.335Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:51:40.909Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:51:45.929Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:51:48.190Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:52:10.543Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:52:15.410Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T23:52:20.074Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:52:35.859Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:52:53.738Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:52:56.512Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:53:30.500Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T23:53:33.306Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:53:47.605Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T23:53:56.400Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:54:08.246Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:54:19.086Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T23:54:47.765Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T23:55:01.143Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T23:55:07.702Z"
+        }
+      ],
+      "totalShownSteps": 28
+    },
+    {
+      "taskId": "rl1",
+      "taskTitle": "Релиз: исследование README, позиционирование, npm",
+      "runId": "run_codex-muep7i51xjv2",
+      "worker": "codex/gpt-6-sol",
+      "status": "completed",
+      "taskStatus": "accepted",
+      "startedAt": "2026-09-23T22:52:27.157Z",
+      "finishedAt": "2026-09-23T22:57:04.342Z",
+      "attempt": 1,
+      "quotaDeltaPct": 0,
+      "usdObserved": null,
+      "cashUsd": null,
+      "equivalentUsd": null,
+      "usageObserved": true,
+      "steps": [
+        {
+          "kind": "request",
+          "label": "Human request",
+          "at": "2026-09-23T22:52:27.201Z"
+        },
+        {
+          "kind": "problem",
+          "label": "warning",
+          "at": "2026-09-23T22:52:31.552Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T22:52:36.052Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:52:38.841Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:52:44.032Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:52:44.035Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:52:44.040Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:52:44.062Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:52:44.071Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:52:44.157Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T22:52:58.878Z"
+        },
+        {
+          "kind": "steer",
+          "label": "Steer / correction",
+          "at": "2026-09-23T22:53:33.895Z"
+        },
+        {
+          "kind": "request",
+          "label": "Human request",
+          "at": "2026-09-23T22:53:36.257Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T22:53:43.857Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T22:53:55.877Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:53:55.880Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:53:55.901Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T22:54:07.355Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T22:56:06.137Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:56:11.580Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T22:56:34.132Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:56:41.001Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T22:56:52.024Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:56:56.744Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T22:57:01.095Z"
+        }
+      ],
+      "totalShownSteps": 25
+    },
+    {
+      "taskId": "sb5",
+      "taskTitle": "Сайдбар в стиле Workspaces: папки, отступы, статус иконкой",
+      "runId": "run_devin-mueoxbhrinyk",
+      "worker": "devin",
+      "status": "completed",
+      "taskStatus": "accepted",
+      "startedAt": "2026-09-23T22:44:31.983Z",
+      "finishedAt": "2026-09-23T23:47:03.487Z",
+      "attempt": 1,
+      "quotaDeltaPct": null,
+      "usdObserved": null,
+      "cashUsd": null,
+      "equivalentUsd": null,
+      "usageObserved": true,
+      "steps": [
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T22:44:43.084Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:44:43.351Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:44:43.352Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:44:46.697Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:44:52.907Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:44:52.914Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T22:44:56.474Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:44:57.267Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:44:57.267Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:45:00.374Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T22:45:02.931Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:45:03.939Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:45:06.890Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:45:09.657Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T22:45:15.405Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:45:16.271Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:45:16.271Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:45:20.990Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:45:20.994Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:45:25.394Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T22:45:29.028Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:45:29.819Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T22:45:40.224Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:45:40.800Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:45:44.470Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:45:47.767Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:45:51.527Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:46:00.123Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T22:46:03.470Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:46:04.097Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:46:08.715Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:46:08.716Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T22:46:17.704Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:46:18.112Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T22:46:25.756Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:46:26.211Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:46:30.584Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:46:30.591Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:46:36.226Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:46:36.226Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:46:36.226Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T22:46:57.228Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:46:57.906Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:47:02.406Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T22:47:27.584Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:47:28.322Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:47:33.004Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T22:48:03.904Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:48:05.021Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:48:09.039Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:48:12.178Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:48:16.266Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T22:49:58.584Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:49:59.814Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:49:59.815Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:50:04.897Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:50:09.219Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:50:12.833Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:50:12.834Z"
+        },
+        {
+          "kind": "tool",
+          "label": "tool",
+          "at": "2026-09-23T22:50:16.299Z"
+        }
+      ],
+      "totalShownSteps": 381
+    },
+    {
+      "taskId": "or3",
+      "taskTitle": "orch run: воркер задачи, запреты машины, версия CLI",
+      "runId": "run_dsh-muenkznxz03u",
+      "worker": "dsh/deepseek-flash",
+      "status": "completed",
+      "taskStatus": "accepted",
+      "startedAt": "2026-09-23T22:06:57.165Z",
+      "finishedAt": "2026-09-23T22:16:00.062Z",
+      "attempt": 1,
+      "quotaDeltaPct": null,
+      "usdObserved": null,
+      "cashUsd": null,
+      "equivalentUsd": null,
+      "usageObserved": false,
+      "steps": [
+        {
+          "kind": "request",
+          "label": "Human request",
+          "at": "2026-09-23T22:06:58.580Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T22:07:00.253Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:07:00.253Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:07:00.396Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:01.952Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:07:01.964Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:03.799Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:03.799Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:03.799Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:03.799Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:05.597Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:05.597Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:05.597Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:05.597Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:07:07.169Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:07:07.280Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:09.127Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:09.127Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:10.610Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:12.073Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:12.073Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:07:13.914Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:07:14.103Z"
+        },
+        {
+          "kind": "tool",
+          "label": "grep",
+          "at": "2026-09-23T22:07:15.998Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:18.021Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:18.021Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:20.057Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:20.057Z"
+        },
+        {
+          "kind": "tool",
+          "label": "grep",
+          "at": "2026-09-23T22:07:21.697Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:23.453Z"
+        },
+        {
+          "kind": "check",
+          "label": "read",
+          "at": "2026-09-23T22:07:25.934Z"
+        },
+        {
+          "kind": "check",
+          "label": "read",
+          "at": "2026-09-23T22:07:25.934Z"
+        },
+        {
+          "kind": "check",
+          "label": "read",
+          "at": "2026-09-23T22:07:25.934Z"
+        },
+        {
+          "kind": "tool",
+          "label": "grep",
+          "at": "2026-09-23T22:07:36.840Z"
+        },
+        {
+          "kind": "tool",
+          "label": "grep",
+          "at": "2026-09-23T22:07:36.949Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:07:39.154Z"
+        },
+        {
+          "kind": "check",
+          "label": "read",
+          "at": "2026-09-23T22:07:39.317Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:07:41.055Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:43.078Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:43.078Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:43.078Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:47.264Z"
+        },
+        {
+          "kind": "check",
+          "label": "read",
+          "at": "2026-09-23T22:07:47.264Z"
+        },
+        {
+          "kind": "tool",
+          "label": "grep",
+          "at": "2026-09-23T22:07:49.291Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:07:49.305Z"
+        },
+        {
+          "kind": "tool",
+          "label": "grep",
+          "at": "2026-09-23T22:07:51.342Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:07:51.360Z"
+        },
+        {
+          "kind": "tool",
+          "label": "grep",
+          "at": "2026-09-23T22:07:58.655Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:07:58.695Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:08:02.321Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:08:04.306Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T22:08:06.225Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:08:08.685Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:08:08.685Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:08:08.685Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:08:10.595Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:08:10.595Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:08:12.261Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T22:08:12.261Z"
+        },
+        {
+          "kind": "check",
+          "label": "read",
+          "at": "2026-09-23T22:08:14.053Z"
+        }
+      ],
+      "totalShownSteps": 137
+    },
+    {
+      "taskId": "rvl",
+      "taskTitle": "Журнал запуска: листание, переход к шагу, клавиатура (I10)",
+      "runId": "run_codex-muelnf7zbvnf",
+      "worker": "codex/gpt-6-sol",
+      "status": "completed",
+      "taskStatus": "accepted",
+      "startedAt": "2026-09-23T21:12:51.407Z",
+      "finishedAt": "2026-09-23T21:32:26.655Z",
+      "attempt": 1,
+      "quotaDeltaPct": 1,
+      "usdObserved": null,
+      "cashUsd": null,
+      "equivalentUsd": null,
+      "usageObserved": true,
+      "steps": [
+        {
+          "kind": "request",
+          "label": "Human request",
+          "at": "2026-09-23T21:12:51.439Z"
+        },
+        {
+          "kind": "problem",
+          "label": "warning",
+          "at": "2026-09-23T21:12:55.102Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T21:12:59.062Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:13:02.049Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:13:02.050Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:13:02.050Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:13:07.727Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:13:07.731Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:13:07.737Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:13:07.807Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:13:24.411Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:13:24.437Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:13:24.438Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:13:24.438Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:13:24.502Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T21:13:28.059Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:13:32.353Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:13:32.363Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:13:32.373Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:13:32.374Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:13:32.376Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:13:41.345Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:13:41.397Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:13:41.397Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T21:13:47.301Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T21:13:58.854Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:14:02.311Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T21:14:14.592Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T21:14:25.494Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T21:14:31.934Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T21:14:42.294Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:15:14.417Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:15:25.374Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:15:28.685Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:15:28.686Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:15:34.621Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:15:40.454Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:15:42.499Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:15:48.047Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:15:51.617Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:15:51.625Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:15:51.625Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:16:06.045Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:16:06.048Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:16:12.815Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:16:24.244Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:16:28.177Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:16:41.637Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:16:44.942Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T21:16:54.270Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:16:58.301Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T21:17:11.173Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T21:17:24.492Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:17:30.853Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:17:30.866Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:17:30.910Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:17:30.944Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:17:49.457Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T21:17:53.573Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T21:17:56.912Z"
+        }
+      ],
+      "totalShownSteps": 170
+    },
+    {
+      "taskId": "nt1",
+      "taskTitle": "Уведомления: число во вкладке, точка на значке, браузерные",
+      "runId": "run_dsh-muel43kb2te3",
+      "worker": "dsh/deepseek-flash",
+      "status": "completed",
+      "taskStatus": "accepted",
+      "startedAt": "2026-09-23T20:57:49.835Z",
+      "finishedAt": "2026-09-23T21:12:09.736Z",
+      "attempt": 1,
+      "quotaDeltaPct": null,
+      "usdObserved": null,
+      "cashUsd": null,
+      "equivalentUsd": null,
+      "usageObserved": false,
+      "steps": [
+        {
+          "kind": "request",
+          "label": "Human request",
+          "at": "2026-09-23T20:57:51.096Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T20:57:52.672Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:57:52.672Z"
+        },
+        {
+          "kind": "tool",
+          "label": "glob",
+          "at": "2026-09-23T20:57:52.809Z"
+        },
+        {
+          "kind": "tool",
+          "label": "glob",
+          "at": "2026-09-23T20:57:52.855Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:57:54.370Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:57:54.482Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T20:57:56.190Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:57:56.303Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:57:57.806Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:57:57.806Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:57:59.400Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:57:59.400Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:58:01.469Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:58:01.469Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:58:03.227Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:58:03.227Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:58:05.231Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:58:05.246Z"
+        },
+        {
+          "kind": "check",
+          "label": "read",
+          "at": "2026-09-23T20:58:07.106Z"
+        },
+        {
+          "kind": "check",
+          "label": "read",
+          "at": "2026-09-23T20:58:07.106Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:58:09.151Z"
+        },
+        {
+          "kind": "check",
+          "label": "read",
+          "at": "2026-09-23T20:58:09.151Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:58:11.131Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:58:11.334Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:58:12.983Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:58:12.983Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:58:15.153Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:58:15.215Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:58:17.742Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:58:17.742Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:58:43.230Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:58:43.230Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:58:45.249Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:58:45.414Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T20:58:47.258Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:58:47.278Z"
+        },
+        {
+          "kind": "check",
+          "label": "read",
+          "at": "2026-09-23T20:58:49.863Z"
+        },
+        {
+          "kind": "check",
+          "label": "read",
+          "at": "2026-09-23T20:58:49.863Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T20:58:49.883Z"
+        },
+        {
+          "kind": "check",
+          "label": "read",
+          "at": "2026-09-23T20:58:51.926Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:58:54.174Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T20:58:54.281Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:59:26.737Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T20:59:26.977Z"
+        },
+        {
+          "kind": "check",
+          "label": "read",
+          "at": "2026-09-23T20:59:29.754Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T20:59:29.778Z"
+        },
+        {
+          "kind": "check",
+          "label": "read",
+          "at": "2026-09-23T20:59:32.384Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:59:32.409Z"
+        },
+        {
+          "kind": "check",
+          "label": "read",
+          "at": "2026-09-23T20:59:34.744Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:59:34.807Z"
+        },
+        {
+          "kind": "edit",
+          "label": "todo_write",
+          "at": "2026-09-23T20:59:38.010Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:00:06.642Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T21:00:07.266Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T21:00:36.849Z"
+        },
+        {
+          "kind": "edit",
+          "label": "write",
+          "at": "2026-09-23T21:00:36.849Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T21:00:43.754Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T21:00:46.166Z"
+        },
+        {
+          "kind": "tool",
+          "label": "read",
+          "at": "2026-09-23T21:00:48.100Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T21:00:50.308Z"
+        }
+      ],
+      "totalShownSteps": 200
+    },
+    {
+      "taskId": "rvf",
+      "taskTitle": "Итоги: исправить замечания ревью I1–I9",
+      "runId": "run_codex-mueka348r6ty",
+      "worker": "codex/gpt-6-sol",
+      "status": "completed",
+      "taskStatus": "accepted",
+      "startedAt": "2026-09-23T20:34:29.576Z",
+      "finishedAt": "2026-09-23T21:09:37.051Z",
+      "attempt": 1,
+      "quotaDeltaPct": 1,
+      "usdObserved": null,
+      "cashUsd": null,
+      "equivalentUsd": null,
+      "usageObserved": true,
+      "steps": [
+        {
+          "kind": "request",
+          "label": "Human request",
+          "at": "2026-09-23T20:34:29.612Z"
+        },
+        {
+          "kind": "problem",
+          "label": "warning",
+          "at": "2026-09-23T20:34:34.235Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T20:34:38.047Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:34:41.064Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T20:34:41.064Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:34:41.070Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:34:41.089Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T20:34:47.419Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T20:34:47.423Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:34:47.434Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:34:47.516Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T20:34:53.375Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:34:53.378Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:34:53.381Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:34:53.393Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:34:53.396Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T20:34:56.409Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:35:01.048Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:35:01.051Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:35:01.051Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:35:01.063Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:35:01.075Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:35:09.120Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:35:09.121Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:35:09.123Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:35:17.194Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T20:35:35.207Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T20:35:44.315Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:35:48.046Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T20:36:03.973Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:36:07.705Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T20:36:10.627Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T20:36:17.149Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T20:36:26.986Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T20:36:38.513Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:36:42.148Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T20:37:08.120Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T20:37:10.866Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:37:17.467Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T20:37:43.587Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T20:37:47.823Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T20:37:52.741Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T20:38:05.202Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:38:08.676Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:38:12.953Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T20:38:16.835Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T20:38:34.938Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T20:38:41.311Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T20:38:45.964Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T20:38:50.106Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T20:38:50.109Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T20:38:55.253Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T20:39:00.969Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T20:39:03.571Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T20:39:09.835Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T20:39:14.523Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T20:39:20.677Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T20:39:36.416Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T20:39:55.297Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T20:40:07.620Z"
+        }
+      ],
+      "totalShownSteps": 280
+    },
+    {
+      "taskId": "rvc",
+      "taskTitle": "Итоги: экран — блоки A–E, список с фильтрами",
+      "runId": "run_codex-mueb0ax7kcne",
+      "worker": "codex/gpt-6-sol",
+      "status": "completed",
+      "taskStatus": "accepted",
+      "startedAt": "2026-09-23T16:14:56.587Z",
+      "finishedAt": "2026-09-23T16:39:12.586Z",
+      "attempt": 1,
+      "quotaDeltaPct": 1,
+      "usdObserved": null,
+      "cashUsd": null,
+      "equivalentUsd": null,
+      "usageObserved": true,
+      "steps": [
+        {
+          "kind": "request",
+          "label": "Human request",
+          "at": "2026-09-23T16:14:56.617Z"
+        },
+        {
+          "kind": "problem",
+          "label": "warning",
+          "at": "2026-09-23T16:15:01.047Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T16:15:04.459Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:08.060Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:08.064Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:08.101Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:08.102Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:08.172Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:14.372Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:14.376Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:14.382Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:14.390Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:14.400Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:20.482Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:20.485Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:20.491Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:20.496Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:20.508Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:20.508Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T16:15:24.257Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:28.443Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:28.453Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:28.454Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T16:15:28.456Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:28.457Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:28.469Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:35.298Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:35.299Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T16:15:35.305Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:35.309Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:35.318Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:15:39.134Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:16:08.495Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:18:33.598Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T16:18:50.646Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:19:10.556Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:19:41.770Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T16:19:45.612Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T16:19:45.612Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:19:59.813Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T16:20:12.511Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T16:20:12.553Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T16:20:12.556Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T16:20:43.737Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:20:43.741Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:20:43.743Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:20:43.752Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T16:20:49.698Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:20:58.689Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T16:21:23.514Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:21:32.235Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T16:21:40.099Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:21:51.558Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T16:22:14.706Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T16:22:22.281Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T16:22:22.282Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T16:22:29.064Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T16:22:32.737Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T16:23:37.997Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T16:23:53.005Z"
+        }
+      ],
+      "totalShownSteps": 127
+    },
+    {
+      "taskId": "rva",
+      "taskTitle": "Итоги: данные — алиасы, исходы, доступность, деньги/квота, ожидание",
+      "runId": "run_codex-mue78vrcgu2q",
+      "worker": "codex/gpt-6-luna",
+      "status": "completed",
+      "taskStatus": "accepted",
+      "startedAt": "2026-09-23T14:29:38.376Z",
+      "finishedAt": "2026-09-23T15:36:01.651Z",
+      "attempt": 1,
+      "quotaDeltaPct": 1,
+      "usdObserved": null,
+      "cashUsd": null,
+      "equivalentUsd": null,
+      "usageObserved": true,
+      "steps": [
+        {
+          "kind": "request",
+          "label": "Human request",
+          "at": "2026-09-23T14:29:38.414Z"
+        },
+        {
+          "kind": "problem",
+          "label": "warning",
+          "at": "2026-09-23T14:29:43.075Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T14:29:46.701Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T14:29:47.960Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T14:30:02.918Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T14:30:21.019Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T14:30:24.105Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T14:30:33.985Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:30:36.118Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:31:01.025Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T14:31:14.976Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:31:57.692Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:32:06.872Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:32:37.763Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:32:44.595Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:32:47.148Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:32:54.723Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:32:54.977Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:32:59.772Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:33:06.074Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:33:16.745Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:33:47.334Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:33:50.422Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:34:14.399Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:34:14.616Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:34:32.643Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T14:34:48.713Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T14:34:54.638Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:34:54.682Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T14:35:22.579Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:35:22.608Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T14:35:40.018Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T14:35:54.114Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:36:07.815Z"
+        },
+        {
+          "kind": "model",
+          "label": "Model response",
+          "at": "2026-09-23T14:36:15.737Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:36:18.301Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:36:18.303Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:36:18.308Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:36:18.309Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:36:18.312Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:36:57.577Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:37:11.778Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:37:21.101Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:37:34.694Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T14:38:47.896Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:39:14.429Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:39:14.663Z"
+        },
+        {
+          "kind": "tool",
+          "label": "bash",
+          "at": "2026-09-23T14:39:38.069Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:39:52.034Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:39:52.367Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:40:07.977Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:40:08.193Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:40:24.649Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:40:24.903Z"
+        },
+        {
+          "kind": "edit",
+          "label": "edit",
+          "at": "2026-09-23T14:40:40.779Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:40:40.990Z"
+        },
+        {
+          "kind": "check",
+          "label": "bash",
+          "at": "2026-09-23T14:42:32.914Z"
+        },
+        {
+          "kind": "problem",
+          "label": "warning",
+          "at": "2026-09-23T14:58:02.650Z"
+        },
+        {
+          "kind": "problem",
+          "label": "warning",
+          "at": "2026-09-23T15:30:59.497Z"
+        },
+        {
+          "kind": "problem",
+          "label": "warning",
+          "at": "2026-09-23T15:34:01.004Z"
+        }
+      ],
+      "totalShownSteps": 65
+    }
+  ],
+  "featuredStepCounts": {
+    "request": 12,
+    "problem": 11,
+    "model": 48,
+    "tool": 303,
+    "check": 109,
+    "steer": 2,
+    "edit": 69
+  },
+  "limits": [
+    "Cash billing lives in separate DSH bill records, which are outside this raw run snapshot; no cash total is claimed here.",
+    "Legacy quota before/after is summed as recorded, without proof of exclusive account-window attribution.",
+    "Step strips are sampled from raw event types; tool subtype is a label-based approximation."
+  ]
+}

@@ -1,20 +1,25 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { API_PREFIX, type Attention, PANEL_ID, type OrchestraSnapshot } from '../shared/types.js'
-import { api } from './api.js'
-import { type AttentionEffects, createAttentionEffects, REVIEW_AUTOHIDE_MS, REVIEW_GROUP_MS, type ReviewItem, toastText } from './attention.js'
+import { type Attention, PANEL_ID, type OrchestraSnapshot } from '../shared/types.js'
+import { api, shared } from './api.js'
+import { countsAsAttention, needsYou, needsYouGroups, reviewReason } from '../../../core/src/orchestration/needs-you.js'
+import { type AttentionEffects, createAttentionEffects, openTarget, REVIEW_AUTOHIDE_MS, REVIEW_GROUP_MS, type ReviewItem, toastText } from './attention.js'
 import type { ClientContext } from './dsh.js'
-import { t, useLang } from './i18n.js'
+import { hostEvents } from './host-events.js'
+import { shellLabel, t, useLang } from './i18n.js'
 import { bindLayout, selectMainPanel } from './layout.js'
-import { acceptableTasks, repoName, snapshotWaiting, waitingRepositories } from './review.js'
+import { repoName, waitingRepositories, waitingTasks } from './review.js'
 import { orchestraStore } from './store.js'
 import { ensureStyles } from './styles.js'
+import { reasonsText, waitingOf } from './waiting.js'
 
 /**
- * In-app review notifications. One SSE listener per application — kept alive while the
- * Orchestra screen is closed, so a finished run pops a toast even inside a chat — and one
- * toast stack mounted straight into `document.body`. The same centre feeds the sidebar badge,
- * and the same SSE snapshot drives the tab title, the favicon dot and browser notifications.
+ * In-app review notifications, alive while the Orchestra screen is closed — a finished run pops a
+ * toast even inside a chat — with one toast stack mounted straight into `document.body`. The centre
+ * holds no stream of its own (a stream per tab for its whole life used up the browser's connections
+ * per host, 2026-09-25): it hears the snapshots of the screen's stream and, while that is not live,
+ * re-reads /state every {@link ATTENTION_POLL_MS}. The same snapshot feeds the sidebar badge, the tab
+ * title, the favicon dot and browser notifications.
  */
 
 export { REVIEW_AUTOHIDE_MS, REVIEW_GROUP_MS } from './attention.js'
@@ -23,9 +28,14 @@ export type { ReviewItem } from './attention.js'
 const SEEN_KEY = 'crewboard:review-seen'
 const SEEN_MAX = 400
 const MAX_TOASTS = 4
+/** How often the badge re-reads /state while the tab's stream is not live. */
+export const ATTENTION_POLL_MS = 25_000
 
 export type ReviewToast = { id: number; items: ReviewItem[]; touched: number }
-/** Everything waiting for the person, plus the failed runs the tab title counts alongside it. */
+/**
+ * `waiting` is the one waiting number (at2): the tab title and the sidebar icon show it as it is. `failed` only
+ * turns the favicon dot red; failed runs are already counted in `waiting`.
+ */
 export type ReviewState = { waiting: number; failed: number; locations: string; toasts: ReviewToast[] }
 
 export type ReviewCenter = {
@@ -38,13 +48,17 @@ export type ReviewCenter = {
   dismiss(id: number): void
 }
 
-/** Failed runs across the open plan and every background plan: the danger side of the favicon. */
+/**
+ * Real alarms across the open plan and every background plan, archived ones aside (ny1): the danger side of the
+ * favicon. A command merely running, or a short quiet spell, is information, not an alarm (st2, nt2) — the same
+ * `countsAsAttention` predicate `needsYou` uses, so the count that turns the icon red never disagrees with «Needs you».
+ */
 function snapshotFailed(snapshot: OrchestraSnapshot): number {
-  const failed = (items: Attention[] | undefined) => (items ?? []).filter((a) => a.kind === 'failed').length
+  const failed = (items: Attention[] | undefined) => (items ?? []).filter((a) => countsAsAttention(a) && a.severity === 'alert').length
   return snapshot.repos.reduce((total, repo) => {
     if (repo.example) return total
-    const background = (repo.plans ?? []).filter((plan) => !plan.current && !plan.example).reduce((n, plan) => n + failed(plan.attention), 0)
-    return total + failed(repo.attention) + background
+    const background = (repo.plans ?? []).filter((plan) => !plan.current && !plan.example && !plan.archived).reduce((n, plan) => n + failed(plan.attention), 0)
+    return total + (repo.archived ? 0 : failed(repo.attention)) + background
   }, 0)
 }
 
@@ -84,6 +98,7 @@ export function createReviewCenter(
   const known = new Map<string, Set<string>>()
   const currentPlan = new Map<string, string | undefined>()
   const background = new Map<string, number>()
+  const backgroundDecisions = new Map<string, number>()
 
   const emit = () => {
     for (const l of [...listeners]) l()
@@ -115,6 +130,7 @@ export function createReviewCenter(
       latest = snapshot
       const fresh: ReviewItem[] = []
       const nextBg = new Map<string, number>()
+      const nextDecisions = new Map<string, number>()
       for (const repo of snapshot.repos) {
         const firstSight = !known.has(repo.root)
         // Switching plans re-keys the whole task list — absorb it silently; a background plan's
@@ -122,7 +138,7 @@ export function createReviewCenter(
         const silent = !firstSight && currentPlan.get(repo.root) !== repo.planId
         const keys = new Set<string>()
         const items: ReviewItem[] = []
-        for (const task of repo.example ? [] : acceptableTasks(repo)) {
+        for (const task of waitingTasks(repo)) {
           const key = itemKey(repo.root, repo.planId, task)
           keys.add(key)
           items.push({
@@ -133,6 +149,8 @@ export function createReviewCenter(
             title: task.title,
             count: 1,
             decision: task.kind === 'decision' && task.status !== 'in_review',
+            reason: task.kind === 'decision' && task.status !== 'in_review' ? 'decision' : reviewReason(task),
+            ...(repo.goal ? { plan: repo.goal } : {}),
           })
         }
         if (!silent) {
@@ -145,18 +163,25 @@ export function createReviewCenter(
         known.set(repo.root, keys)
         currentPlan.set(repo.root, repo.planId)
         for (const plan of repo.plans ?? []) {
-          if (plan.current || plan.example) continue
+          if (plan.current || plan.example || plan.archived) continue
           const bgKey = `${repo.root}·${plan.id}`
           nextBg.set(bgKey, plan.waitingHuman)
+          nextDecisions.set(bgKey, plan.decisions ?? 0)
           const was = background.get(bgKey)
           // A plan's first appearance (or its return from the foreground) only re-baselines.
           if (was === undefined || firstSight) continue
           const delta = plan.waitingHuman - was
-          if (delta > 0) fresh.push({ key: `${bgKey}·${plan.inReview}`, root: repo.root, planId: plan.id, title: plan.goal, count: delta })
+          if (delta > 0) {
+            // What is new there, by reason: the decisions that appeared, the rest reviews.
+            const decision = Math.min(delta, Math.max(0, (plan.decisions ?? 0) - (backgroundDecisions.get(bgKey) ?? 0)))
+            fresh.push({ key: `${bgKey}·${plan.inReview}`, root: repo.root, planId: plan.id, title: plan.goal, plan: plan.goal, count: delta, reasons: { ...(delta - decision ? { review: delta - decision } : {}), ...(decision ? { decision } : {}) } })
+          }
         }
       }
       background.clear()
       nextBg.forEach((v, k) => { background.set(k, v) })
+      backgroundDecisions.clear()
+      nextDecisions.forEach((v, k) => { backgroundDecisions.set(k, v) })
 
       let toasts = state.toasts
       if (fresh.length > 0) {
@@ -168,18 +193,19 @@ export function createReviewCenter(
         }
         if (toasts.length > MAX_TOASTS) toasts = toasts.slice(-MAX_TOASTS)
       }
-      const locations = waitingRepositories(snapshot)
-        .filter(({ waiting }) => waiting > 0)
-        .map(({ repo, plans }) => `${repoName(repo.root)}: ${plans.map((plan) => `${plan.goal} (${plan.waitingHuman})`).join(', ') || `${repo.goal} (${acceptableTasks(repo).length})`}`)
+      // Where the work waits, one plan per part, in the words of «Needs you»: «app · Ship it: 6 tasks wait for review · 1 decision».
+      const locations = needsYouGroups(needsYou(snapshot.repos))
+        .filter((group) => !group.example)
+        .map((group) => `${repoName(group.root)}${group.title ? ` · ${group.title}` : ''}: ${reasonsText(group.reasons)}`)
         .join('; ')
-      set({ waiting: snapshotWaiting(snapshot), failed: snapshotFailed(snapshot), locations, toasts })
+      set({ waiting: waitingOf(snapshot).all, failed: snapshotFailed(snapshot), locations, toasts })
       opts.onFeed?.(state, fresh)
     },
 
     open(item) {
       opts.selectPanel?.(PANEL_ID)
       if (item) {
-        orchestraStore.openWaiting({ root: item.root, planId: item.planId, taskId: item.taskId })
+        orchestraStore.openWaiting({ root: item.root, planId: item.planId, taskId: item.taskId, ...(item.needs ? { queue: true } : {}) })
       } else {
         const target = waitingRepositories(latest).find(({ waiting }) => waiting > 0)
         orchestraStore.openFirstWaiting(target?.repo.root)
@@ -226,8 +252,7 @@ function Toast({ toast, center }: { toast: ReviewToast; center: ReviewCenter }) 
     timer.current = setTimeout(() => close.current(), left.current)
   }
   const open = () => {
-    const target = [...toast.items].reverse().find((i) => i.taskId) ?? toast.items[0]
-    center.open(target)
+    center.open(openTarget(toast.items))
     center.dismiss(toast.id)
   }
 
@@ -269,7 +294,9 @@ let attention: AttentionEffects | undefined
 let clientId: string | undefined
 const selectPanelRef: { current: ((key: string) => void) | undefined } = { current: undefined }
 let listening = false
-let stream: EventSource | undefined
+let unwatch: (() => void) | undefined
+let pollTimer: ReturnType<typeof setInterval> | undefined
+let polling = false
 let toastsRoot: Root | undefined
 let toastsHost: HTMLElement | undefined
 
@@ -289,7 +316,7 @@ function presenceClientId(): string {
 export function reviewCenter(): ReviewCenter {
   singleton ??= createReviewCenter({
     selectPanel: (key) => selectPanelRef.current?.(key),
-    onFeed: (state, fresh) => attention?.update(state.waiting + state.failed, state.failed, fresh),
+    onFeed: (state, fresh) => attention?.update(state.waiting, state.failed, fresh),
   })
   return singleton
 }
@@ -302,21 +329,25 @@ export function useReviewBadge(): { waiting: number; locations: string } {
   )
 }
 
-/** Name of the sidebar item — dsh calls `label` when it renders the entry. The waiting count lives on the badge only. */
+/**
+ * Name of the sidebar item — dsh calls `label` when it renders the entry, outside React and before our
+ * lazy dictionary may have landed (lb1); `shellLabel` never returns blank for it. The waiting count
+ * lives on the badge only.
+ */
 export function reviewBadgeLabel(): string {
-  return t('notify.badge')
+  return shellLabel('notify.badge')
 }
 
 /** Hover title of the sidebar icon: the count and where the waiting work is. */
 export function reviewBadgeTitle(): string {
   const { waiting, locations } = reviewCenter().getState()
-  return waiting > 0 ? t('notify.badgeWaiting', { n: waiting, locations }) : t('notify.badge')
+  return waiting > 0 ? t('notify.badgeWaiting', { n: waiting, locations }) : shellLabel('notify.badge')
 }
 
 /**
- * Wired once from `apply`: one SSE listener for the app's whole life, one toast root in
- * `document.body`, and the tab/favicon/browser-notification effects. All survive the Orchestra
- * screen being closed — that is the point.
+ * Wired once from `apply`: the snapshot feed (the screen's stream, else a /state poll), one toast
+ * root in `document.body`, and the tab/favicon/browser-notification effects. All survive the
+ * Orchestra screen being closed — that is the point.
  */
 export function startReviewCenter(ctx: ClientContext): void {
   bindLayout(ctx)
@@ -330,18 +361,40 @@ export function startReviewCenter(ctx: ClientContext): void {
       },
     })
     const current = center.getState()
-    attention.update(current.waiting + current.failed, current.failed, [])
+    attention.update(current.waiting, current.failed, [])
   }
-  if (!listening && typeof EventSource !== 'undefined') {
+  if (!listening) {
     listening = true
-    stream = new EventSource(`${API_PREFIX}/events`)
-    stream.addEventListener('snapshot', (event) => {
+    const feed = (snapshot: OrchestraSnapshot) => {
+      // A quick first paint (pf1) has no merge detection and no orchestrator check yet: the badge and the toasts
+      // wait for the full snapshot that follows, so nothing appears for a moment only to vanish.
+      if (snapshot.repos?.some((repo) => repo.partial)) return
       try {
-        center.feed(JSON.parse((event as MessageEvent<string>).data) as OrchestraSnapshot)
+        center.feed(snapshot)
       } catch {
-        /* a malformed frame must not kill the stream */
+        /* a malformed snapshot must not stop the badge */
       }
+    }
+    // Frames the screen's stream carries anyway; a malformed one is skipped.
+    unwatch = hostEvents.watch('snapshot', (frame) => {
+      if (frame.ok) feed(frame.data as OrchestraSnapshot)
     })
+    // No stream of its own: while nothing holds the tab's stream live, the badge re-reads /state.
+    const poll = () => {
+      if (polling || hostEvents.link() === 'live') return
+      polling = true
+      void shared
+        .state()
+        .then((result) => {
+          if (listening && result.ok) feed(result.value)
+        })
+        .catch(() => {})
+        .finally(() => {
+          polling = false
+        })
+    }
+    poll()
+    pollTimer = setInterval(poll, ATTENTION_POLL_MS)
   }
   if (!toastsRoot && typeof document !== 'undefined' && document.body) {
     ensureStyles()
@@ -362,8 +415,11 @@ export function resetReviewCenter(): void {
   clientId = undefined
   selectPanelRef.current = undefined
   listening = false
-  stream?.close()
-  stream = undefined
+  unwatch?.()
+  unwatch = undefined
+  clearInterval(pollTimer)
+  pollTimer = undefined
+  polling = false
   toastsRoot?.unmount()
   toastsRoot = undefined
   toastsHost?.remove()

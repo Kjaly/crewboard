@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 import { run } from './cli.js'
+import { guardEpipe } from './epipe.js'
 import { envLang, programOf } from './i18n.js'
 import { askLine } from './io.js'
+
+for (const stream of [process.stdout, process.stderr]) guardEpipe(stream, (code) => process.exit(code))
 
 const io = {
   cwd: process.cwd(),

@@ -21,7 +21,7 @@ describe('crewboard drop', () => {
   it('refuses an agent: without a terminal nothing changes', async () => {
     const { root, bot } = await setup()
     expect(await run(['drop', 'c', '--reason', 'not needed'], bot.io)).toBe(1)
-    expect(bot.err()).toContain('Only a human')
+    expect(bot.err()).toContain('if you are a person, run it in a terminal')
     expect((await loadPlan(root)).tasks.find((t) => t.id === 'c')?.status).toBe('ready')
   })
 

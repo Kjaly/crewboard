@@ -1,6 +1,7 @@
 import type { PlanCost, PlanRunCost, RepoSnapshot, ReviewCoverage } from '../../shared/types.js'
 import { reviewCoverage } from '../../shared/review-coverage.js'
 import { waitsForHuman } from '../../../../core/src/plan/graph.js'
+import { type NeedsYouReasons, needsYou as needsYouItems, needsYouReasons, reasonTotal } from '../../../../core/src/orchestration/needs-you.js'
 import { runDurationMs } from './review-index.js'
 
 /**
@@ -66,6 +67,20 @@ export function needsYou(repo: RepoSnapshot) {
   // Accepted, not merged (w1d): the work is still in its branch and the tasks that depend on it wait.
   const unmerged = repo.tasks.filter((task) => task.unmerged)
   return { waiting, failed, unmerged }
+}
+
+/**
+ * The open plan's share of the one waiting model (at2), by reason — the band's number and summary. The example
+ * plan's rows count here, on its own screen, though they count nowhere else (ui3).
+ */
+export function planWaiting(repo: RepoSnapshot): { count: number; reasons: NeedsYouReasons } {
+  const reasons: NeedsYouReasons = { review: 0, checkOff: 0, blocked: 0, decision: 0, failed: 0, stuck: 0, workerGone: 0, unmerged: 0 }
+  for (const item of needsYouItems([repo], { root: repo.root, planId: repo.planId })) {
+    if (item.background) continue
+    const weight = needsYouReasons(item)
+    for (const reason of Object.keys(reasons) as Array<keyof NeedsYouReasons>) reasons[reason] += weight[reason]
+  }
+  return { count: reasonTotal(reasons), reasons }
 }
 
 /** A measure is either observed (zero included), pending, not applicable, or simply unavailable. */

@@ -1,10 +1,11 @@
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { RunBackend } from '../src/backend/types.js'
 import { nodeExec } from '../src/exec.js'
 import type { Backends } from '../src/orchestration/backends.js'
+import { finishCheck, takeUncommittedForCheck } from '../src/orchestration/check.js'
 import { getTaskDetail } from '../src/orchestration/detail.js'
 import { LaunchError, launchTask } from '../src/orchestration/launch.js'
 import { needsYou } from '../src/orchestration/needs-you.js'
@@ -15,6 +16,8 @@ import { deriveViews } from '../src/plan/graph.js'
 import { newTask } from '../src/plan/schema.js'
 import { initPlan, loadPlan, updatePlan } from '../src/plan/store.js'
 import { mergeCommands } from '../src/plan/merge.js'
+import { setPlanArchived } from '../src/plan/plans.js'
+import { mergeTask } from '../src/worktree/merge-task.js'
 import { makeRepo } from './git-helpers.js'
 
 // w1d (B17): accepted work counts as done only once its branch is in the base branch. A dependent task waits
@@ -137,7 +140,7 @@ describe('merged state (w1d)', () => {
     await acceptTask(n.root, 'a', NOW, { kind: 'negative', why: 'negative', claim: 'negative', facts: [] })
     expect(await n.view('a')).toMatchObject({ status: 'closed' })
     expect(await n.view('a')).not.toHaveProperty('unmerged')
-    expect(await n.view('g')).toMatchObject({ status: 'ready' })
+    expect(await n.view('g')).toMatchObject({ status: 'blocked', blockedBy: ['a'] })
   })
 
   it('a branch gone together with its copy counts as merged', async () => {
@@ -229,6 +232,59 @@ describe('merged state (w1d)', () => {
     expect(await s.view('a')).toMatchObject({ unmerged: true })
   })
 
+  // hk1: a recovered incomplete run — checked by the orchestrator, committed, accepted, merged — keeps its
+  // positive verdict and its real changed files. The copy's merge-base with the moved-on base is the certified
+  // commit itself, so the live diff is empty: the merge commit's own diff is the file list, and commits the
+  // base gained between the run and the merge never enter it.
+  it('a recovered run accepted and merged keeps the verdict and the certified files', async () => {
+    const s = await setup()
+    const r = await s.launch('a')
+    const wt = r.worktree
+    // The worker leaves its work uncommitted; the run is preserved as incomplete with evidence on record.
+    await writeFile(join(wt.path, 'a.ts'), 'export const a = 2\n')
+    await writeFile(join(wt.path, 'b.ts'), 'export const b = 3\n')
+    const ref = `.orchestration/runs/${r.runId}/evidence.json`
+    await mkdir(join(s.root, '.orchestration', 'runs', r.runId), { recursive: true })
+    await writeFile(join(s.root, ref), JSON.stringify({
+      version: 1, runId: r.runId, worker: 'dsh', finalAnswerState: 'reported',
+      finalAnswer: 'Result: received\nworker answer', claimLine: 'Result: received',
+      files: [{ path: 'a.ts', added: 1, deleted: 0, status: 'A' }, { path: 'b.ts', added: 1, deleted: 0, status: 'A' }],
+      filesState: 'reported', checks: [], checksState: 'reported', uncommitted: 2, capturedAt: NOW.toISOString(),
+    }))
+    await updatePlan(s.root, (p) => {
+      const run = p.tasks.find((t) => t.id === 'a')!.runs[0]!
+      run.finishedAt = NOW.toISOString()
+      run.outcome = 'incomplete'
+      run.incomplete = { reason: 'left_uncommitted', uncommitted: 2 }
+      run.evidence = ref
+      return p
+    })
+    // The orchestrator takes the preserved copy, commits the work and finishes the check with a positive report.
+    await takeUncommittedForCheck(s.root, 'a', 'work preserved uncommitted', NOW, { by: 'orchestrator' })
+    await git(wt.path, 'add', '.')
+    await git(wt.path, 'commit', '-q', '-m', 'orchestrator commits the preserved work')
+    await finishCheck(s.root, 'a', 'committed and verified', NOW, { by: 'orchestrator', report: 'Result: received\n\n## Checks\n- [x] pnpm test' })
+
+    const before = await getTaskDetail(s.root, 'a', s.backends, nodeExec)
+    expect(before.verdict).toMatchObject({ kind: 'result', claim: 'result' })
+    expect(before.changedFiles).toEqual(['a.ts', 'b.ts'])
+
+    await acceptTask(s.root, 'a', NOW, before.verdict)
+    // The base gains a foreign commit between the run and the merge: it must not enter the file list.
+    await writeFile(join(s.root, 'foreign.ts'), 'export const f = 1\n')
+    await git(s.root, 'add', 'foreign.ts')
+    await git(s.root, 'commit', '-q', '-m', 'unrelated work on main')
+    const home = await mkdtemp(join(tmpdir(), 'orch-hk1-'))
+    const result = await mergeTask(s.root, 'a', { exec: nodeExec, now: () => NOW, policyPath: join(home, 'worktrees.json') })
+    expect(result).toMatchObject({ strategy: 'no-ff' })
+
+    const detail = await getTaskDetail(s.root, 'a', s.backends, nodeExec)
+    expect(detail.merged).toMatchObject({ into: 'main', mergeCommit: result.commit })
+    expect(detail.verdict).toMatchObject({ kind: 'result', claim: 'result' })
+    expect(detail.changedFiles).toEqual(['a.ts', 'b.ts'])
+    expect(detail.files?.map((file) => file.path)).toEqual(['a.ts', 'b.ts'])
+  })
+
   it('an accepted or closed dependent does not wait for a merge', async () => {
     const s = await setup()
     await acceptA(s, { commit: true })
@@ -254,6 +310,22 @@ describe('merged state (w1d)', () => {
     // A background plan counts its unmerged work in its row.
     const background = needsYou([{ ...snap, planId: 'other' }])
     expect(background.find((item) => item.background)).toMatchObject({ kind: 'plan', count: 1 })
+  })
+
+  it('an archived plan feeds no Needs you, even as the repository\'s only (current) plan (ny1)', async () => {
+    const s = await setup()
+    await acceptA(s, { commit: true })
+    await setPlanArchived(s.root, 'main', true)
+    const archived = await buildRepoSnapshot(s.root, s.backends, NOW)
+    expect(archived).toMatchObject({ planId: 'main', archived: true })
+    // The screen still shows the archived plan's tasks and states.
+    expect(archived.tasks.find((t) => t.id === 'a')).toMatchObject({ unmerged: true })
+    expect(needsYou([archived])).toEqual([])
+    expect(needsYou([archived], { root: s.root, planId: 'main' })).toEqual([])
+    await setPlanArchived(s.root, 'main', false)
+    const restored = await buildRepoSnapshot(s.root, s.backends, NOW)
+    expect(restored).not.toHaveProperty('archived')
+    expect(needsYou([restored]).map((item) => [item.kind, item.taskId])).toEqual([['unmerged', 'a']])
   })
 
   it('merge commands quote paths that need it', () => {

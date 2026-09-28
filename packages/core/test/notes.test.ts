@@ -12,7 +12,9 @@ describe('feed notes as events', () => {
 
   it('keeps the wording older readers match: steer audit prefixes and the outside-preset line', () => {
     expect(noteFallbackText({ kind: 'steer', delivery: 'refused', steerId: 's1', detail: 'completed', message: 'stop' })).toBe('refused [s1] (completed): stop')
-    expect(noteFallbackText({ kind: 'launched_outside_preset', worker: 'codex' })).toMatch(/^Launched by hand outside the preset “All workers”: codex$/)
+    // The prefix is what older readers match; the built-in preset is named for what it is (nb1).
+    expect(noteFallbackText({ kind: 'launched_outside_preset', worker: 'codex' })).toMatch(/^Launched by hand outside the preset “Default: workers that pass checks”: codex$/)
+    expect(noteFallbackText({ kind: 'worker_skipped', skipped: 'claude/opus', reason: 'not logged in', worker: 'codex/gpt-6-luna' })).toBe('claude/opus skipped: not logged in → codex/gpt-6-luna')
   })
 
   it('parses older text-only notes unchanged and round-trips an event', () => {
