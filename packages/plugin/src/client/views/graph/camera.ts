@@ -249,6 +249,11 @@ export function createCamera() {
     pose(): Pose {
       return { x: x.x, y: y.x, scale: sc.x, touched }
     },
+    /**
+     * The pose a lens returns to when it is switched off — position, zoom, and the reader's claim.
+     * A `speed` of zero (or less) means «no animation»: the pose lands at once with no target left for
+     * the frame loop. `response` is a spring duration, so stepping it at zero would divide by zero.
+     */
     restore(p: Pose, reduced: boolean, speed = LENS_RESPONSE): void {
       touched = p.touched
       response = speed
@@ -256,7 +261,7 @@ export function createCamera() {
       const l = limits()
       const nx = clamp(p.x, l.minX, l.maxX)
       const ny = clamp(p.y, l.minY, l.maxY)
-      if (reduced) {
+      if (reduced || speed <= 0) {
         snap(x, nx)
         snap(y, ny)
         snap(sc, p.scale)

@@ -376,6 +376,7 @@ function GraphViewImpl({ repo, workers, selectedId, onSelect, density, toggleDen
           // explicit task walk does win over the memory.
           if (remembered?.touched && !explicitLane && !revealing.current) {
             if (laneRef.current) laneServed.current = laneRef.current.seq
+            // `0` is «land at once»: returning to a plan must not fly the reader in from nowhere.
             requestAnimationFrame(() => camera.restore(remembered, reducedRef.current, 0))
             return
           }

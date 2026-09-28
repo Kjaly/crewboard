@@ -69,3 +69,31 @@ describe('trackpad scrolling', () => {
     expect(-c.viewBox().maxX * c.scale).toBeGreaterThan(-3000 * c.scale - 200)
   })
 })
+
+describe('pose restore', () => {
+  it('lands at once for a zero response instead of stepping a zero-length spring', () => {
+    const source = createCamera()
+    source.setViewport(1000, 600)
+    source.setContent({ minX: 0, minY: 0, maxX: 3000, maxY: 3000 })
+    source.centerOn(1500, 1500, true)
+    const pose = { ...source.pose(), touched: true }
+
+    const c = createCamera()
+    c.setViewport(1000, 600)
+    c.setContent({ minX: 0, minY: 0, maxX: 3000, maxY: 3000 })
+    c.restore(pose, false, 0)
+    // A zero duration means «land now»: every axis is placed and no target survives for the loop.
+    expect(c.pose()).toMatchObject({ x: pose.x, y: pose.y, scale: pose.scale, touched: true })
+    expect(c.transform()).not.toContain('NaN')
+    expect(c.step(1 / 60, false)).toBe(false)
+
+    // The camera is still a working camera: the next drag moves it.
+    const before = panX(c)
+    c.beginDrag(500, 300, 1000)
+    c.drag(560, 300, 1016)
+    expect(panX(c)).toBeCloseTo(before + 60, 5)
+    c.endDrag(false, 1016)
+    run(c)
+    expect(c.transform()).not.toContain('NaN')
+  })
+})

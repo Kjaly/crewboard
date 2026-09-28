@@ -4,12 +4,18 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { userEvent } from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TaskSnapshot } from '../../src/shared/types.js'
+import { resetSessionMemory } from '../../src/client/store.js'
 import { DETAIL_SCALE, LABEL_GUTTER, OVERVIEW_PADDING, createCamera, detailLevel, zoomFloor } from '../../src/client/views/graph/camera.js'
 import { GraphView } from '../../src/client/views/graph/index.js'
 import { LABEL_STEP, placeLaneLabels } from '../../src/client/views/graph/lane-labels.js'
 import { installMatchMedia, makeRepo, makeTask } from './helpers.js'
 
-beforeEach(() => setLang('en'))
+// A graph remembers a touched camera pose on unmount; without a reset the next test in this file
+// would restore that pose instead of the fresh-mount initial focus. Keep every fixture independent.
+beforeEach(() => {
+  setLang('en')
+  resetSessionMemory()
+})
 afterEach(() => cleanup())
 
 const viewport = { width: 1000, height: 600 }
@@ -145,12 +151,18 @@ describe('graph far view', () => {
   it('turns cards into state-coloured blocks, shows lane names and fades other edges below the threshold', async () => {
     installMatchMedia(true)
     const camera = createCamera()
+    // The nodes' passive effect fits the camera and a deferred frame then focuses the live task `b`.
+    // Capture that real call before render so the deliberate zoom below can wait for the initial
+    // framing to land instead of racing it and having the frame overwrite the zoom.
+    const initialFocus = vi.spyOn(camera, 'centerOn')
     const { container } = render(<GraphView repo={repo} selectedId={null} onSelect={() => {}} density="overview" camera={camera} />)
     const card = await screen.findByRole('button', { name: /Second task/ })
     const graph = container.querySelector('.orc-graph') as HTMLElement
     expect(graph.classList.contains('orc-graph--far')).toBe(false)
     expect(card.getAttribute('title')).toBeTruthy()
 
+    await waitFor(() => expect(initialFocus).toHaveBeenCalled())
+    initialFocus.mockRestore()
     act(() => camera.zoomAt(480, 300, 0.01))
     await waitFor(() => expect(graph.classList.contains('orc-graph--far')).toBe(true))
     // Same card, same place: the switch restyles, it never remounts or resizes anything.
@@ -173,8 +185,12 @@ describe('graph far view', () => {
     const camera = createCamera()
     const onSelect = vi.fn()
     const user = userEvent.setup()
+    const initialFocus = vi.spyOn(camera, 'centerOn')
     const { container } = render(<GraphView repo={repo} selectedId={null} onSelect={onSelect} density="overview" camera={camera} />)
     const card = await screen.findByRole('button', { name: /Second task/ })
+    // Same readiness as above: the initial framing must land before this deliberate zoom.
+    await waitFor(() => expect(initialFocus).toHaveBeenCalled())
+    initialFocus.mockRestore()
     act(() => camera.zoomAt(480, 300, 0.01))
     await waitFor(() => expect(card.getAttribute('title')).toBeNull())
 
