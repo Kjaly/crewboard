@@ -77,8 +77,11 @@ describe('«Запуск» block', () => {
   })
 
   it('shows why a copy stays and offers no removal', async () => {
+    const user = userEvent.setup()
     mount(makeTask({ id: 'a', status: 'running' }), { worktree: WORKTREE })
     await screen.findByRole('group', { name: 'Запуск' })
+    // A running task opens Activity by default; the copy state lives on Overview.
+    await user.click(screen.getByRole('tab', { name: 'Обзор' }))
     expect(await screen.findByText('задача выполняется')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Убрать копию' })).toBeNull()
   })

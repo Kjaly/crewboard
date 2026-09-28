@@ -774,12 +774,40 @@ const CSS = `
 .orc-feed__expand{margin-left:auto;transition:transform 150ms ease-out}
 .orc-feed__tools[open] .orc-feed__expand{transform:rotate(180deg)}
 .orc-feed__tools ul{margin:5px 0 0;padding:0;list-style:none;border-left:1px solid var(--orc-line)}
-.orc-feed__tools li{padding:2px 0 2px 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--orc-mono)}
+.orc-feed__tools li{padding:2px 0 2px 8px;overflow-wrap:anywhere;white-space:pre-wrap;font-family:var(--orc-mono)}
+.orc-feed__cmd{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;white-space:pre-wrap;font-family:var(--orc-mono)}
 .orc-ev{display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--orc-sep)}
 .orc-ev__time{flex:none;width:38px;color:var(--orc-fg3);font-variant-numeric:tabular-nums;font-style:normal}
 .orc-ev__kind{flex:none;width:14px;color:var(--orc-fg3);text-align:center}
-.orc-ev__text{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+.orc-ev__text{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
+.orc-ev__body{flex:1 1 auto;min-width:0}
+.orc-ev__role{display:inline-block;margin-bottom:1px;color:var(--orc-fg3);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.orc-ev__role--you{color:var(--orc-accent)}
+.orc-ev__line{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}
+.orc-feed .orc-ev--message .orc-ev__line,.orc-feed .orc-ev--final .orc-ev__line{color:var(--orc-fg)}
 .orc-ev--problem{color:var(--orc-error)}
+/* Motion carries the actual change: only a line appended to the live window enters. Retained history,
+   a tab switch and a detail refresh never replay. */
+.orc-ev--enter{animation:orc-ev-in 160ms cubic-bezier(.23,1,.32,1) both}
+@keyframes orc-ev-in{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.orc-ev--enter{animation:orc-ev-fade 120ms ease both}}
+@keyframes orc-ev-fade{from{opacity:0}to{opacity:1}}
+/* Live status and the catch-up control live in the panel's own scroll area and stay one compact line each. */
+.orc-live{min-width:0}
+.orc-live__status{position:sticky;top:0;z-index:2;display:flex;align-items:baseline;gap:6px;min-width:0;margin:0 -14px 6px;padding:6px 14px;border-bottom:1px solid var(--orc-hair);background:var(--orc-layer1);color:var(--orc-fg2);font:var(--dsw-font-xxs-12,12px/18px system-ui,sans-serif);transition:opacity 160ms cubic-bezier(.23,1,.32,1)}
+.orc-live__dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--orc-fg3);align-self:center}
+.orc-live__dot--live{background:var(--orc-accent-strong);animation:orc-live-pulse 1.6s ease-in-out infinite}
+.orc-live__label{flex:none;font-weight:600;color:var(--orc-fg)}
+.orc-live[data-phase="terminal"] .orc-live__label{color:var(--orc-fg2)}
+/* The current step stays one bounded line: the full command is in the feed row and in the title. */
+.orc-live__step{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--orc-mono);color:var(--orc-fg2)}
+.orc-live__report{flex:none}
+.orc-live__jump{position:sticky;bottom:0;z-index:2;display:block;margin:6px auto 0;padding:4px 10px;border:1px solid var(--orc-line);border-radius:999px;background:var(--orc-layer2);color:var(--orc-fg);font:var(--dsw-font-xxs-12,12px/18px system-ui,sans-serif);cursor:pointer;box-shadow:0 4px 14px #00000040}
+.orc-live__jump:hover{background:var(--orc-hover)}
+@keyframes orc-live-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.8)}}
+/* A hidden page has no one to show a pulse to; the color still says the run is live. */
+.orc-live[data-paused="true"] .orc-live__dot--live{animation-play-state:paused}
+@media (prefers-reduced-motion:reduce){.orc-live__dot--live{animation:none;opacity:1;transform:none}}
 .orc-list{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:2px}
 .orc-link{display:block;width:100%;text-align:left;min-height:24px;padding:3px 6px;border:0;border-radius:6px;background:transparent;color:var(--orc-fg2);font:inherit;cursor:pointer;overflow-wrap:anywhere}
 .orc-link:hover{background:var(--orc-hover);color:var(--orc-fg)}

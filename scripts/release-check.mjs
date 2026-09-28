@@ -15,9 +15,13 @@ const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
 // Re-measured after wave 2 (2026-09-25): crewboard 169.8 KiB → 179, dsh-crewboard 851.3 KiB → 894.
 // crewboard re-measured after rq1's grouped "no worker" refusal (2026-09-25): 180.6 KiB → 190.
 // crewboard re-measured after rb1's review fixes (2026-09-25): 190.5 KiB → 200.
-const TARBALL_CEILING_KIB = { cli: 200, plugin: 894 }
+// Re-measured after the 2026-09-28 merges (result attestation, API-only Claude policy, orchestrator usage):
+// crewboard 212.7 KiB → 224, dsh-crewboard 904.9 KiB → 951. The growth is implemented feature content the
+// per-bundle ceilings in packages/cli/test/build.test.ts and packages/plugin/test/build.test.ts already carry;
+// packing is unchanged (exact file sets, no sources/tests/node_modules, classic-zod and tree-shaking guards hold).
+const TARBALL_CEILING_KIB = { cli: 224, plugin: 951 }
 // The always-loaded client bundle: measured 296.0 KiB plus ~5% (2026-09-24, after opt2), as in the plugin build test.
-const CLIENT_CEILING_KIB = 352 // re-measured after wave 2 (2026-09-25): 334.8 KiB
+const CLIENT_CEILING_KIB = 352 // re-measured after wave 2 (2026-09-25): 334.8 KiB; 346.9 KiB on 2026-09-28, still under
 const temp = await mkdtemp(join(tmpdir(), 'crewboard-release-'))
 const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { cwd: root, stdio: 'inherit', ...opts })
 try {

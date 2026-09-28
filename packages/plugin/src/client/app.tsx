@@ -87,7 +87,7 @@ export function App() {
   }, [])
   const reviewShown = useRef<{ runId?: string; beside: boolean } | null>(null)
   const [steerDraft, setSteerDraft] = useState<{ taskId: string; text: string; seq: number } | null>(null)
-  const [panelTab, setPanelTab] = useState<{ tab: TabKey; seq: number } | null>(null)
+  const [panelTab, setPanelTab] = useState<{ tab: TabKey; taskId: string; repoRoot: string; planId: string; seq: number } | null>(null)
   const [plansOpen, setPlansOpen] = useState(readPlansOpen)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [presetOpen, setPresetOpen] = useState(0)
@@ -99,6 +99,11 @@ export function App() {
   const [draftsLoaded, setDraftsLoaded] = useState(false)
   const [draftId, setDraftId] = useState<string | null>(null)
   const [draftRefresh, setDraftRefresh] = useState(0)
+  // A tab request belongs to one repo + plan + task. Switching any of them retires it, so a same-id task
+  // in another plan can never inherit an old choice. Declared before the route effect, which sets the
+  // request for a fresh deep link.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: The repo/plan identity intentionally retires the request.
+  useEffect(() => { setPanelTab(null) }, [repo?.root, repo?.planId])
   // biome-ignore lint/correctness/useExhaustiveDependencies: The selected identity and request keys intentionally control this hook’s refresh cadence.
   useEffect(() => {
     if (!routeRequest || !repo || routeRequest.route.repo !== repo.root || routeRequest.route.plan !== (repo.planId ?? '_')) return
@@ -116,7 +121,7 @@ export function App() {
       })
       return
     }
-    if (route.task && route.tab) setPanelTab((old) => ({ tab: route.tab as TabKey, seq: (old?.seq ?? 0) + 1 }))
+    if (route.task && route.tab) setPanelTab((old) => ({ tab: route.tab as TabKey, taskId: route.task!, repoRoot: repo.root, planId: repo.planId ?? '', seq: (old?.seq ?? 0) + 1 }))
     if (!route.run || !route.task) return
     let live = true
     void shared.task(repo.root, route.task, taskVersion(repo, route.task)).then((result) => {
@@ -314,6 +319,8 @@ export function App() {
     select(id)
     if (id !== runTrace?.target.taskId) setRunTrace(null)
     if (id !== null) setQueueOpen(false)
+    // A tab request belongs to one task; changing the selection retires it instead of letting it linger.
+    setPanelTab((old) => (old && old.taskId !== id ? null : old))
   }
   // A chip row opens the panel on its task and flies the graph camera to it.
   const pickFromChip = (id: string) => {
@@ -323,7 +330,7 @@ export function App() {
   const openTask = (id: string, changes?: boolean) => {
     select(id)
     setQueueOpen(false)
-    if (changes) { setPanelTab((old) => ({ tab: 'changes', seq: (old?.seq ?? 0) + 1 })); orchestraStore.navigate({ task: id, tab: 'changes' }, 'replace') }
+    if (changes) { setPanelTab((old) => ({ tab: 'changes', taskId: id, repoRoot: repo.root, planId: repo.planId ?? '', seq: (old?.seq ?? 0) + 1 })); orchestraStore.navigate({ task: id, tab: 'changes' }, 'replace') }
   }
   const viewProps: ViewProps = { repo, workers: snapshot.workers, selectedId, onSelect: pick, density, lens, setLens, walk, lensStep: stepLens, toggleDensity, lane, setLane: focusLane, onLaneInView: setLaneInView }
   const showTaskMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
@@ -490,14 +497,14 @@ export function App() {
               onTabChange={(tab) => orchestraStore.navigate({ task: selected.id, tab }, 'replace')}
               {...(runTrace?.target.taskId === selected.id ? { runTraceRequest: runTrace } : {})}
               {...(steerDraft ? { steerDraft } : {})}
-              {...(panelTab ? { tabRequest: panelTab } : {})}
+              {...(panelTab && panelTab.taskId === selected.id && panelTab.repoRoot === repo.root && panelTab.planId === (repo.planId ?? '') ? { tabRequest: panelTab } : {})}
             />
           ) : null}
           </PartBoundary>
         </div>
       </div>
       {tourStep !== null && repo.example ? <Tour step={tourStep} onStep={moveTour} onClose={closeTour} /> : null}
-      {menu && !repo.example ? <TaskMenu key={`${menu.taskId}:${menu.x}:${menu.y}`} request={menu} repo={repo} workers={snapshot.workers} onClose={() => setMenu(null)} onSelect={pick} onTab={(tab) => setPanelTab((old) => ({ tab, seq: (old?.seq ?? 0) + 1 }))} onTrace={(known?: TaskDetail) => { const show = (detail: TaskDetail) => { const run = detail.runs.at(-1); if (run) setTrace({ taskId: detail.id, taskTitle: detail.title, run: { runId: run.runId, agent: run.agent, startedAt: run.startedAt, active: !run.finishedAt } }) }; if (known) show(known); else void shared.task(repo.root, menu.taskId, taskVersion(repo, menu.taskId)).then((result) => { if (result.ok) show(result.value) }) }} onGraph={() => { setView('graph'); pick(menu.taskId); setWalk((old) => ({ id: menu.taskId, seq: (old?.seq ?? 0) + 1 })) }} /> : null}
+      {menu && !repo.example ? <TaskMenu key={`${menu.taskId}:${menu.x}:${menu.y}`} request={menu} repo={repo} workers={snapshot.workers} onClose={() => setMenu(null)} onSelect={pick} onTab={(tab) => setPanelTab((old) => ({ tab, taskId: menu.taskId, repoRoot: repo.root, planId: repo.planId ?? '', seq: (old?.seq ?? 0) + 1 }))} onTrace={(known?: TaskDetail) => { const show = (detail: TaskDetail) => { const run = detail.runs.at(-1); if (run) setTrace({ taskId: detail.id, taskTitle: detail.title, run: { runId: run.runId, agent: run.agent, startedAt: run.startedAt, active: !run.finishedAt } }) }; if (known) show(known); else void shared.task(repo.root, menu.taskId, taskVersion(repo, menu.taskId)).then((result) => { if (result.ok) show(result.value) }) }} onGraph={() => { setView('graph'); pick(menu.taskId); setWalk((old) => ({ id: menu.taskId, seq: (old?.seq ?? 0) + 1 })) }} /> : null}
     </div>
   )
 }

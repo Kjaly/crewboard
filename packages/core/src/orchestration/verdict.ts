@@ -298,7 +298,15 @@ export function verdictOf(detail: Omit<TaskDetail, 'verdict'> | TaskDetail): Ver
     const duration = Math.max(0, Date.parse(run.finishedAt) - Date.parse(run.startedAt))
     if (Number.isFinite(duration)) facts.push({ code: 'duration', minutes: Math.round(duration / 60000), tone: 'flat' })
   }
-  const states = detail.workerClaimProjection?.checks.map((check) => check.state) ?? detail.evidence?.checks.map((check) => check.state) ?? (detail.contract ? requiredChecks(detail.contract.text).map((check) => checkState(report ?? '', check)) : [])
+  // A recognized handoff (an incomplete last run with an orchestrator report for its checked commit) makes that
+  // report the current check claim. The worker's own `not_run` lines stay in the immutable evidence and the
+  // read-time projection as history, but they are no longer shown as the current root's unrun checks; the contract's
+  // commands are read against the orchestrator's report. Without the handoff the worker's claim stays current, so an
+  // ordinary completed run is untouched.
+  const checkCommands = detail.contract ? requiredChecks(detail.contract.text) : detail.workerClaimProjection?.checks.map((check) => check.command) ?? detail.evidence?.checks.map((check) => check.command) ?? []
+  const states = handoff
+    ? checkCommands.map((check) => checkState(report ?? '', check, checkCommands))
+    : detail.workerClaimProjection?.checks.map((check) => check.state) ?? detail.evidence?.checks.map((check) => check.state) ?? checkCommands.map((check) => checkState(report ?? '', check))
   if (states.includes('run')) facts.push({ code: 'checks_run', count: states.filter((state) => state === 'run').length, tone: 'ok' })
   if (states.includes('not_run')) facts.push({ code: 'checks_not_run', count: states.filter((state) => state === 'not_run').length, tone: 'warn' })
   if (states.includes('unreported')) facts.push({ code: 'checks_unreported', count: states.filter((state) => state === 'unreported').length, tone: 'flat' })

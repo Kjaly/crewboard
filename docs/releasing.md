@@ -2,6 +2,10 @@
 
 Releases are published from `.github/workflows/release.yml` when a `v*` tag is pushed. The workflow runs the repository quality gates and `pnpm release:check`, then publishes `crewboard` and `dsh-crewboard` from their package directories. Package publication uses GitHub Actions OIDC trusted publishing and npm provenance.
 
+## Package size budgets
+
+`pnpm release:check` holds a ceiling for each packed tarball and for the plugin's always-loaded `lib/client.js`; the per-bundle ceilings live in `packages/*/test/build.test.ts`. Every number is the measured size plus about 5%, and exists so growth is a decision made on purpose rather than discovered in CI. When a real feature pushes a package over, pack both packages into an isolated temporary directory, confirm the new bytes are the feature and not duplication, a stale build or a mispacked test/source file, then move only the exceeded number and record the dated measurement and reason beside it in `scripts/release-check.mjs`. The 2026-09-28 rebaseline is recorded in [release tarball size notes](notes/2026-09-28-release-size.md).
+
 ## One-time npm setup
 
 A trusted publisher is configured in the settings of a package that already exists on npm, so the first version is published by hand; the workflow publishes every later tag. The workflow skips a package whose version is already on npm, so tagging the hand-published version still runs the checks and does not fail.

@@ -15,6 +15,8 @@ export function resolveTab(value: string | undefined): TabKey {
 }
 
 const EVENT_GLYPH: Record<string, string> = { action: '◎', file: '✎', message: '“', steer: '↻', problem: '⚠', final: '✓' }
+/** Who speaks a line: a worker's public report/message, or the person's own direction. Tools have no role. */
+const EVENT_ROLE: Partial<Record<string, 'agent' | 'you'>> = { message: 'agent', final: 'agent', steer: 'you' }
 const OUTCOME_LABEL: Record<string, string> = { get completed() { return t('panel.tabs.outcome.completed') }, get failed() { return t('panel.tabs.outcome.failed') }, get cancelled() { return t('panel.tabs.outcome.cancelled') } }
 const NOTE_LABEL: Record<string, string> = { get steer() { return t('panel.tabs.note.steer') }, get reject() { return t('panel.tabs.note.reject') }, get accept() { return t('panel.tabs.note.accept') }, get comment() { return t('panel.tabs.note.comment') }, get check() { return t('panel.tabs.note.check') } }
 type Event = TaskDetail['events'][number]
@@ -34,14 +36,23 @@ const groupLabel = (kind: Event['kind'], n: number) => {
   return t(kind === 'file' ? 'panel.tabs.fileCount' : 'panel.tabs.actionCount', { count: n })
 }
 
-/** New feed lines never animate: the feed is read while it moves. */
-export function FeedTab({ detail }: { detail: TaskDetail | null }) {
+/**
+ * The activity feed reads like a public agent conversation: worker messages in readable prose, a human
+ * direction set apart, commands and changed files grouped and compact. Only the events a run actually
+ * reported are shown — never a private reasoning stream.
+ *
+ * `freshFrom` (a rolling-window index) marks appended lines for the gentle entrance; retained history is
+ * never re-animated. `groupKeys` carries stable group identities so a rolling tail does not remount a
+ * group and drop an open disclosure.
+ */
+export function FeedTab({ detail, freshFrom, groupKeys }: { detail: TaskDetail | null; freshFrom?: number; groupKeys?: readonly string[] }) {
   useLang()
   if (!detail) return <p className="orc-meta">{t('panel.tabs.feedLoading')}</p>
+  const runs = detail.runs ?? []
   // The orchestrator's own work (rt1) has no run to follow: its account is the report in the overview.
-  if (detail.kind === 'root' && detail.runs.length === 0) return <p className="orc-meta">{t('panel.tabs.ownWork')}</p>
-  if (detail.kind === 'decision' && detail.runs.length === 0) {
-    const accepted = detail.notes.filter((n) => n.type === 'accept').at(-1)
+  if (detail.kind === 'root' && runs.length === 0) return <p className="orc-meta">{t('panel.tabs.ownWork')}</p>
+  if (detail.kind === 'decision' && runs.length === 0) {
+    const accepted = (detail.notes ?? []).filter((n) => n.type === 'accept').at(-1)
     return (
       <p className="orc-meta">
         {t('panel.tabs.humanDecision')}
@@ -51,26 +62,40 @@ export function FeedTab({ detail }: { detail: TaskDetail | null }) {
     )
   }
   // A finished run with no events here did work all the same (B12): its steps are in the run ledger.
-  if (detail.events.length === 0) return <p className="orc-meta">{t(detail.runs.at(-1)?.finishedAt ? 'panel.tabs.noEventsFinished' : 'panel.tabs.noEvents')}</p>
+  const events = detail.events ?? []
+  if (events.length === 0) return <p className="orc-meta">{t(detail.runs?.at(-1)?.finishedAt ? 'panel.tabs.noEventsFinished' : 'panel.tabs.noEvents')}</p>
+  const groups = groupEvents(events)
+  const fresh = (index: number) => freshFrom !== undefined && index >= freshFrom
+  let cursor = 0
   return (
     <ul className="orc-feed">
-      {groupEvents(detail.events).map((group, i) => (
-        <li key={`${group.ts}-${i}`} className={`orc-ev orc-ev--${group.kind}`}>
-          <time className="orc-ev__time" dateTime={group.ts}>{clock(group.ts)}</time>
-          <span className="orc-ev__kind" aria-hidden="true">{EVENT_GLYPH[group.kind] ?? '·'}</span>
-          {(group.kind === 'action' || group.kind === 'file') && group.events.length > 1 ? (
-            <details className="orc-feed__tools">
-              <summary>
-                <span className="orc-feed__tool-label">{groupLabel(group.kind, group.events.length)}</span>
-                <span className="orc-feed__expand" aria-hidden="true">⌄</span>
-              </summary>
-              <ul>{group.events.map((event, j) => <li key={j} title={event.text}>{event.text}</li>)}</ul>
-            </details>
-          ) : group.kind === 'action' || group.kind === 'file' ? (
-            <span className="orc-feed__tool-label" title={group.events[0]?.text}>{group.events[0]?.text}</span>
-          ) : <span className="orc-ev__text">{group.kind === 'steer' ? <strong>{t('panel.tabs.yourSteer')} · </strong> : null}{group.events[0] ? eventText(group.events[0]) : null}</span>}
-        </li>
-      ))}
+      {groups.map((group, i) => {
+        const start = cursor
+        cursor += group.events.length
+        const tools = group.kind === 'action' || group.kind === 'file'
+        return (
+          <li key={groupKeys?.[i] ?? `${group.ts}-${i}`} className={`orc-ev orc-ev--${group.kind}${fresh(start) ? ' orc-ev--enter' : ''}`}>
+            <time className="orc-ev__time" dateTime={group.ts}>{clock(group.ts)}</time>
+            <span className="orc-ev__kind" aria-hidden="true">{EVENT_GLYPH[group.kind] ?? '·'}</span>
+            {tools && group.events.length > 1 ? (
+              <details className="orc-feed__tools">
+                <summary>
+                  <span className="orc-feed__tool-label">{groupLabel(group.kind, group.events.length)}</span>
+                  <span className="orc-feed__expand" aria-hidden="true">⌄</span>
+                </summary>
+                <ul>{group.events.map((event, j) => <li key={`${event.ts}-${j}`} className={fresh(start + j) ? 'orc-ev--enter' : undefined} title={event.text}>{event.text}</li>)}</ul>
+              </details>
+            ) : tools ? (
+              <code className="orc-feed__cmd" title={group.events[0]?.text}>{group.events[0]?.text}</code>
+            ) : (
+              <div className="orc-ev__body">
+                {EVENT_ROLE[group.kind] ? <span className={`orc-ev__role${EVENT_ROLE[group.kind] === 'you' ? ' orc-ev__role--you' : ''}`}>{t(EVENT_ROLE[group.kind] === 'you' ? 'panel.activity.roleYou' : 'panel.activity.roleAgent')}</span> : null}
+                <p className="orc-ev__line">{group.events[0] ? eventText(group.events[0]) : null}</p>
+              </div>
+            )}
+          </li>
+        )
+      })}
     </ul>
   )
 }
@@ -225,7 +250,7 @@ export function NotesTab({ detail }: { detail: TaskDetail | null }) {
   if (!detail) return <p className="orc-meta">{t('panel.tabs.notesLoading')}</p>
   // Corrections with a lifecycle record are listed under Corrections; their audit notes would repeat them.
   const tracked = (detail.steers?.length ?? 0) > 0
-  const notes = tracked ? detail.notes.filter((note) => note.type !== 'steer' && !(note.type === 'comment' && (note.event?.kind === 'steer' || /^(delivered|failed|refused|abandoned)\b/.test(note.text)))) : detail.notes
+  const notes = (tracked ? detail.notes?.filter((note) => note.type !== 'steer' && !(note.type === 'comment' && (note.event?.kind === 'steer' || /^(delivered|failed|refused|abandoned)\b/.test(note.text)))) : detail.notes) ?? []
   if (notes.length === 0) return <p className="orc-meta">{t('panel.tabs.noNotes')}</p>
   return (
     <ul className="orc-list" aria-label={t('panel.tabs.notesLabel')}>

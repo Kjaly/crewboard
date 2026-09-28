@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Attention, OrchestraRepoSnapshot, TaskDetail, TaskSnapshot, VerdictFact, WorkerInfo } from '../../shared/types.js'
 import { useAction } from '../actions.js'
 import { api, shared, taskVersion } from '../api.js'
@@ -13,7 +13,8 @@ import { incompleteText, nowPhrase, sinceLabel } from '../summary.js'
 import { workerName } from '../preset-picker.js'
 import { isHandPicked, workerChoiceOf, workerOptions } from '../workers.js'
 import { ReportCard } from './report.js'
-import { ChangesTab, ContractTab, FeedTab, LinksTab, NotesTab, OlderRunActivity, resolveTab, type TabKey } from './tabs.js'
+import { ChangesTab, ContractTab, LinksTab, NotesTab, OlderRunActivity, resolveTab, type TabKey } from './tabs.js'
+import { LiveActivity } from './live-activity.js'
 import type { TraceTarget } from './trace.js'
 import { RunTracePanel } from './run-trace-panel.js'
 import { VendorMark } from '../vendor-mark.js'
@@ -42,6 +43,14 @@ export const shortPath = (p: string): string => {
 }
 
 export const dependencyChips = (deps: string[]) => ({ shown: deps.slice(0, 2), remaining: Math.max(0, deps.length - 2) })
+
+/**
+ * What a freshly opened task shows: Activity while an ordinary worker run is live, Overview otherwise.
+ * The orchestrator's own work and a human decision have no run feed, so they stay on Overview.
+ */
+export function taskDefaultTab(task: Pick<TaskSnapshot, 'status' | 'kind'>): TabKey {
+  return task.status === 'running' && task.kind !== 'root' && task.kind !== 'decision' ? 'activity' : 'overview'
+}
 
 type Launch = { agent: string; at: string; worktree?: { path: string; branch: string } }
 
@@ -134,16 +143,23 @@ export function TaskPanel({
   onTrace?(target: TraceTarget): void
   /** A correction started in the trace. `seq` makes a repeat click land again. */
   steerDraft?: { taskId: string; text: string; seq: number }
-  /** The queue can request a tab; `seq` lets the same request land twice. */
-  tabRequest?: { tab: string; seq: number }
+  /** The queue can request a tab; `seq` lets the same request land twice and `taskId` scopes it to one task. */
+  tabRequest?: { tab: string; seq: number; taskId?: string }
   runTraceRequest?: { target: TraceTarget; seq: number }
   onTabChange?(tab: TabKey): void
 }) {
-  const [detail, setDetail] = useState<TaskDetail | null>(null)
+  /** Detail is scoped to repo + plan + task: a same-id task in another plan never shows foreign data. */
+  const taskScope = `${repo.root}:${repo.planId ?? ''}:${task.id}`
+  const [detailState, setDetailState] = useState<{ scope: string; value: TaskDetail } | null>(null)
+  const detail = detailState?.scope === taskScope ? detailState.value : null
   /** A failed detail read blocks acceptance until the contract and evidence can be loaded again. */
   const [detailFailed, setDetailFailed] = useState(false)
   const [detailRetry, setDetailRetry] = useState(0)
-  const [tab, setTab] = useState<TabKey>('overview')
+  const [tab, setTab] = useState<TabKey>(() => taskDefaultTab(task))
+  /** A pinned tab is an explicit choice (click, URL, queue, menu, trace) and survives snapshots and completion. */
+  const [tabPinned, setTabPinned] = useState(false)
+  /** The panel's own scroll container: the live feed follows it instead of creating a second viewport. */
+  const liveScroll = useRef<HTMLDivElement>(null)
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [panelTrace, setPanelTrace] = useState<TraceTarget | null>(null)
   const [form, setForm] = useState<'none' | 'steer' | 'reject' | 'unchecked' | 'markMerged' | 'dirty'>('none')
@@ -215,19 +231,42 @@ export function TaskPanel({
     setBaseNotice(null)
     setBaseDriftCopied(false)
     setSelectedRunId(null)
-    setTab('overview')
     setCandidate(null)
     setCopiesLoaded(false)
     setCopyRemoved(false)
     setCopyError('')
     setReportJump(null)
     setPanelTrace(null)
-  }, [task.id])
+  }, [repo.root, repo.planId, task.id])
+
+  /**
+   * The default-tab policy. A fresh task (or plan) applies it and unpins; a ready task that starts later
+   * opens Activity. A same-task snapshot never moves the tab, so completion keeps whatever the person reads
+   * and a pinned choice is never stolen.
+   */
+  const seenTask = useRef<{ key: string; running: boolean } | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: The task identity, its running state and the pinned choice decide this policy.
+  useEffect(() => {
+    const previous = seenTask.current
+    const fresh = !previous || previous.key !== taskScope
+    const running = task.status === 'running'
+    if (fresh) {
+      setTabPinned(false)
+      setTab(taskDefaultTab(task))
+    } else if (!tabPinned && running && !previous.running) {
+      setTab('activity')
+    }
+    seenTask.current = { key: taskScope, running }
+  }, [taskScope, task.status, task.kind, tabPinned])
+
+  // An accepted launch opens Activity at once, before the snapshot reports the run.
+  useEffect(() => {
+    if (launched && !tabPinned) setTab('activity')
+  }, [launched, tabPinned])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: The listed key intentionally triggers a refresh when its underlying data changes.
   useEffect(() => {
     let alive = true
-    setDetail(null)
     setCopiesLoaded(false)
     void shared.worktrees(repo.root, String(repo.rev)).then((r) => {
       if (!alive) return
@@ -245,22 +284,29 @@ export function TaskPanel({
     setSteerOutcome(null)
   }, [steerDraft?.seq, steerDraft?.taskId, task.id])
 
-  // An outside request opens the named tab once per request.
+  // An outside request opens the named tab once per request. A request scoped to another task is stale
+  // and never applies; an applied request is an explicit choice, so it pins the tab.
   // biome-ignore lint/correctness/useExhaustiveDependencies: The selected identity and request keys intentionally control this hook’s refresh cadence.
   useEffect(() => {
-    if (tabRequest) setTab(resolveTab(tabRequest.tab))
-  }, [tabRequest?.seq, tabRequest?.tab])
+    if (!tabRequest) return
+    if (tabRequest.taskId && tabRequest.taskId !== task.id) return
+    setTab(resolveTab(tabRequest.tab))
+    setTabPinned(true)
+  }, [tabRequest?.seq, tabRequest?.taskId, tabRequest?.tab, task.id])
   // biome-ignore lint/correctness/useExhaustiveDependencies: The selected identity and request keys intentionally control this hook’s refresh cadence.
   useEffect(() => {
     if (runTraceRequest?.target.taskId !== task.id) return
     setPanelTrace(runTraceRequest.target)
     setTab('activity')
+    setTabPinned(true)
   }, [runTraceRequest?.seq, task.id])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: The selected identity and request keys intentionally control this hook’s refresh cadence.
   useEffect(() => {
     let alive = true
-    setDetail(null)
+    // A same-scope refresh (poll, status move, completion) keeps the loaded detail: remounting the feed would
+    // drop scroll, open tools and expanded groups. A task in another repo/plan never reuses it.
+    setDetailState((current) => (current && current.scope === taskScope ? current : null))
     setDetailFailed(false)
     // The first read is shared with the other readers of this task (pf1); a running task's feed then asks every 2 s,
     // since the host does not follow a live run's steps.
@@ -268,17 +314,21 @@ export function TaskPanel({
     const refresh = (first: boolean) => { void (first ? shared.task : shared.taskReload)(repo.root, task.id, version)
       .then((r) => {
         if (!alive) return
-        setDetail(r.ok ? r.value : null)
+        if (r.ok) setDetailState({ scope: taskScope, value: r.value })
         setDetailFailed(!r.ok)
       })
-      .catch(() => { if (alive) { setDetail(null); setDetailFailed(true) } }) }
+      .catch(() => { if (alive) setDetailFailed(true) }) }
     refresh(detailRetry === 0)
-    const timer = task.status === 'running' ? setInterval(() => refresh(false), 2000) : undefined
+    // A hidden tab does not need the two-second feed tick; it resumes when the page is visible again.
+    const timer = task.status === 'running' ? setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      refresh(false)
+    }, 2000) : undefined
     return () => {
       alive = false
       if (timer) clearInterval(timer)
     }
-  }, [repo.root, task.id, freshness, detailRetry])
+  }, [taskScope, freshness, detailRetry])
 
   const after = async (ok: boolean) => {
     if (!ok) return
@@ -318,7 +368,7 @@ export function TaskPanel({
   // The answer is the task's detail with the new record: the snapshot does not change, so nothing else refreshes it (ck1).
   const runChecks = () => void checksAction.call(async () => {
     const r = await api.runChecks(repo.root, task.id)
-    if (r.ok) setDetail(r.value)
+    if (r.ok) setDetailState({ scope: taskScope, value: r.value })
     return r
   })
   const attempt = task.status === 'running' ? undefined : task.lastAttempt
@@ -340,7 +390,7 @@ export function TaskPanel({
   const tabs: Array<{ key: TabKey; label: string }> = [
     { key: 'overview', label: t('panel.task.tab.overview') },
     { key: 'activity', label: t('panel.task.tab.activity') },
-    { key: 'changes', label: detail?.changedFiles.length ? t('panel.task.tab.changesCount', { count: detail.changedFiles.length }) : t('panel.task.tab.changes') },
+    { key: 'changes', label: detail?.changedFiles?.length ? t('panel.task.tab.changesCount', { count: detail.changedFiles.length }) : t('panel.task.tab.changes') },
     { key: 'contract', label: t('panel.task.tab.contract') },
   ]
 
@@ -406,6 +456,10 @@ export function TaskPanel({
   }
   const deps = dependencyChips(task.deps)
   const selectedRun = detail?.runs?.find((run) => run.runId === selectedRunId) ?? detail?.runs?.at(-1)
+  // The terminal status keeps Activity open; its «Open report» is an explicit move to the Overview report.
+  const openReport = () => { setTab('overview'); setTabPinned(true); setPanelTrace(null); onTabChange?.('overview') }
+  const latestRunId = detail?.runs?.at(-1)?.runId
+  const selectRun = (runId: string) => { setSelectedRunId(runId); setPanelTrace(null); setTabPinned(true) }
 
   return (
     <aside className="orc-panel" aria-label={t('panel.task.aria', { title: task.title })}>
@@ -531,18 +585,19 @@ export function TaskPanel({
           {action.error ? <p className="orc-error">{action.error}</p> : null}
         </div>
       </div>
-      <div className="orc-panel__scroll">
+      <div className="orc-panel__scroll" ref={liveScroll}>
         <div className="orc-tabs" role="tablist" aria-label={t('panel.task.details')} onKeyDown={(event) => {
           const index = tabs.findIndex((item) => item.key === tab)
           const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1
           if (next < 0) return
           event.preventDefault()
           setTab(tabs[next]!.key)
+          setTabPinned(true)
           onTabChange?.(tabs[next]!.key)
           event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus()
         }}>
           {tabs.map(({ key, label }) => (
-            <button key={key} type="button" role="tab" className="orc-tab" aria-selected={tab === key} onClick={() => { setTab(key); setPanelTrace(null); onTabChange?.(key) }}>
+            <button key={key} type="button" role="tab" className="orc-tab" aria-selected={tab === key} onClick={() => { setTab(key); setTabPinned(true); setPanelTrace(null); onTabChange?.(key) }}>
               {label}
             </button>
           ))}
@@ -561,7 +616,7 @@ export function TaskPanel({
             {detailReady && detail ? <ReportCard key={task.id} task={task} detail={detail} onTab={setTab} jump={reportJump} /> : null}
             <details className="orc-panel__history">
               <summary>{t('panel.task.historyDetails')}</summary>
-            {detail?.id === task.id ? <PreviousRuns detail={detail} workers={workers} onOpenRun={(runId) => { setSelectedRunId(runId); setPanelTrace(null); setTab('activity'); onTabChange?.('activity') }} /> : null}
+            {detail?.id === task.id ? <PreviousRuns detail={detail} workers={workers} onOpenRun={(runId) => { selectRun(runId); setTab('activity'); onTabChange?.('activity') }} /> : null}
             {detail?.steers?.length ? <section className="orc-overview-section"><h3>{t('panel.task.steersLabel')}</h3><ul className="orc-list orc-steers" aria-label={t('panel.task.steersLabel')}>{detail.steers.map(steer => <li key={steer.id} className="orc-steer"><p className="orc-steer__text">{steer.preview}</p><p className="orc-steer__meta"><span>{t(`panel.task.steerState.${steer.state}`)}</span> · <time dateTime={steer.timestamps[steer.state]}>{new Date(steer.timestamps[steer.state] ?? steer.createdAt).toLocaleTimeString()}</time></p>{steer.state === 'abandoned' ? <div className="orc-steer__recovery"><span>{t(`panel.task.steerReason.${steer.reason ?? 'run_finished'}`)}</span>{task.status === 'accepted' || task.status === 'superseded' ? null : <button type="button" className="orc-btn" disabled={action.pending} onClick={() => void action.call(() => api.relaunch(repo.root, task.id, { note: steer.text ?? steer.preview })).then(after)}>{t('panel.task.relaunchWithCorrection')}</button>}</div> : null}</li>)}</ul></section> : null}
             <section className="orc-overview-section"><h3>{t('panel.task.tab.notes')}</h3><NotesTab detail={detail} /></section>
             <section className="orc-overview-section"><h3>{t('panel.task.tab.links')}</h3><LinksTab task={task} detail={detail} onSelect={onSelect} /></section>
@@ -571,8 +626,8 @@ export function TaskPanel({
             {copyError ? <p className="orc-error" role="alert">{copyError}</p> : null}
           </> : null}
           {tab === 'activity' ? panelTrace?.taskId === task.id ? <RunTracePanel root={repo.root} target={panelTrace} onBack={() => setPanelTrace(null)} /> : <>
-            {detail?.runs.length ? <div className="orc-activity-run"><label htmlFor="orc-activity-run">{t('panel.task.pickRun')}</label><select id="orc-activity-run" className="orc-select" value={selectedRun?.runId ?? ''} onChange={(e) => setSelectedRunId(e.target.value)}>{detail.runs.map((run, i) => <option key={run.runId} value={run.runId}>{t('panel.task.runNumber', { count: i + 1 })} · {identityLabel(workerIdentity(run.agent, workers))} · {run.outcome ? t(`panel.tabs.outcome.${run.outcome}`) : t('panel.tabs.runActive')}</option>)}</select>{selectedRun ? <button type="button" className="orc-run__link" onClick={() => { const target = { taskId: detail.id, taskTitle: detail.title, run: { runId: selectedRun.runId, agent: selectedRun.agent, startedAt: selectedRun.startedAt, active: !selectedRun.finishedAt } }; if (onTrace) onTrace(target); else setPanelTrace(target) }}>{t('panel.task.openLedger')} →</button> : null}</div> : <p className="orc-meta">{t('panel.tabs.noRuns')}</p>}
-            {selectedRun?.runId === detail?.runs?.at(-1)?.runId ? <FeedTab detail={detail} /> : selectedRun ? <OlderRunActivity root={repo.root} taskId={task.id} runId={selectedRun.runId} /> : null}
+            {detail?.runs.length ? <div className="orc-activity-run"><label htmlFor="orc-activity-run">{t('panel.task.pickRun')}</label><select id="orc-activity-run" className="orc-select" value={selectedRun?.runId ?? ''} onChange={(e) => selectRun(e.target.value)}>{detail.runs.map((run, i) => <option key={run.runId} value={run.runId}>{t('panel.task.runNumber', { count: i + 1 })} · {identityLabel(workerIdentity(run.agent, workers))} · {run.outcome ? t(`panel.tabs.outcome.${run.outcome}`) : t('panel.tabs.runActive')}</option>)}</select>{selectedRun ? <button type="button" className="orc-run__link" onClick={() => { const target = { taskId: detail.id, taskTitle: detail.title, run: { runId: selectedRun.runId, agent: selectedRun.agent, startedAt: selectedRun.startedAt, active: !selectedRun.finishedAt } }; if (onTrace) onTrace(target); else setPanelTrace(target) }}>{t('panel.task.openLedger')} →</button> : null}</div> : <p className="orc-meta">{t('panel.tabs.noRuns')}</p>}
+            {detail && selectedRun && selectedRun.runId === latestRunId ? <LiveActivity key={selectedRun.runId} detail={detail} task={task} run={selectedRun} scrollRef={liveScroll} onOpenReport={openReport} /> : selectedRun ? <OlderRunActivity root={repo.root} taskId={task.id} runId={selectedRun.runId} /> : null}
           </> : null}
           {tab === 'changes' ? <ChangesTab detail={detail} root={repo.root} /> : null}
           {tab === 'contract' ? <ContractTab detail={detail} /> : null}

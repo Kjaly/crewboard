@@ -169,6 +169,8 @@ On the first visit:
 
 *The task panel has the overview, activity, changes, contract, your actions, and links, with **Accept** and **Send back** for a task in review.*
 
+*A running task opens on **Activity**: the worker's public messages, commands and changed files, the current reported step, and a control to catch up on new lines. It keeps that tab when the run finishes and shows the true outcome with a link to the report. Opening a finished task starts on **Overview**, and any tab you pick wins over the default.*
+
 ![Run ledger: steps of one run with model, tools, and cost](../assets/run-ledger.png)
 
 *The run ledger shows the steps of a run, its model and tools, and what is known about its cost.*
