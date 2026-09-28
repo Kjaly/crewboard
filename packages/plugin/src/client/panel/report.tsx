@@ -45,6 +45,11 @@ function inline(text: string, ns: string): ReactNode[] {
   return out
 }
 
+/** The same inert inline marks the report uses — `code` and **bold**, never HTML — for public feed prose. */
+export function MarkdownInline({ text }: { text: string }): ReactNode {
+  return <>{inline(text, 'md')}</>
+}
+
 type ReportLine = { text: string; index: number; depth?: number }
 type Block = { list: 'ul' | 'ol'; items: ReportLine[] } | { lines: ReportLine[] } | { heading: ReportLine }
 

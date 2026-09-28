@@ -15,6 +15,7 @@ import { isHandPicked, workerChoiceOf, workerOptions } from '../workers.js'
 import { ReportCard } from './report.js'
 import { ChangesTab, ContractTab, LinksTab, NotesTab, OlderRunActivity, resolveTab, type TabKey } from './tabs.js'
 import { LiveActivity } from './live-activity.js'
+import { ActivityComposer, type SteerFeedback } from './activity-composer.js'
 import type { TraceTarget } from './trace.js'
 import { RunTracePanel } from './run-trace-panel.js'
 import { VendorMark } from '../vendor-mark.js'
@@ -150,6 +151,9 @@ export function TaskPanel({
 }) {
   /** Detail is scoped to repo + plan + task: a same-id task in another plan never shows foreign data. */
   const taskScope = `${repo.root}:${repo.planId ?? ''}:${task.id}`
+  /** A response that resolves after the panel moved to another task must not write its feedback there. */
+  const taskScopeRef = useRef(taskScope)
+  taskScopeRef.current = taskScope
   const [detailState, setDetailState] = useState<{ scope: string; value: TaskDetail } | null>(null)
   const detail = detailState?.scope === taskScope ? detailState.value : null
   /** A failed detail read blocks acceptance until the contract and evidence can be loaded again. */
@@ -166,7 +170,9 @@ export function TaskPanel({
   /** Uncommitted changes the copy holds, when a start asked the person what to do with them (fo1). */
   const [dirtyCount, setDirtyCount] = useState(0)
   const [message, setMessage] = useState('')
-  const [steerOutcome, setSteerOutcome] = useState<SteerResult | null>(null)
+  const [steerOutcome, setSteerOutcome] = useState<SteerFeedback | null>(null)
+  /** Bumped by «Give direction» / a trace correction: the Activity composer takes focus, never a second form. */
+  const [composerFocus, setComposerFocus] = useState(0)
   const [reason, setReason] = useState('')
   const [rerunWorker, setRerunWorker] = useState(SAME)
   const assigned = task.workerSource ? task.worker : undefined
@@ -279,9 +285,16 @@ export function TaskPanel({
   // biome-ignore lint/correctness/useExhaustiveDependencies: The selected identity and request keys intentionally control this hook’s refresh cadence.
   useEffect(() => {
     if (!steerDraft || steerDraft.taskId !== task.id) return
-    setForm('steer')
     setMessage(steerDraft.text)
     setSteerOutcome(null)
+    // A live run writes in the Activity composer; anything else (an older run, a finished task) keeps the form.
+    if (task.status === 'running') {
+      setSelectedRunId(null)
+      setPanelTrace(null)
+      setTab('activity')
+      setTabPinned(true)
+      setComposerFocus((count) => count + 1)
+    } else setForm('steer')
   }, [steerDraft?.seq, steerDraft?.taskId, task.id])
 
   // An outside request opens the named tab once per request. A request scoped to another task is stale
@@ -458,8 +471,52 @@ export function TaskPanel({
   const selectedRun = detail?.runs?.find((run) => run.runId === selectedRunId) ?? detail?.runs?.at(-1)
   // The terminal status keeps Activity open; its «Open report» is an explicit move to the Overview report.
   const openReport = () => { setTab('overview'); setTabPinned(true); setPanelTrace(null); onTabChange?.('overview') }
-  const latestRunId = detail?.runs?.at(-1)?.runId
+  const latestRunId = task.lastRunId ?? detail?.runs?.at(-1)?.runId
   const selectRun = (runId: string) => { setSelectedRunId(runId); setPanelTrace(null); setTabPinned(true) }
+
+  /**
+   * A running task steers through the Activity composer — the latest run, or before the first detail arrives.
+   * An older run stays read-only; anything else keeps the in-panel form. The draft lives here, so it survives
+   * a poll, a tab change, a send failure and the run finishing mid-request.
+   */
+  const composerAvailable = primary === 'steer' && (!selectedRun || selectedRun.runId === latestRunId)
+  const steerRecord = steerOutcome ? detail?.steers?.find((item) => item.id === steerOutcome.result.steerId) : undefined
+  // The latest run a correction would reach right now; a response is only local feedback if it still matches.
+  const latestRunRef = useRef(latestRunId)
+  latestRunRef.current = latestRunId
+  const sendSteer = () => {
+    const submitted = message.trim()
+    if (!submitted) return
+    // Capture the exact text and target this request carries; a newer draft or another task must never inherit it.
+    const scope = taskScope
+    const runId = latestRunId
+    void action.call(async () => {
+      const result = await api.steer(repo.root, task.id, submitted)
+      const current = taskScopeRef.current === scope && latestRunRef.current === runId
+      // A host that answers without a delivery record gets no feedback rather than a fabricated one.
+      if (current && result.ok && result.value) setSteerOutcome({ result: result.value as SteerResult, text: submitted })
+      // A stale request also owns its error: do not project an old task failure into the newly selected task.
+      return current ? result : { ok: true as const, value: null }
+    })
+  }
+  const relaunchWithCorrection = () => void action.call(() => api.relaunch(repo.root, task.id, { note: message })).then(after)
+  /**
+   * «Give direction» always lands in the latest active conversation, even from an older-run or trace view:
+   * the person must never type into a form that would send against a run they are not looking at.
+   */
+  const giveDirection = () => {
+    if (primary === 'steer') {
+      setSelectedRunId(null)
+      setPanelTrace(null)
+      setTab('activity')
+      setTabPinned(true)
+      setComposerFocus((count) => count + 1)
+      return
+    }
+    setForm(form === 'steer' ? 'none' : 'steer')
+  }
+  // A finished run keeps the composer only to show a typed-but-unsent draft or the last delivery record.
+  const composerVisible = tab === 'activity' && !panelTrace && (composerAvailable || (((!selectedRun || selectedRun.runId === latestRunId) && !!latestRunId && (message.trim() !== '' || steerOutcome !== null))))
 
   return (
     <aside className="orc-panel" aria-label={t('panel.task.aria', { title: task.title })}>
@@ -531,7 +588,7 @@ export function TaskPanel({
               </>
             ) : null}
             {primary === 'continue' && !attempt ? <button type="button" className="orc-btn" disabled={action.pending} onClick={continueRun}>{t('panel.task.continue')}</button> : null}
-            {primary === 'steer' ? <><button type="button" className="orc-btn" onClick={() => setForm(form === 'steer' ? 'none' : 'steer')} aria-expanded={form === 'steer'}>{t('panel.task.steer')}</button><button type="button" className="orc-btn orc-btn--ghost" disabled={action.pending} onClick={() => action.call(() => api.stop(repo.root, task.id))}>{t('panel.task.stop')}</button></> : null}
+            {primary === 'steer' ? <><button type="button" className="orc-btn" onClick={giveDirection} aria-expanded={form === 'steer'}>{t('panel.task.steer')}</button><button type="button" className="orc-btn orc-btn--ghost" disabled={action.pending} onClick={() => action.call(() => api.stop(repo.root, task.id))}>{t('panel.task.stop')}</button></> : null}
             {riskyResult && !checking && !reviewDetailPending ? <button type="button" className="orc-btn" onClick={() => setForm(form === 'reject' ? 'none' : 'reject')} aria-expanded={form === 'reject'}>{t('panel.task.sendBackMore')}</button> : null}
             {(primary === 'accept' && !checking && !closing && !reviewDetailPending) || primary === 'decision' ? <><button type="button" className={riskyResult ? 'orc-btn orc-btn--ghost' : 'orc-btn'} disabled={action.pending} onClick={accept}>{primary === 'decision' ? t('panel.task.acceptDecision') : negativeResult ? t('panel.task.acceptNoResult') : verdict?.kind === 'disputed' ? t('panel.task.acceptDisputed') : verdict?.caution ? t('panel.task.acceptDeviation') : t('panel.task.accept')}</button>{!riskyResult ? <button type="button" className="orc-btn orc-btn--ghost" onClick={() => setForm(form === 'reject' ? 'none' : 'reject')} aria-expanded={form === 'reject'}>{t('panel.task.sendBackMore')}</button> : null}</> : null}
             {primary === 'orchestrator' ? <span className="orc-meta">{orchestratorMove(task)}</span> : null}
@@ -561,20 +618,16 @@ export function TaskPanel({
           {merged ? <p className="orc-hint" role="status">{t('panel.task.mergeDone', { into: merged.into, commit: merged.commit.slice(0, 12) })}{merged.copy === 'removed' ? ` ${t('panel.task.mergeCopyRemoved')}` : merged.copy === 'kept_recent' ? ` ${t('panel.task.mergeCopyKeptRecent')}` : merged.copy === 'kept' && merged.keptBecause ? ` ${t('panel.task.mergeCopyKept', { reason: merged.keptBecause in KEEP_KEYS ? t(`worktree.keep.${merged.keptBecause}`) : merged.keptBecause })}` : ''}</p> : null}
           {form === 'markMerged' && primary === 'merge' ? <div className="orc-form"><p>{t('panel.task.markMergedHelp')}</p><textarea className="orc-field" aria-label={t('panel.task.markMergedReason')} placeholder={t('panel.task.markMergedPlaceholder')} value={reason} onChange={(e) => setReason(e.target.value)} /><div className="orc-actions"><button type="button" className="orc-btn" disabled={action.pending || !reason.trim()} onClick={markMerged}>{t('panel.task.markMergedConfirm')}</button><button type="button" className="orc-btn orc-btn--ghost" onClick={() => setForm('none')}>{t('panel.task.cancel')}</button></div><p className="orc-hint">{t('panel.task.confirmHint')}</p></div> : null}
           {form === 'unchecked' && checking ? <div className="orc-form" role="alertdialog" aria-label={t('check.acceptEarly')}><p>{t('check.acceptEarly')}</p><div className="orc-actions"><button type="button" className="orc-btn" disabled={action.pending} onClick={accept}>{t('check.acceptAnyway')}</button><button type="button" className="orc-btn orc-btn--ghost" onClick={() => setForm('none')}>{t('panel.task.cancel')}</button></div></div> : null}
-          {form === 'steer' ? <div className="orc-form">
-            {/* biome-ignore lint/a11y/noAutofocus: Focus moves to this field when its dialog opens. */} <textarea autoFocus className="orc-field" aria-label={t('panel.task.steerLabel')} placeholder={t('panel.task.steerPlaceholder')} value={message} onChange={(e) => { setMessage(e.target.value); setSteerOutcome(null) }} />
+          {form === 'steer' && primary !== 'steer' ? <div className="orc-form">
+            {/* biome-ignore lint/a11y/noAutofocus: Focus moves to this field when its dialog opens. */} <textarea autoFocus className="orc-field" aria-label={t('panel.task.steerLabel')} placeholder={t('panel.task.steerPlaceholder')} value={message} onChange={(e) => setMessage(e.target.value)} />
             <div className="orc-actions">
-              <button type="button" className="orc-btn" disabled={action.pending || !message.trim() || steerOutcome?.delivery === 'delivered'} onClick={() => void action.call(async () => {
-                const result = await api.steer(repo.root, task.id, message.trim())
-                if (result.ok) setSteerOutcome(result.value as SteerResult)
-                return result
-              })}>{t('panel.task.send')}</button>
+              <button type="button" className="orc-btn" disabled={action.pending || !message.trim() || (steerOutcome?.result.delivery === 'delivered' && steerOutcome.text === message.trim())} onClick={sendSteer}>{t('panel.task.send')}</button>
               <button type="button" className="orc-btn orc-btn--ghost" onClick={() => setForm('none')}>{t('panel.task.cancel')}</button>
             </div>
-            {steerOutcome?.delivery === 'delivered' ? <p role="status" className="orc-hint">{steerOutcome.steerId} · {t(`panel.task.steerState.${steerOutcome.state}`)}</p> : null}
-            {steerOutcome?.delivery === 'failed' ? <p role="alert" className="orc-error">{t('panel.task.steerFailed', { reason: steerOutcome.reason ?? '' })}</p> : null}
-            {steerOutcome?.delivery === 'abandoned' ? <div role="status"><p className="orc-hint">{steerOutcome.steerId} · {t(`panel.task.steerReason.${steerOutcome.reason}`)}</p><button type="button" className="orc-btn" disabled={action.pending} onClick={() => void action.call(() => api.relaunch(repo.root, task.id, { note: message })).then(after)}>{t('panel.task.relaunchWithCorrection')}</button></div> : null}
-            {steerOutcome?.delivery === 'refused' ? <div role="status"><p className="orc-hint">{steerOutcome.reason === 'legacy_unverified_policy' ? t('panel.task.steerRefusedPolicy') : t('panel.task.steerRefused', { state: steerOutcome.runState })}</p><button type="button" className="orc-btn" disabled={action.pending} onClick={() => void action.call(() => api.relaunch(repo.root, task.id, { note: message })).then(after)}>{t('panel.task.relaunchWithCorrection')}</button></div> : null}
+            {steerOutcome?.result.delivery === 'delivered' ? <p role="status" className="orc-hint" title={steerOutcome.result.steerId}>{t(`panel.task.steerState.${steerRecord?.state ?? steerOutcome.result.state}`)}{steerRecord ? '' : ` · ${t('panel.activity.receiptInitial')}`}</p> : null}
+            {steerOutcome?.result.delivery === 'failed' ? <p role="alert" className="orc-error">{t('panel.task.steerFailed', { reason: steerOutcome.result.reason ?? '' })}</p> : null}
+            {steerOutcome?.result.delivery === 'abandoned' ? <div role="status"><p className="orc-hint" title={steerOutcome.result.steerId}>{t('panel.activity.steerAbandoned', { reason: t(`panel.task.steerReason.${steerRecord?.reason ?? steerOutcome.result.reason ?? 'run_finished'}`) })}</p><button type="button" className="orc-btn" disabled={action.pending} onClick={relaunchWithCorrection}>{t('panel.task.relaunchWithCorrection')}</button></div> : null}
+            {steerOutcome?.result.delivery === 'refused' ? <div role="status"><p className="orc-hint" title={steerOutcome.result.steerId}>{steerOutcome.result.reason === 'legacy_unverified_policy' ? t('panel.task.steerRefusedPolicy') : t('panel.task.steerRefused', { state: steerOutcome.result.runState })}</p><button type="button" className="orc-btn" disabled={action.pending} onClick={relaunchWithCorrection}>{t('panel.task.relaunchWithCorrection')}</button></div> : null}
           </div> : null}
           {form === 'reject' ? <div className="orc-form"><textarea className="orc-field" aria-label={t('panel.task.reasonLabel')} placeholder={task.kind === 'decision' ? t('panel.task.decisionReasonPlaceholder') : t('panel.task.reasonPlaceholder')} value={reason} onChange={(e) => setReason(e.target.value)} />
             {canRerun ? <label className="orc-hint">{t('panel.task.rerunWorker')} <select className="orc-select" aria-label={t('panel.task.rerunWorker')} value={rerunWorker} onChange={(e) => setRerunWorker(e.target.value)}><option value={SAME}>{lastWorker ? t('panel.task.rerunSame', { worker: identityLabel(workerIdentity(lastWorker, workers)) }) : t('panel.task.rerunSameUnknown')}</option>{presetWorkers.map((w) => <option key={w} value={w}>{workerName(w, workers ?? [])}</option>)}</select></label> : null}
@@ -627,12 +680,25 @@ export function TaskPanel({
           </> : null}
           {tab === 'activity' ? panelTrace?.taskId === task.id ? <RunTracePanel root={repo.root} target={panelTrace} onBack={() => setPanelTrace(null)} /> : <>
             {detail?.runs.length ? <div className="orc-activity-run"><label htmlFor="orc-activity-run">{t('panel.task.pickRun')}</label><select id="orc-activity-run" className="orc-select" value={selectedRun?.runId ?? ''} onChange={(e) => selectRun(e.target.value)}>{detail.runs.map((run, i) => <option key={run.runId} value={run.runId}>{t('panel.task.runNumber', { count: i + 1 })} · {identityLabel(workerIdentity(run.agent, workers))} · {run.outcome ? t(`panel.tabs.outcome.${run.outcome}`) : t('panel.tabs.runActive')}</option>)}</select>{selectedRun ? <button type="button" className="orc-run__link" onClick={() => { const target = { taskId: detail.id, taskTitle: detail.title, run: { runId: selectedRun.runId, agent: selectedRun.agent, startedAt: selectedRun.startedAt, active: !selectedRun.finishedAt } }; if (onTrace) onTrace(target); else setPanelTrace(target) }}>{t('panel.task.openLedger')} →</button> : null}</div> : <p className="orc-meta">{t('panel.tabs.noRuns')}</p>}
-            {detail && selectedRun && selectedRun.runId === latestRunId ? <LiveActivity key={selectedRun.runId} detail={detail} task={task} run={selectedRun} scrollRef={liveScroll} onOpenReport={openReport} /> : selectedRun ? <OlderRunActivity root={repo.root} taskId={task.id} runId={selectedRun.runId} /> : null}
+            {detail && selectedRun && selectedRun.runId === latestRunId ? <LiveActivity key={selectedRun.runId} detail={detail} task={task} run={selectedRun} scrollRef={liveScroll} attention={attention} onOpenReport={openReport} /> : selectedRun ? <OlderRunActivity root={repo.root} taskId={task.id} runId={selectedRun.runId} /> : null}
           </> : null}
           {tab === 'changes' ? <ChangesTab detail={detail} root={repo.root} /> : null}
           {tab === 'contract' ? <ContractTab detail={detail} /> : null}
         </div>
       </div>
+      {composerVisible ? (
+        <ActivityComposer
+          value={message}
+          onChange={setMessage}
+          onSend={sendSteer}
+          pending={action.pending}
+          outcome={steerOutcome}
+          {...(steerRecord ? { record: steerRecord } : {})}
+          onRelaunch={relaunchWithCorrection}
+          focusSignal={composerFocus}
+          readOnly={!composerAvailable}
+        />
+      ) : null}
 
     </aside>
   )

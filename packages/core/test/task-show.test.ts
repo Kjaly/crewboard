@@ -41,8 +41,17 @@ it('is the detail as the panel gets it, plus the last run\'s reason and the cont
     { ts: '2026-09-25T09:04:00Z', type: 'run_failed', data: { error: 'rate limit reached', reason: { code: 'rate_limited', resetsAt: '2026-09-25T12:00:00Z' } } },
   ])
   const show = await getTaskShow(root, 'f', backends, nodeExec)
-  const { planId, mergeState, lastRun, checks, ...rest } = show
-  expect(rest).toEqual(await getTaskDetail(root, 'f', backends, nodeExec))
+  const { planId, mergeState, lastRun, checks, events, ...rest } = show
+  const detail = await getTaskDetail(root, 'f', backends, nodeExec)
+  const { events: richEvents, ...detailRest } = detail
+  expect(rest).toEqual(detailRest)
+  // ts1: the machine surface keeps the legacy compact event shape — no browser display/tool/updatedAt/origin.
+  expect(events).toEqual([
+    { ts: '2026-09-25T09:01:00Z', kind: 'action', text: 'Read file' },
+    { ts: '2026-09-25T09:04:00Z', kind: 'problem', text: expect.stringContaining('rate limit') },
+  ])
+  expect(events[1]).not.toHaveProperty('origin')
+  expect(richEvents[1]).toMatchObject({ origin: 'run' })
   expect({ planId, mergeState, checks }).toEqual({ planId: 'main', mergeState: { state: 'none' }, checks: ['pnpm build', 'pnpm test'] })
   expect(lastRun).toMatchObject({ runId: 'run_dsh-f', outcome: 'failed', reason: { code: 'problem', text: expect.stringContaining('rate limit') } })
   expect((await getTaskShow(root, 'i', backends, nodeExec)).lastRun).toMatchObject({ outcome: 'incomplete', reason: { code: 'no_report', uncommitted: 3 } })

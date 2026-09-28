@@ -4,7 +4,8 @@ import type { Run } from '../plan/schema.js'
 import { currentPlanId, loadPlan } from '../plan/store.js'
 import type { EvidenceFile } from '../runs/evidence.js'
 import { evidenceRef } from '../runs/evidence.js'
-import type { FailureReason } from '../runs/normalize.js'
+import type { CompactNormEvent, FailureReason } from '../runs/normalize.js'
+import { compactNormEvents } from '../runs/normalize.js'
 import { type TaskConflict, reviewConflicts } from '../worktree/conflicts.js'
 import { mergeConflicts, taskBase } from '../worktree/merge-task.js'
 import type { Backends } from './backends.js'
@@ -35,6 +36,8 @@ export type LastRun = Pick<Run, 'runId' | 'agent' | 'startedAt' | 'finishedAt' |
 }
 
 export type TaskShow = TaskDetail & {
+  /** Machine events are the legacy compact shape — the browser's rich detail is not shipped through a tool. */
+  events: CompactNormEvent[]
   planId: string
   /** What the branch (and its copy, while it exists) changes against `base`; from the run's evidence when git cannot tell. */
   diffstat?: { base?: string; files: EvidenceFile[]; insertions: number; deletions: number; source: 'git' | 'evidence' }
@@ -128,6 +131,7 @@ export async function getTaskShow(root: string, taskId: string, backends: Backen
   const reportFile = reportFileOf(detail)
   return {
     ...detail,
+    events: compactNormEvents(detail.events),
     planId: plan,
     ...(diffstat ? { diffstat } : {}),
     mergeState,

@@ -169,7 +169,7 @@ On the first visit:
 
 *The task panel has the overview, activity, changes, contract, your actions, and links, with **Accept** and **Send back** for a task in review.*
 
-*A running task opens on **Activity**: the worker's public messages, commands and changed files, the current reported step, and a control to catch up on new lines. It keeps that tab when the run finishes and shows the true outcome with a link to the report. Opening a finished task starts on **Overview**, and any tab you pick wins over the default.*
+*A running task opens on **Activity**, which reads as a live conversation: the worker's public messages as prose, technical steps folded into one compact disclosure, and a persistent status that names the current operation or the last finished step with its age — never a bare «waiting for updates». A composer at the bottom sends a direction to the latest run (plain Enter is a newline, Ctrl/⌘+Enter sends). Activity keeps the tab when the run finishes, shows the true outcome with a link to the report, and preserves any typed-but-unsent text read-only. Opening a finished task starts on **Overview**, and any tab you pick wins over the default.*
 
 ![Run ledger: steps of one run with model, tools, and cost](../assets/run-ledger.png)
 

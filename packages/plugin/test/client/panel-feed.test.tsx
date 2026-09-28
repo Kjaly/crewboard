@@ -22,14 +22,16 @@ it('groups only consecutive commands and edits, preserving the first timestamp',
     ['action', events[0]?.ts, 2], ['message', events[2]?.ts, 1], ['file', events[3]?.ts, 2], ['steer', events[5]?.ts, 1],
   ])
   const { container } = render(<FeedTab detail={makeDetail({ id: 'a', events })} />)
-  expect(container.querySelectorAll('time')).toHaveLength(4)
-  expect(screen.getByText('2 команды')).toBeTruthy()
-  expect(screen.getByText('2 правки')).toBeTruthy()
+  // Commands and edits fold into one technical disclosure each; only prose carries an inline time.
+  expect(container.querySelectorAll('time')).toHaveLength(2)
+  expect(screen.getAllByText('2 шага')).toHaveLength(2)
   expect(screen.getByText('Тесты прошли.')).toBeTruthy()
   expect(screen.getByText('Агент')).toBeTruthy()
-  expect(screen.getByText('Вы').parentElement?.textContent).toContain('Проверь размеры')
-  await userEvent.setup().click(screen.getByText('2 команды'))
-  expect(screen.getByText('pnpm build')).toBeTruthy()
+  // A steer with no author metadata is a neutral direction, never the viewer.
+  expect(screen.getByText('Указание')).toBeTruthy()
+  expect(screen.queryByText('Вы')).toBeNull()
+  await userEvent.setup().click(screen.getAllByText('2 шага')[0]!)
+  expect(screen.getAllByText('pnpm build').length).toBeGreaterThan(0)
 })
 
 it('keeps human notes out of runs', () => {

@@ -764,28 +764,50 @@ const CSS = `
 .orc-contract-path{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--orc-mono)}
 .orc-feed{margin:0;padding:0;list-style:none}
 .orc-feed .orc-ev{padding:8px 0;align-items:baseline}
-.orc-feed .orc-ev--message,.orc-feed .orc-ev--final{color:var(--orc-fg);font-size:13px;line-height:19px}
-.orc-feed .orc-ev--steer{margin:5px -7px;padding:8px 7px;border-radius:7px;background:var(--orc-active);color:var(--orc-fg)}
-.orc-feed .orc-ev--action,.orc-feed .orc-ev--file{color:var(--orc-fg3);font-size:11px;line-height:16px}
-.orc-feed__tools{flex:1 1 auto;min-width:0}
-.orc-feed__tools summary{display:flex;align-items:center;gap:6px;min-width:0;cursor:pointer;list-style:none}
-.orc-feed__tools summary::-webkit-details-marker{display:none}
-.orc-feed__tool-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--orc-mono)}
-.orc-feed__expand{margin-left:auto;transition:transform 150ms ease-out}
-.orc-feed__tools[open] .orc-feed__expand{transform:rotate(180deg)}
-.orc-feed__tools ul{margin:5px 0 0;padding:0;list-style:none;border-left:1px solid var(--orc-line)}
-.orc-feed__tools li{padding:2px 0 2px 8px;overflow-wrap:anywhere;white-space:pre-wrap;font-family:var(--orc-mono)}
-.orc-feed__cmd{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;white-space:pre-wrap;font-family:var(--orc-mono)}
 .orc-ev{display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--orc-sep)}
 .orc-ev__time{flex:none;width:38px;color:var(--orc-fg3);font-variant-numeric:tabular-nums;font-style:normal}
 .orc-ev__kind{flex:none;width:14px;color:var(--orc-fg3);text-align:center}
 .orc-ev__text{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
-.orc-ev__body{flex:1 1 auto;min-width:0}
-.orc-ev__role{display:inline-block;margin-bottom:1px;color:var(--orc-fg3);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
-.orc-ev__role--you{color:var(--orc-accent)}
-.orc-ev__line{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}
-.orc-feed .orc-ev--message .orc-ev__line,.orc-feed .orc-ev--final .orc-ev__line{color:var(--orc-fg)}
 .orc-ev--problem{color:var(--orc-error)}
+/* The conversation: public prose spans the panel, its actor and time sit subdued above it, and technical
+   steps fold into one compact disclosure between messages. */
+.orc-conv{margin:0;padding:0;list-style:none}
+.orc-conv__item{margin:0}
+.orc-conv__item+.orc-conv__item{margin-top:10px}
+.orc-turn{min-width:0}
+.orc-turn__meta{display:flex;align-items:baseline;gap:6px;min-width:0;color:var(--orc-fg3);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif)}
+.orc-turn__actor{flex:none;font-weight:600;color:var(--orc-fg2)}
+.orc-turn__actor--direction{color:var(--orc-accent)}
+.orc-turn__actor--problem{color:var(--orc-error)}
+.orc-turn__tag{flex:none;padding:0 5px;border:1px solid var(--orc-line);border-radius:999px;color:var(--orc-fg3);font-size:10px;line-height:14px}
+.orc-turn__time{flex:none;margin-left:auto;font-variant-numeric:tabular-nums}
+.orc-turn__body{margin-top:2px;overflow-wrap:anywhere;white-space:pre-wrap;color:var(--orc-fg);font-size:13px;line-height:20px}
+.orc-turn--problem .orc-turn__body{color:var(--orc-error)}
+.orc-turn--direction,.orc-turn--notice{margin:0 -7px;padding:7px;border-radius:8px;background:var(--orc-active)}
+.orc-turn__truncated{margin:3px 0 0;color:var(--orc-fg3);font-size:11px;line-height:16px}
+.orc-tech{min-width:0;color:var(--orc-fg3);font-size:11px;line-height:16px}
+.orc-tech__summary{display:flex;align-items:baseline;gap:6px;min-width:0;cursor:pointer;list-style:none}
+.orc-tech__summary::-webkit-details-marker{display:none}
+.orc-tech__count{flex:none;font-family:var(--orc-mono)}
+.orc-tech__risk{flex:none;color:var(--orc-error)}
+.orc-tech__latest{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--orc-mono);color:var(--orc-fg2)}
+.orc-tech__list{margin:5px 0 0;padding:0 0 0 10px;list-style:none;border-left:1px solid var(--orc-line)}
+.orc-tech__step{display:flex;align-items:baseline;gap:6px;min-width:0;padding:2px 0}
+.orc-tech__step--problem{color:var(--orc-error)}
+.orc-tech__op{flex:none;color:var(--orc-fg3)}
+.orc-tech__target{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;white-space:pre-wrap;font-family:var(--orc-mono);color:var(--orc-fg2)}
+.orc-tech__step--problem .orc-tech__target{color:var(--orc-error)}
+.orc-live__age{flex:none;color:var(--orc-fg3)}
+.orc-live__problem{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--orc-error)}
+.orc-composer{flex:none;min-width:0;border-top:1px solid var(--orc-line);background:var(--orc-layer1);padding:7px 14px 9px}
+.orc-composer__head{display:flex;justify-content:flex-end;min-height:18px}
+.orc-composer__ask{border:0;background:transparent;padding:0;color:var(--orc-fg3);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);cursor:pointer}
+.orc-composer__ask:hover{color:var(--orc-fg2)}
+.orc-composer__row{display:flex;align-items:flex-end;gap:6px;min-width:0}
+.orc-composer__field{flex:1 1 auto;min-width:0;resize:none}
+.orc-composer__send{flex:none}
+.orc-composer__copy{flex:none}
+.orc-composer__hint{margin:4px 0 0;color:var(--orc-fg3);font-size:11px;line-height:16px}
 /* Motion carries the actual change: only a line appended to the live window enters. Retained history,
    a tab switch and a detail refresh never replay. */
 .orc-ev--enter{animation:orc-ev-in 160ms cubic-bezier(.23,1,.32,1) both}

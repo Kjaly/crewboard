@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react'
 import type { TaskDetail, TaskSnapshot, Trajectory, WorkerInfo } from '../../shared/types.js'
 import { identityLabel, workerIdentity } from '../provider.js'
 import { api } from '../api.js'
-import { clock, eventText } from '../summary.js'
+import { clock } from '../summary.js'
 import { t, useLang } from '../i18n.js'
 import { noteText } from '../note-text.js'
 import type { TraceTarget } from './trace.js'
 import { FilePreview, previewKind } from './file-preview.js'
+import { Conversation } from './conversation.js'
 import { KIND_NAME, offset, toSteps } from './trace-steps.js'
 
 export type TabKey = 'overview' | 'activity' | 'changes' | 'contract'
@@ -14,9 +15,6 @@ export function resolveTab(value: string | undefined): TabKey {
   return value === 'activity' || value === 'changes' || value === 'contract' ? value : 'overview'
 }
 
-const EVENT_GLYPH: Record<string, string> = { action: '◎', file: '✎', message: '“', steer: '↻', problem: '⚠', final: '✓' }
-/** Who speaks a line: a worker's public report/message, or the person's own direction. Tools have no role. */
-const EVENT_ROLE: Partial<Record<string, 'agent' | 'you'>> = { message: 'agent', final: 'agent', steer: 'you' }
 const OUTCOME_LABEL: Record<string, string> = { get completed() { return t('panel.tabs.outcome.completed') }, get failed() { return t('panel.tabs.outcome.failed') }, get cancelled() { return t('panel.tabs.outcome.cancelled') } }
 const NOTE_LABEL: Record<string, string> = { get steer() { return t('panel.tabs.note.steer') }, get reject() { return t('panel.tabs.note.reject') }, get accept() { return t('panel.tabs.note.accept') }, get comment() { return t('panel.tabs.note.comment') }, get check() { return t('panel.tabs.note.check') } }
 type Event = TaskDetail['events'][number]
@@ -32,20 +30,13 @@ export function groupEvents(events: Event[]): FeedGroup[] {
   return groups
 }
 
-const groupLabel = (kind: Event['kind'], n: number) => {
-  return t(kind === 'file' ? 'panel.tabs.fileCount' : 'panel.tabs.actionCount', { count: n })
-}
-
 /**
  * The activity feed reads like a public agent conversation: worker messages in readable prose, a human
- * direction set apart, commands and changed files grouped and compact. Only the events a run actually
- * reported are shown — never a private reasoning stream.
- *
- * `freshFrom` (a rolling-window index) marks appended lines for the gentle entrance; retained history is
- * never re-animated. `groupKeys` carries stable group identities so a rolling tail does not remount a
- * group and drop an open disclosure.
+ * direction set apart, and technical steps folded into one disclosure. Only the events a run actually
+ * reported are shown — never a private reasoning stream. The projection itself lives in `conversation.tsx`;
+ * the root/decision cases here keep the tab honest for a task that has no run feed at all.
  */
-export function FeedTab({ detail, freshFrom, groupKeys }: { detail: TaskDetail | null; freshFrom?: number; groupKeys?: readonly string[] }) {
+export function FeedTab({ detail, freshFrom }: { detail: TaskDetail | null; freshFrom?: number }) {
   useLang()
   if (!detail) return <p className="orc-meta">{t('panel.tabs.feedLoading')}</p>
   const runs = detail.runs ?? []
@@ -61,43 +52,8 @@ export function FeedTab({ detail, freshFrom, groupKeys }: { detail: TaskDetail |
       </p>
     )
   }
-  // A finished run with no events here did work all the same (B12): its steps are in the run ledger.
   const events = detail.events ?? []
-  if (events.length === 0) return <p className="orc-meta">{t(detail.runs?.at(-1)?.finishedAt ? 'panel.tabs.noEventsFinished' : 'panel.tabs.noEvents')}</p>
-  const groups = groupEvents(events)
-  const fresh = (index: number) => freshFrom !== undefined && index >= freshFrom
-  let cursor = 0
-  return (
-    <ul className="orc-feed">
-      {groups.map((group, i) => {
-        const start = cursor
-        cursor += group.events.length
-        const tools = group.kind === 'action' || group.kind === 'file'
-        return (
-          <li key={groupKeys?.[i] ?? `${group.ts}-${i}`} className={`orc-ev orc-ev--${group.kind}${fresh(start) ? ' orc-ev--enter' : ''}`}>
-            <time className="orc-ev__time" dateTime={group.ts}>{clock(group.ts)}</time>
-            <span className="orc-ev__kind" aria-hidden="true">{EVENT_GLYPH[group.kind] ?? '·'}</span>
-            {tools && group.events.length > 1 ? (
-              <details className="orc-feed__tools">
-                <summary>
-                  <span className="orc-feed__tool-label">{groupLabel(group.kind, group.events.length)}</span>
-                  <span className="orc-feed__expand" aria-hidden="true">⌄</span>
-                </summary>
-                <ul>{group.events.map((event, j) => <li key={`${event.ts}-${j}`} className={fresh(start + j) ? 'orc-ev--enter' : undefined} title={event.text}>{event.text}</li>)}</ul>
-              </details>
-            ) : tools ? (
-              <code className="orc-feed__cmd" title={group.events[0]?.text}>{group.events[0]?.text}</code>
-            ) : (
-              <div className="orc-ev__body">
-                {EVENT_ROLE[group.kind] ? <span className={`orc-ev__role${EVENT_ROLE[group.kind] === 'you' ? ' orc-ev__role--you' : ''}`}>{t(EVENT_ROLE[group.kind] === 'you' ? 'panel.activity.roleYou' : 'panel.activity.roleAgent')}</span> : null}
-                <p className="orc-ev__line">{group.events[0] ? eventText(group.events[0]) : null}</p>
-              </div>
-            )}
-          </li>
-        )
-      })}
-    </ul>
-  )
+  return <Conversation events={events} finished={!!detail.runs?.at(-1)?.finishedAt} {...(freshFrom !== undefined ? { freshFrom } : {})} />
 }
 
 /** Older runs have no normalized feed endpoint; the existing trace supplies their activity. */

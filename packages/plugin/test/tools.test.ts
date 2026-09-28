@@ -40,7 +40,7 @@ async function setup() {
     if (!t) throw new Error(`no tool ${name}`)
     return t
   }
-  return { root, calls, tools, tool }
+  return { root, calls, tools, tool, backend }
 }
 
 describe('orchestra tools', () => {
@@ -212,6 +212,24 @@ describe('orchestra tools', () => {
     expect(await tool('orchestra_plan').execute({})).toMatchObject({ goal: 'goal', tasks: [{ id: 'b', status: 'running' }] })
     expect(await tool('orchestra_events').execute({ task: 'b' })).toEqual([{ ts: '2026-09-22T11:59:20Z', kind: 'action', text: 'Read file' }])
     expect(await tool('orchestra_trace').execute({ task: 'b' })).toMatchObject({ totals: { turns: 1, toolCalls: 1 } })
+  })
+
+  // The orchestrator gets the legacy compact events; the browser's bounded display and tool metadata never ship.
+  it('projects compact machine events from orchestra_events and orchestra_task', async () => {
+    const { tool, backend } = await setup()
+    backend.events = async () => [
+      { ts: '2026-09-22T11:59:20Z', type: 'tool_started', data: { tool: 'write', status: 'running', input: { file_path: '/wt/a.ts' } } },
+      { ts: '2026-09-22T11:59:30Z', type: 'answer_delta', data: 'line one\nline two' },
+    ]
+    const events = (await tool('orchestra_events').execute({ task: 'b' })) as Array<Record<string, unknown>>
+    expect(events).toEqual([
+      { ts: '2026-09-22T11:59:20Z', kind: 'file', text: 'a.ts' },
+      { ts: '2026-09-22T11:59:30Z', kind: 'message', text: 'line one line two' },
+    ])
+    expect(events[0]).not.toHaveProperty('tool')
+    expect(events[1]).not.toHaveProperty('display')
+    const shown = (await tool('orchestra_task').execute({ task: 'b' })) as { events: Array<Record<string, unknown>> }
+    expect(shown.events).toEqual(events)
   })
 
   it('upserts tasks and decisions but never accepts', async () => {

@@ -43,7 +43,8 @@ it('keeps the CLI bundles within their weight and free of classic zod', async ()
   // API-only Claude policy (2026-09-28): the policy refusal texts (including custom-header/legacy-run
   // refusals) and the runner's own route guard — main 616.3 KiB → 618, dict-ru 67.7 → 69,
   // cli-runner-main 48.7 KiB → 50.
-  for (const [name, ceiling] of [['main.js', 618], ['dict-ru.js', 69], ['cli-runner-main.js', 50], ['runner-main.js', 10]] as const) {
+  // Bounded public Activity display/progress and compact machine projections (2026-09-28): main 620.2 KiB → 624.
+  for (const [name, ceiling] of [['main.js', 624], ['dict-ru.js', 69], ['cli-runner-main.js', 50], ['runner-main.js', 10]] as const) {
     const code = await readFile(dist(name), 'utf8')
     expect(Buffer.byteLength(code), name).toBeLessThan(ceiling * 1024)
     // Classic zod registers `ZodString`/`ZodObject`; zod/mini registers `ZodMini…`. One classic import

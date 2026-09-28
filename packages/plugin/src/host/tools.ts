@@ -18,6 +18,7 @@ import {
   advanceDraftJobs,
   callerOf,
   classOfTask,
+  compactNormEvents,
   isAutoWorker,
   loadPresetAuthority,
   checkDraft,
@@ -323,7 +324,8 @@ export function orchestraTools(deps: ToolsDeps): ToolSpec[] {
         const { root, planId } = await target(a, call)
         const run = lastRun(await loadPlan(root, planId), text(a.task, 'task'))
         const backend = await deps.backendsFor(root).forAgent(run.agent, run.runId)
-        return normalize(await backend.events(run.runId)).slice(-MAX_EVENTS)
+        // The orchestrator gets the legacy compact events, never the browser's bounded display text or tool metadata.
+        return compactNormEvents(normalize(await backend.events(run.runId)).slice(-MAX_EVENTS))
       },
     },
     {

@@ -90,7 +90,7 @@ it('opens the correction field in the task panel already written up to the colon
       steerDraft={{ taskId: 'a', text: 'С шага «pnpm test»: ', seq: 1 }}
     />,
   )
-  const field = (await screen.findByRole('textbox', { name: 'Поправка воркеру' })) as HTMLTextAreaElement
+  const field = (await screen.findByRole('textbox', { name: 'Сообщение агенту' })) as HTMLTextAreaElement
   expect(field.value).toBe('С шага «pnpm test»: ')
 
   const user = userEvent.setup()
