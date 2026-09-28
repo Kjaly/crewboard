@@ -810,15 +810,22 @@ const CSS = `
 .orc-tech__step--problem .orc-tech__target{color:var(--orc-error)}
 .orc-live__age{flex:none;color:var(--orc-fg3)}
 .orc-live__problem{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--orc-error)}
-.orc-composer{flex:none;min-width:0;border-top:1px solid var(--orc-line);background:var(--orc-layer1);padding:7px 14px 9px}
-.orc-composer__head{display:flex;justify-content:flex-end;min-height:18px}
-.orc-composer__ask{border:0;background:transparent;padding:0;color:var(--orc-fg3);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);cursor:pointer}
-.orc-composer__ask:hover{color:var(--orc-fg2)}
-.orc-composer__row{display:flex;align-items:flex-end;gap:6px;min-width:0}
-.orc-composer__field{flex:1 1 auto;min-width:0;resize:none}
-.orc-composer__send{flex:none}
-.orc-composer__copy{flex:none}
-.orc-composer__hint{margin:4px 0 0;color:var(--orc-fg3);font-size:11px;line-height:16px}
+.orc-composer{flex:none;min-width:0;border-top:1px solid var(--orc-hair);background:var(--orc-layer1);padding:10px 12px 8px}
+.orc-composer__surface{min-width:0;display:flex;flex-direction:column;gap:4px;padding:8px 8px 6px;border-radius:22px;background:var(--dsw-specific-input-major,var(--orc-layer2));box-shadow:var(--dsw-elevation-soft,0 2px 10px #0000001f)}
+.orc-composer__surface:focus-within{outline:2px solid var(--dsw-alias-state-business-primary,var(--orc-accent));outline-offset:2px}
+.orc-composer__field{display:block;width:100%;min-width:0;min-height:48px;max-height:168px;padding:3px 6px 0;border:0;border-radius:0;outline:none;background:transparent;color:var(--orc-fg);caret-color:var(--dsw-alias-state-business-primary,var(--orc-accent));font:var(--dsw-font-xs-13,13px/20px system-ui,sans-serif);resize:none;overflow-y:auto;overflow-wrap:anywhere;scrollbar-width:thin;scrollbar-color:var(--dsw-alias-scrollbar-bg-l2,var(--orc-line)) transparent}
+.orc-root .orc-composer__field:focus-visible{outline:none}
+.orc-composer__field::placeholder{color:var(--dsw-alias-label-caption,var(--orc-fg3))}
+.orc-composer__row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;min-height:36px}
+.orc-composer__ask,.orc-composer__copy{min-width:0;min-height:32px;max-width:calc(100% - 44px);border:0;border-radius:8px;background:transparent;padding:4px 7px;color:var(--orc-fg2);font:var(--dsw-font-xxs-12,12px/18px system-ui,sans-serif);text-align:left;overflow-wrap:anywhere;cursor:pointer}
+.orc-composer__ask:hover,.orc-composer__copy:hover{background:var(--orc-hover);color:var(--orc-fg)}
+.orc-composer__send{display:grid;place-items:center;flex:none;width:36px;height:36px;margin-left:auto;padding:0;border:0;border-radius:50%;background:var(--dsw-alias-button-info-fill,var(--orc-accent-strong));color:#fff;cursor:pointer}
+.orc-composer__send:hover:not(:disabled){background:var(--dsw-alias-button-info-hover,var(--orc-accent))}
+.orc-composer__send:disabled{opacity:.4;cursor:default}
+.orc-composer__spinner{width:16px;height:16px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:orc-composer-spin .75s linear infinite}
+@keyframes orc-composer-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.orc-composer__spinner{animation:none}}
+.orc-composer__hint{margin:5px 6px 0;color:var(--orc-fg3);font:var(--dsw-font-xxxs-11,11px/16px system-ui,sans-serif);overflow-wrap:anywhere}
 /* Motion carries the actual change: only a line appended to the live window enters. Retained history,
    a tab switch and a detail refresh never replay. */
 .orc-ev--enter{animation:orc-ev-in 160ms cubic-bezier(.23,1,.32,1) both}

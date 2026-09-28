@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { SteerRecord, SteerResult } from '@crewboard/core'
 import { t, useLang } from '../i18n.js'
 
@@ -42,10 +42,17 @@ export function ActivityComposer({
 }) {
   useLang()
   const field = useRef<HTMLTextAreaElement>(null)
+  const composing = useRef(false)
   const [copied, setCopied] = useState(false)
   useEffect(() => {
     if (focusSignal > 0) field.current?.focus()
   }, [focusSignal])
+  useLayoutEffect(() => {
+    const textarea = field.current
+    if (!textarea) return
+    textarea.style.height = 'auto'
+    if (value && textarea.scrollHeight) textarea.style.height = `${Math.min(textarea.scrollHeight, 168)}px`
+  }, [value])
 
   const draft = value.trim()
   const result = outcome?.result
@@ -74,35 +81,37 @@ export function ActivityComposer({
 
   return (
     <section className="orc-composer" aria-label={t('panel.activity.messageLabel')}>
-      {readOnly ? null : (
-        <div className="orc-composer__head">
-          <button type="button" className="orc-composer__ask" onClick={askProgress}>{t('panel.activity.askProgress')}</button>
-        </div>
-      )}
-      <div className="orc-composer__row">
+      <div className="orc-composer__surface" aria-busy={pending}>
         <textarea
           ref={field}
-          className="orc-field orc-composer__field"
+          className="orc-composer__field"
           aria-label={t('panel.activity.messageLabel')}
           placeholder={t('panel.activity.messagePlaceholder')}
           value={value}
           rows={2}
           readOnly={readOnly}
           onChange={(event) => onChange(event.target.value)}
+          onCompositionStart={() => { composing.current = true }}
+          onCompositionEnd={() => { composing.current = false }}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.repeat && !event.nativeEvent.isComposing && !composing.current && event.keyCode !== 229) {
               event.preventDefault()
               send()
             }
           }}
         />
-        {readOnly ? (
-          draft ? <button type="button" className="orc-btn orc-composer__copy" onClick={copy}>{copied ? t('panel.activity.copied') : t('panel.activity.copyDraft')}</button> : null
-        ) : (
-          <button type="button" className="orc-btn orc-composer__send" disabled={pending || !draft || deliveredSame} onClick={send}>
-            {t('panel.task.send')}
-          </button>
-        )}
+        <div className="orc-composer__row">
+          {readOnly ? (
+            draft ? <button type="button" className="orc-composer__copy" onClick={copy}>{copied ? t('panel.activity.copied') : t('panel.activity.copyDraft')}</button> : null
+          ) : (
+            <>
+              <button type="button" className="orc-composer__ask" onClick={askProgress}>{t('panel.activity.askProgress')}</button>
+              <button type="button" className="orc-composer__send" aria-label={t('panel.task.send')} title={pending ? t('panel.activity.sending') : t('panel.task.send')} disabled={pending || !draft || deliveredSame} onClick={send}>
+                {pending ? <span className="orc-composer__spinner" aria-hidden="true" /> : <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M9 14V4m0 0L4.75 8.25M9 4l4.25 4.25" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+              </button>
+            </>
+          )}
+        </div>
       </div>
       {unsent && readOnly ? <p className="orc-hint" role="status">{t('panel.activity.unsent')}</p> : null}
       {failed ? <p role="alert" className="orc-error">{t('panel.task.steerFailed', { reason: result?.delivery === 'failed' ? result.reason : '' })}</p> : null}
@@ -124,7 +133,7 @@ export function ActivityComposer({
           {t(`panel.task.steerState.${state}`)}{record ? '' : ` · ${t('panel.activity.receiptInitial')}`}
         </p>
       ) : null}
-      {readOnly ? null : <p className="orc-composer__hint">{t('panel.activity.sendHint')}</p>}
+      {readOnly ? null : <p className="orc-composer__hint" role={pending ? 'status' : undefined}>{pending ? t('panel.activity.sending') : t('panel.activity.sendHint')}</p>}
     </section>
   )
 }

@@ -1116,6 +1116,7 @@ export const ru = {
   'panel.activity.askProgress': "Спросить о ходе",
   'panel.activity.askProgressText': "Кратко: что сделано, текущий шаг и следующий шаг?",
   'panel.activity.sendHint': "Ctrl/⌘+Enter — отправить",
+  'panel.activity.sending': "Отправляется…",
   'panel.activity.receiptInitial': "на момент отправки",
   'panel.activity.unsent': "Не отправлено — запуск завершился. Скопируйте текст или перезапустите с этой поправкой.",
   'panel.activity.copyDraft': "Скопировать текст",

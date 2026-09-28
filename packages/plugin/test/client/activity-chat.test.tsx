@@ -121,6 +121,20 @@ describe('Activity composer', () => {
     expect(screen.getByRole('button', { name: 'Отправить' })).toHaveProperty('disabled', true)
     rerender(<ActivityComposer value="готово" onChange={() => {}} onSend={onSend} pending outcome={null} onRelaunch={() => {}} focusSignal={0} />)
     expect(screen.getByRole('button', { name: 'Отправить' })).toHaveProperty('disabled', true)
+    expect(screen.getByText('Отправляется…')).toBeTruthy()
+  })
+
+  it('does not submit while composing text or on a repeated shortcut event', () => {
+    const onSend = vi.fn()
+    render(<ActivityComposer value="черновик" onChange={() => {}} onSend={onSend} pending={false} outcome={null} onRelaunch={() => {}} focusSignal={0} />)
+    const field = screen.getByRole('textbox', { name: 'Сообщение агенту' })
+    fireEvent.compositionStart(field)
+    fireEvent.keyDown(field, { key: 'Enter', ctrlKey: true })
+    fireEvent.compositionEnd(field)
+    fireEvent.keyDown(field, { key: 'Enter', ctrlKey: true, repeat: true })
+    expect(onSend).not.toHaveBeenCalled()
+    fireEvent.keyDown(field, { key: 'Enter', metaKey: true })
+    expect(onSend).toHaveBeenCalledTimes(1)
   })
 
   it('disables only the draft that was delivered, never a newer one, and keeps the id diagnostic', () => {

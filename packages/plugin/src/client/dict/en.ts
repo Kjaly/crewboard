@@ -1121,6 +1121,7 @@ export const en = {
   'panel.activity.askProgress': "Ask for progress",
   'panel.activity.askProgressText': "Briefly: what is done, current step and next step?",
   'panel.activity.sendHint': "Ctrl/⌘+Enter to send",
+  'panel.activity.sending': "Sending…",
   'panel.activity.receiptInitial': "at request time",
   'panel.activity.unsent': "Unsent — the run has finished. Copy it or relaunch with this correction.",
   'panel.activity.copyDraft': "Copy text",
