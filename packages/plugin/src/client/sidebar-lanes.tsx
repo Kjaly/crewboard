@@ -1,19 +1,19 @@
-import { type KeyboardEvent, type MouseEvent, useEffect, useMemo, useState } from 'react'
+import { type KeyboardEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from 'react'
 import type { RepoSnapshot } from '../shared/types.js'
 import { t } from './i18n.js'
-import { type LaneCounts, type LaneGroups, type LaneRow, laneTree, readLaneGroups, writeLaneGroups } from './lane-tree.js'
+import { type LaneCounts, type LaneGroups, type LaneRow, historyByRecency, laneTree, readLaneGroups, readLaneGroupsForMount, writeLaneGroups } from './lane-tree.js'
 import { laneOf, laneTitle } from './views/graph/layout.js'
 
 /**
  * The third level of the sidebar tree, under the open plan: its lanes, live first. «Now» holds every
- * lane with an open task and starts open; «History» holds the finished ones and starts folded. Each
- * group's open state is remembered per plan. Rows speak the sidebar's tree language (`data-srow`,
- * `data-parent`, `data-children`), so the rail's arrow keys walk them with the rest; the two group
- * rows fold and unfold themselves on ←/→.
+ * lane with an open task and starts open; «History» holds the finished ones and always starts folded.
+ * «Now»'s open state is remembered per plan; «History» is opened by the reader for the current visit
+ * only. Rows speak the sidebar's tree language (`data-srow`, `data-parent`, `data-children`), so the
+ * rail's arrow keys walk them with the rest; the two group rows fold and unfold themselves on ←/→.
  */
 
-/** History is long on a big plan: the first rows show, the rest wait behind «… N more». */
-export const HISTORY_SHOWN = 12
+/** «History» opens on the four most recently completed lanes; each «Show more» adds four more. */
+export const HISTORY_SHOWN = 4
 
 const COUNT_MARKS: ReadonlyArray<readonly [keyof LaneCounts, string]> = [
   ['running', '●'],
@@ -38,40 +38,45 @@ export function PlanLanes(props: {
   parentKey: string
   /** The lane the graph looks at (or the lane Work and Review filter to). */
   highlight: string | null
-  /** The selected task: going to it opens the group (and the «… N more» tail) that holds its lane. */
+  /** The selected task: going to a live one opens «Now»; a finished one never unfolds «History». */
   selected?: string | null
   onPick(lane: string): void
   onMenu(event: MouseEvent<HTMLElement>, lane: string): void
 }) {
   const { repo, parentKey, highlight } = props
   const tree = useMemo(() => laneTree(repo), [repo])
-  const [groups, setGroups] = useState<LaneGroups>(() => readLaneGroups(repo.root, repo.planId))
-  const [showAll, setShowAll] = useState(false)
+  // «History» in display order only; the canonical order stays in `tree.history`.
+  const history = useMemo(() => historyByRecency(repo, tree.history), [repo, tree])
+  const [groups, setGroups] = useState<LaneGroups>(() => readLaneGroupsForMount(repo.root, repo.planId))
+  const [historyLimit, setHistoryLimit] = useState(HISTORY_SHOWN)
+  // A fold the reader made by hand in this visit wins over a later selection.
+  const foldedByHand = useRef(new Set<keyof LaneGroups>())
   useEffect(() => {
-    setGroups(readLaneGroups(repo.root, repo.planId))
-    setShowAll(false)
+    setGroups(readLaneGroupsForMount(repo.root, repo.planId))
+    setHistoryLimit(HISTORY_SHOWN)
+    foldedByHand.current = new Set()
   }, [repo.root, repo.planId])
   const toggle = (group: keyof LaneGroups, open = !groups[group]) => {
     const next = { ...groups, [group]: open }
+    foldedByHand.current.add(group)
     setGroups(next)
     writeLaneGroups(repo.root, repo.planId, next)
+    // Every fresh opening starts from the four most recent lanes.
+    if (group === 'history' && !open) setHistoryLimit(HISTORY_SHOWN)
   }
-  // Only a new selection opens a group: folding it again by hand keeps the task selected.
+  // Only a new selection opens «Now»: folding it by hand keeps the task selected. «History» is never
+  // unfolded for a selection, and never reveals its tail — its open state is the reader's own.
   // biome-ignore lint/correctness/useExhaustiveDependencies: The selection alone drives this reveal.
   useEffect(() => {
     const task = props.selected ? repo.tasks.find((item) => item.id === props.selected) : undefined
     if (!task) return
     const lane = laneOf(task)
-    const past = tree.history.findIndex((row) => row.lane === lane)
-    const key: keyof LaneGroups = past >= 0 ? 'history' : 'now'
+    if (tree.history.some((row) => row.lane === lane)) return
+    if (foldedByHand.current.has('now')) return
     // Read from storage, not state: on a plan switch the state still holds the previous plan's groups.
-    const stored = readLaneGroups(repo.root, repo.planId)
-    if (!stored[key]) {
-      const next = { ...stored, [key]: true }
-      setGroups(next)
-      writeLaneGroups(repo.root, repo.planId, next)
-    }
-    if (past >= HISTORY_SHOWN) setShowAll(true)
+    if (readLaneGroups(repo.root, repo.planId).now) return
+    // Only «Now» changes: a stored legacy `history: true` must never ride into this visit's state.
+    setGroups((current) => ({ ...current, now: true }))
   }, [props.selected, repo.root, repo.planId])
   const scope = `${repo.root}/${repo.planId ?? ''}`
   const groupKey = (group: keyof LaneGroups) => `lanes:${group}:${scope}`
@@ -128,7 +133,7 @@ export function PlanLanes(props: {
   const group = (key: keyof LaneGroups, label: string, rows: LaneRow[]) => {
     if (rows.length === 0) return null
     const open = groups[key]
-    const shown = key === 'history' && !showAll ? rows.slice(0, HISTORY_SHOWN) : rows
+    const shown = key === 'history' ? rows.slice(0, historyLimit) : rows
     const hidden = rows.length - shown.length
     return (
       <li role="none">
@@ -139,7 +144,7 @@ export function PlanLanes(props: {
           data-srow
           data-skey={groupKey(key)}
           data-parent={parentKey}
-          data-children={open && rows[0] ? rowKey(rows[0].lane) : undefined}
+          data-children={open && shown[0] ? rowKey(shown[0].lane) : undefined}
           className={`orc-srow__main orc-srow__lanegroup${key === 'history' ? ' orc-srow__lanegroup--past' : ''}`}
           onClick={() => toggle(key)}
           onKeyDown={(event) => onGroupKeys(event, key, rows)}
@@ -153,8 +158,8 @@ export function PlanLanes(props: {
             {shown.map((row) => laneRow(row, groupKey(key)))}
             {hidden > 0 ? (
               <li role="none">
-                <button type="button" data-srow data-skey={`lanes:more:${scope}`} data-parent={groupKey(key)} className="orc-srow__main orc-srow__main--lane orc-srow__main--past" onClick={() => setShowAll(true)}>
-                  <span className="orc-srow__name">{t('side.lanes.more', { count: hidden })}</span>
+                <button type="button" data-srow data-skey={`lanes:more:${scope}`} data-parent={groupKey(key)} className="orc-srow__main orc-srow__main--lane orc-srow__main--past" onClick={() => setHistoryLimit((limit) => limit + HISTORY_SHOWN)}>
+                  <span className="orc-srow__name">{t('side.lanes.more', { count: Math.min(HISTORY_SHOWN, hidden) })}</span>
                 </button>
               </li>
             ) : null}
@@ -169,7 +174,7 @@ export function PlanLanes(props: {
     // biome-ignore lint/a11y/useSemanticElements: A tree's nested level is an ARIA group, not a form fieldset.
     <ul className="orc-srow__kids orc-lanetree" role="group" aria-label={t('side.lanes.aria')}>
       {group('now', t('side.lanes.now', { count: tree.now.length }), tree.now)}
-      {group('history', t('side.lanes.history', { count: tree.history.length }), tree.history)}
+      {group('history', t('side.lanes.history', { count: history.length }), history)}
     </ul>
   )
 }

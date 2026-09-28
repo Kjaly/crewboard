@@ -103,7 +103,7 @@ it('a click on a node the reader already sees does not move the camera', async (
   expect(centreOf(camera)).toEqual(before)
 })
 
-it('the sidebar tree opens the History group, tail included, that holds the selected task', () => {
+it('the sidebar tree keeps History folded for a selected finished task', () => {
   const tasks = [
     ...Array.from({ length: 14 }, (_, i) => makeTask({ id: `h${i}`, lane: `Past ${String(i).padStart(2, '0')}`, status: 'accepted' })),
     makeTask({ id: 'live', lane: 'Live', status: 'running' }),
@@ -114,13 +114,15 @@ it('the sidebar tree opens the History group, tail included, that holds the sele
   const { rerender } = render(<RepoSidebar snapshot={makeSnapshot(repo)} repo={repo} open onToggle={() => {}} lanes={lanes} />)
   const history = () => screen.getByRole('treeitem', { name: /^History/ })
   expect(history().getAttribute('aria-expanded')).toBe('false')
-  rerender(<RepoSidebar snapshot={makeSnapshot(repo)} repo={repo} open onToggle={() => {}} lanes={{ ...lanes, selected: 'h13' }} />)
-  expect(history().getAttribute('aria-expanded')).toBe('true')
-  expect(screen.getByRole('treeitem', { name: /^Past 13/ })).toBeTruthy()
-  // Folding it again by hand keeps it folded while the selection stands.
-  fireEvent.click(history())
+  // A restored selection of a finished task never unfolds History nor reveals its tail.
   rerender(<RepoSidebar snapshot={makeSnapshot(repo)} repo={repo} open onToggle={() => {}} lanes={{ ...lanes, selected: 'h13' }} />)
   expect(history().getAttribute('aria-expanded')).toBe('false')
+  expect(screen.queryByRole('treeitem', { name: /^Past 13/ })).toBeNull()
+  // The reader opens it by hand; a later poll keeps that choice.
+  fireEvent.click(history())
+  expect(history().getAttribute('aria-expanded')).toBe('true')
+  rerender(<RepoSidebar snapshot={makeSnapshot(repo)} repo={repo} open onToggle={() => {}} lanes={{ ...lanes, selected: 'h13' }} />)
+  expect(history().getAttribute('aria-expanded')).toBe('true')
 })
 
 it('a link to a task in a folded lane opens with the lane unfolded and the task selected', async () => {
@@ -134,5 +136,6 @@ it('a link to a task in a folded lane opens with the lane unfolded and the task 
   const node = await screen.findByRole('button', { name: /^Old 2/ }, { timeout: 10_000 })
   expect(node.getAttribute('aria-pressed')).toBe('true')
   expect(screen.queryByRole('button', { name: 'Expand lane Old' })).toBeNull()
-  expect(screen.getByRole('treeitem', { name: /^History/ }).getAttribute('aria-expanded')).toBe('true')
+  // The graph unfolds the lane; the sidebar's History stays the reader's own choice.
+  expect(screen.getByRole('treeitem', { name: /^History/ }).getAttribute('aria-expanded')).toBe('false')
 })

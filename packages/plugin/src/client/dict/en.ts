@@ -460,7 +460,7 @@ export const en = {
   "side.lanes.now": "Now · {count}",
   "side.lanes.history": "History · {count}",
   "side.lanes.noLane": "No lane",
-  "side.lanes.more": "… {count} more",
+  "side.lanes.more": "Show {count} more",
   "side.lanes.actions": "Actions for lane {lane}",
   "side.lanes.copyLink": "Copy link to lane",
   "side.lanes.count.running": "{count} running",

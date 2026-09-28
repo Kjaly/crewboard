@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DEFAULT_LANE_GROUPS, laneAt, laneTree, liveLaneOrder, readLaneGroups, writeLaneGroups } from '../../src/client/lane-tree.js'
+import { DEFAULT_LANE_GROUPS, historyByRecency, laneAt, laneTree, liveLaneOrder, readLaneGroups, readLaneGroupsForMount, terminalAt, writeLaneGroups } from '../../src/client/lane-tree.js'
 import { DECISION_LANE, laneOrder, layoutFoldStack } from '../../src/client/views/graph/layout.js'
 import { makeRepo, makeTask } from './helpers.js'
 
@@ -74,6 +74,45 @@ it('stacks the folded graph in the live-first order', () => {
   expect(bands.map((band) => band.lane)).toEqual(liveLaneOrder(repo))
 })
 
+it('reads a finished task’s terminal time from the newest valid mark', () => {
+  expect(terminalAt(makeTask({ id: 'a', status: 'accepted', acceptedAt: '2026-01-02T00:00:00Z' }))).toBe(Date.parse('2026-01-02T00:00:00Z'))
+  // The merge receipt is later than the acceptance that preceded it.
+  expect(terminalAt(makeTask({ id: 'b', status: 'accepted', acceptedAt: '2026-01-02T00:00:00Z', merged: { at: '2026-01-05T00:00:00Z', into: 'main' } }))).toBe(Date.parse('2026-01-05T00:00:00Z'))
+  // The orchestrator's check can be the only mark a closed task has.
+  expect(terminalAt(makeTask({ id: 'c', status: 'closed', checkAt: '2026-01-03T00:00:00Z' }))).toBe(Date.parse('2026-01-03T00:00:00Z'))
+  // An unreadable date is no date: the fallback must not invent one.
+  expect(terminalAt(makeTask({ id: 'd', status: 'accepted', acceptedAt: 'yesterday', checkAt: '' }))).toBeUndefined()
+  expect(terminalAt(makeTask({ id: 'e', status: 'accepted' }))).toBeUndefined()
+})
+
+it('shows History newest first, ties and undated lanes in plan order, display only', () => {
+  const repo = makeRepo([
+    makeTask({ id: 'a', lane: 'Alpha', status: 'accepted', acceptedAt: '2026-01-01T00:00:00Z' }),
+    makeTask({ id: 'b', lane: 'Beta', status: 'accepted', acceptedAt: '2026-03-01T00:00:00Z' }),
+    makeTask({ id: 'c', lane: 'Gamma', status: 'accepted', acceptedAt: '2026-02-01T00:00:00Z' }),
+    makeTask({ id: 'd', lane: 'Delta', status: 'accepted', acceptedAt: '2026-03-01T00:00:00Z' }),
+    makeTask({ id: 'e', lane: 'Echo', status: 'accepted' }),
+    makeTask({ id: 'live', lane: 'Live', status: 'running' }),
+  ])
+  const canonical = laneTree(repo).history
+  expect(canonical.map((row) => row.lane)).toEqual(['Alpha', 'Beta', 'Gamma', 'Delta', 'Echo'])
+  // Beta and Delta share a time: the plan order between them stands. Echo has no mark and follows them.
+  expect(historyByRecency(repo, canonical).map((row) => row.lane)).toEqual(['Beta', 'Delta', 'Gamma', 'Alpha', 'Echo'])
+  // The input keeps its order; the graph's canonical order is untouched.
+  expect(canonical.map((row) => row.lane)).toEqual(['Alpha', 'Beta', 'Gamma', 'Delta', 'Echo'])
+  expect(liveLaneOrder(repo)).toEqual(['Live', 'Alpha', 'Beta', 'Gamma', 'Delta', 'Echo'])
+})
+
+it('ranks a lane by its most recent finished task, not its first', () => {
+  const repo = makeRepo([
+    makeTask({ id: 'two', lane: 'Two', status: 'accepted', acceptedAt: '2026-03-01T00:00:00Z' }),
+    makeTask({ id: 'one-old', lane: 'One', status: 'accepted', acceptedAt: '2026-01-01T00:00:00Z' }),
+    makeTask({ id: 'one-new', lane: 'One', status: 'closed', checkAt: '2026-04-01T00:00:00Z' }),
+  ])
+  expect(laneTree(repo).history.map((row) => row.lane)).toEqual(['Two', 'One'])
+  expect(historyByRecency(repo, laneTree(repo).history).map((row) => row.lane)).toEqual(['One', 'Two'])
+})
+
 it('names the lane under the middle of the view, and the nearest chip in a packed folded band', () => {
   const bands = [
     { lane: 'Live', top: 0, height: 200 },
@@ -98,6 +137,16 @@ describe('group state', () => {
     writeLaneGroups('/r', 'p', { now: false, history: true })
     expect(readLaneGroups('/r', 'p')).toEqual({ now: false, history: true })
     expect(readLaneGroups('/r', 'other')).toEqual(DEFAULT_LANE_GROUPS)
+  })
+
+  it('opens a fresh mount at History folded, whatever a stored visit said', () => {
+    // The raw store still remembers both folds for other readers of the key.
+    writeLaneGroups('/r', 'p', { now: false, history: true })
+    expect(readLaneGroups('/r', 'p')).toEqual({ now: false, history: true })
+    // A mount keeps the remembered «Now» and never restores an open «History».
+    expect(readLaneGroupsForMount('/r', 'p')).toEqual({ now: false, history: false })
+    writeLaneGroups('/r', 'p', { now: true, history: true })
+    expect(readLaneGroupsForMount('/r', 'p')).toEqual({ now: true, history: false })
   })
 
   it('reads a broken or blocked storage as the defaults and never throws', () => {

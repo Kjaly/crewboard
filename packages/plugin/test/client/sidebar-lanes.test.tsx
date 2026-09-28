@@ -27,12 +27,21 @@ const current = (list: TaskSnapshot[] = tasks(), planId = 'main') => makeRepo(li
   plans: [plan({ id: 'main', current: planId === 'main', goal: 'Main goal', taskCount: list.length }), plan({ id: 'two', current: planId === 'two', goal: 'Second', taskCount: 1 })],
 } as Partial<RepoSnapshot>) as OrchestraRepoSnapshot
 
-function mount(repo = current(), lanes: { highlight?: string | null; onPick?: (lane: string) => void; link?: (lane: string) => string } = {}) {
+function mount(repo = current(), lanes: { highlight?: string | null; selected?: string | null; onPick?: (lane: string) => void; link?: (lane: string) => string } = {}) {
   installFetch(() => jsonOk(null))
   const onPick = lanes.onPick ?? vi.fn()
-  const view = render(<RepoSidebar snapshot={makeSnapshot(repo)} repo={repo} open onToggle={() => {}} lanes={{ highlight: lanes.highlight ?? null, onPick, link: lanes.link ?? ((lane) => `#lane=${lane}`) }} />)
+  const view = render(<RepoSidebar snapshot={makeSnapshot(repo)} repo={repo} open onToggle={() => {}} lanes={{ highlight: lanes.highlight ?? null, selected: lanes.selected ?? null, onPick, link: lanes.link ?? ((lane) => `#lane=${lane}`) }} />)
   return { ...view, onPick }
 }
+
+/** `count` finished lanes, the newest first in display order: `Past 00` is the most recent. */
+const historyLanes = (count: number): TaskSnapshot[] =>
+  Array.from({ length: count }, (_, i) => makeTask({
+    id: `h${i}`, lane: `Past ${String(i).padStart(2, '0')}`, status: 'accepted',
+    acceptedAt: new Date(Date.UTC(2026, 0, 1) + (count - i) * 86_400_000).toISOString(),
+  }))
+
+const groupOf = (name: string) => screen.getByRole('treeitem', { name }).parentElement!.querySelector('[role="group"]') as HTMLElement
 
 const names = (group: HTMLElement) => within(group).getAllByRole('treeitem').map((row) => row.querySelector('.orc-srow__name')?.textContent)
 
@@ -69,24 +78,55 @@ describe('lane tree in the sidebar', () => {
     expect(screen.getByRole('treeitem', { name: /^No lane/ }).querySelector('.orc-lanecounts')?.textContent).toBe('○1')
   })
 
-  it('remembers the open state of each group per plan', async () => {
+  it('remembers Now per plan but never reopens History on a new mount', async () => {
     const user = userEvent.setup()
     const view = mount()
+    await user.click(screen.getByRole('treeitem', { name: 'Now · 4' }))
     await user.click(screen.getByRole('treeitem', { name: 'History · 1' }))
+    expect(screen.getByRole('treeitem', { name: 'History · 1' }).getAttribute('aria-expanded')).toBe('true')
     const past = screen.getByRole('treeitem', { name: /^Plan 1c/ })
     expect(past.className).toContain('orc-srow__main--past')
     expect(past.querySelector('.orc-lanecounts')?.textContent).toBe('✓2')
-    await user.click(screen.getByRole('treeitem', { name: 'Now · 4' }))
-    expect(screen.queryByRole('treeitem', { name: /^Analysis/ })).toBeNull()
     view.unmount()
 
     mount()
-    expect(screen.getByRole('treeitem', { name: 'History · 1' }).getAttribute('aria-expanded')).toBe('true')
+    // «Now» was folded by hand and stays folded; an open History is not inherited from the last visit.
     expect(screen.getByRole('treeitem', { name: 'Now · 4' }).getAttribute('aria-expanded')).toBe('false')
+    expect(screen.getByRole('treeitem', { name: 'History · 1' }).getAttribute('aria-expanded')).toBe('false')
     cleanup()
     // Another plan starts from the defaults.
     mount(current([makeTask({ id: 'x', lane: 'Done', status: 'accepted' }), makeTask({ id: 'y', lane: 'Live', status: 'running' })], 'two'))
     expect(screen.getByRole('treeitem', { name: 'History · 1' }).getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('keeps History folded on mount even with a stored open state and a restored historical selection', () => {
+    localStorage.setItem(`crewboard:lane-tree:${ROOT}:main`, JSON.stringify({ now: true, history: true }))
+    mount(current(), { selected: 'h1' })
+    expect(screen.getByRole('treeitem', { name: 'History · 1' }).getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByRole('treeitem', { name: /^Plan 1c/ })).toBeNull()
+  })
+
+  it('opens only Now for a live selection, never the legacy stored History', () => {
+    // A previous visit left History open and Now folded; the live selection must not revive History.
+    localStorage.setItem(`crewboard:lane-tree:${ROOT}:main`, JSON.stringify({ now: false, history: true }))
+    mount(current(), { selected: 'r1' })
+    expect(screen.getByRole('treeitem', { name: 'Now · 4' }).getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByRole('treeitem', { name: 'History · 1' }).getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByRole('treeitem', { name: /^Plan 1c/ })).toBeNull()
+  })
+
+  it('keeps a hand-opened History open when a live selection reopens Now', async () => {
+    localStorage.setItem(`crewboard:lane-tree:${ROOT}:main`, JSON.stringify({ now: false, history: false }))
+    const user = userEvent.setup()
+    const view = mount(current(), { selected: null })
+    expect(screen.getByRole('treeitem', { name: 'Now · 4' }).getAttribute('aria-expanded')).toBe('false')
+    await user.click(screen.getByRole('treeitem', { name: 'History · 1' }))
+    expect(screen.getByRole('treeitem', { name: 'History · 1' }).getAttribute('aria-expanded')).toBe('true')
+    // The live selection reveals Now; the reader's open History is not closed or copied over.
+    const repo = current()
+    view.rerender(<RepoSidebar snapshot={makeSnapshot(repo)} repo={repo} open onToggle={() => {}} lanes={{ highlight: null, selected: 'r1', onPick: vi.fn(), link: () => '' }} />)
+    expect(screen.getByRole('treeitem', { name: 'Now · 4' }).getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByRole('treeitem', { name: 'History · 1' }).getAttribute('aria-expanded')).toBe('true')
   })
 
   it('picks a lane on click and highlights the lane in view', async () => {
@@ -137,14 +177,114 @@ describe('lane tree in the sidebar', () => {
     expect(screen.getByRole('tree', { name: 'Repositories' })).toBeTruthy()
   })
 
-  it('shows a long History in part, behind «… N more»', async () => {
+  it('keeps a History folded by hand closed through selection and polling', async () => {
     const user = userEvent.setup()
-    const many = Array.from({ length: HISTORY_SHOWN + 5 }, (_, i) => makeTask({ id: `h${i}`, lane: `L${i}`, status: 'accepted' }))
-    mount(current([...many, makeTask({ id: 'live', lane: 'Live', status: 'running' })]))
-    await user.click(screen.getByRole('treeitem', { name: `History · ${HISTORY_SHOWN + 5}` }))
-    expect(screen.getAllByRole('treeitem', { name: /^L\d+/ })).toHaveLength(HISTORY_SHOWN)
-    await user.click(screen.getByRole('button', { name: '… 5 more' }))
-    expect(screen.getAllByRole('treeitem', { name: /^L\d+/ })).toHaveLength(HISTORY_SHOWN + 5)
+    const view = mount()
+    const history = () => screen.getByRole('treeitem', { name: 'History · 1' })
+    await user.click(history())
+    await user.click(history())
+    expect(history().getAttribute('aria-expanded')).toBe('false')
+    const lanes = { highlight: null, selected: 'h1', onPick: vi.fn(), link: () => '' }
+    // Selecting the finished task does not unfold History again...
+    const repo = current()
+    view.rerender(<RepoSidebar snapshot={makeSnapshot(repo)} repo={repo} open onToggle={() => {}} lanes={lanes} />)
+    expect(history().getAttribute('aria-expanded')).toBe('false')
+    // ...and neither does the next poll.
+    const poll = current()
+    view.rerender(<RepoSidebar snapshot={makeSnapshot(poll)} repo={poll} open onToggle={() => {}} lanes={lanes} />)
+    expect(history().getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('opens History on the four most recently completed lanes, newest first', async () => {
+    const user = userEvent.setup()
+    mount(current([
+      makeTask({ id: 'a', lane: 'Alpha', status: 'accepted', acceptedAt: '2026-01-01T00:00:00Z' }),
+      makeTask({ id: 'b', lane: 'Beta', status: 'accepted', acceptedAt: '2026-03-01T00:00:00Z' }),
+      makeTask({ id: 'c', lane: 'Gamma', status: 'accepted', acceptedAt: '2026-02-01T00:00:00Z' }),
+      makeTask({ id: 'd', lane: 'Delta', status: 'accepted', acceptedAt: '2026-04-01T00:00:00Z' }),
+      makeTask({ id: 'e', lane: 'Echo', status: 'accepted' }),
+      makeTask({ id: 'live', lane: 'Live', status: 'running' }),
+    ]))
+    await user.click(screen.getByRole('treeitem', { name: 'History · 5' }))
+    expect(names(groupOf('History · 5'))).toEqual(['Delta', 'Beta', 'Gamma', 'Alpha'])
+    // → from the group steps into the first displayed row, so the rail follows the sorted order.
+    expect(screen.getByRole('treeitem', { name: 'History · 5' }).getAttribute('data-children')).toBe(`lane:${ROOT}/main:Delta`)
+    // The undated lane and the fifth dated one wait behind the count, not dumped whole.
+    expect(screen.queryByRole('treeitem', { name: /^Echo/ })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Show 1 more' })).toBeTruthy()
+  })
+
+  it('pages History four lanes at a time, the last batch bounded', async () => {
+    const user = userEvent.setup()
+    mount(current([...historyLanes(14), makeTask({ id: 'live', lane: 'Live', status: 'running' })]))
+    await user.click(screen.getByRole('treeitem', { name: 'History · 14' }))
+    const shown = () => screen.getAllByRole('treeitem', { name: /^Past \d+/ }).length
+    expect(shown()).toBe(HISTORY_SHOWN)
+    await user.click(screen.getByRole('button', { name: 'Show 4 more' }))
+    expect(shown()).toBe(8)
+    await user.click(screen.getByRole('button', { name: 'Show 4 more' }))
+    expect(shown()).toBe(12)
+    await user.click(screen.getByRole('button', { name: 'Show 2 more' }))
+    // The last batch is bounded: all fourteen, and no «more» row.
+    expect(shown()).toBe(14)
+    expect(screen.queryByRole('button', { name: /more/ })).toBeNull()
+  })
+
+  it('resets History to four lanes when it is folded and opened again', async () => {
+    const user = userEvent.setup()
+    mount(current([...historyLanes(10), makeTask({ id: 'live', lane: 'Live', status: 'running' })]))
+    const history = () => screen.getByRole('treeitem', { name: 'History · 10' })
+    const shown = () => screen.getAllByRole('treeitem', { name: /^Past \d+/ }).length
+    await user.click(history())
+    await user.click(screen.getByRole('button', { name: 'Show 4 more' }))
+    expect(shown()).toBe(8)
+    await user.click(history())
+    expect(screen.queryByRole('treeitem', { name: /^Past \d+/ })).toBeNull()
+    await user.click(history())
+    expect(shown()).toBe(HISTORY_SHOWN)
+    expect(screen.getByRole('button', { name: 'Show 4 more' })).toBeTruthy()
+  })
+
+  it('keeps the open History and its page across a poll', async () => {
+    const user = userEvent.setup()
+    const same = [...historyLanes(10), makeTask({ id: 'live', lane: 'Live', status: 'running' })]
+    const view = mount(current(same, 'main'))
+    await user.click(screen.getByRole('treeitem', { name: 'History · 10' }))
+    await user.click(screen.getByRole('button', { name: 'Show 4 more' }))
+    // A poll is a new snapshot: a live lane appears, the finished lanes do not change.
+    const poll = current([...same, makeTask({ id: 'ready', lane: 'Next', status: 'ready' })], 'main')
+    view.rerender(<RepoSidebar snapshot={makeSnapshot(poll)} repo={poll} open onToggle={() => {}} lanes={{ highlight: null, onPick: vi.fn(), link: () => '' }} />)
+    expect(screen.getByRole('treeitem', { name: 'History · 10' }).getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getAllByRole('treeitem', { name: /^Past \d+/ })).toHaveLength(8)
+  })
+
+  it('folds History and resets its page when the plan or repository changes', async () => {
+    const user = userEvent.setup()
+    const many = [...historyLanes(10), makeTask({ id: 'live', lane: 'Live', status: 'running' })]
+    const view = mount(current(many, 'main'))
+    await user.click(screen.getByRole('treeitem', { name: 'History · 10' }))
+    await user.click(screen.getByRole('button', { name: 'Show 4 more' }))
+    expect(screen.getAllByRole('treeitem', { name: /^Past \d+/ })).toHaveLength(8)
+    const other = current(many, 'two')
+    view.rerender(<RepoSidebar snapshot={makeSnapshot(other)} repo={other} open onToggle={() => {}} lanes={{ highlight: null, onPick: vi.fn(), link: () => '' }} />)
+    expect(screen.getByRole('treeitem', { name: 'History · 10' }).getAttribute('aria-expanded')).toBe('false')
+    await user.click(screen.getByRole('treeitem', { name: 'History · 10' }))
+    expect(screen.getAllByRole('treeitem', { name: /^Past \d+/ })).toHaveLength(HISTORY_SHOWN)
+    // A repository switch behaves the same.
+    const moved = { ...current(many, 'main'), root: '/other' } as OrchestraRepoSnapshot
+    view.rerender(<RepoSidebar snapshot={makeSnapshot(moved)} repo={moved} open onToggle={() => {}} lanes={{ highlight: null, onPick: vi.fn(), link: () => '' }} />)
+    expect(screen.getByRole('treeitem', { name: 'History · 10' }).getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('leaves Now uncapped while History pages, and keeps accepted-unmerged there', async () => {
+    const user = userEvent.setup()
+    const now = Array.from({ length: 6 }, (_, i) => makeTask({ id: `n${i}`, lane: `Live ${i}`, status: 'running' }))
+    mount(current([...historyLanes(6), ...now, makeTask({ id: 'm', lane: 'Merge', status: 'accepted', unmerged: true })]))
+    // All seven live lanes show; only History is capped.
+    expect(names(groupOf('Now · 7'))).toContain('Merge')
+    expect(names(groupOf('Now · 7'))).toHaveLength(7)
+    await user.click(screen.getByRole('treeitem', { name: 'History · 6' }))
+    expect(screen.getAllByRole('treeitem', { name: /^Past \d+/ })).toHaveLength(HISTORY_SHOWN)
   })
 
   it('speaks both languages', () => {

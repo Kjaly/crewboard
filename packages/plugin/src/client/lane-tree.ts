@@ -69,6 +69,49 @@ export const liveLaneOrder = (repo: Pick<RepoSnapshot, 'tasks'>): string[] => {
 }
 
 /**
+ * A finished task's terminal time in ms: the latest readable of its merge receipt, its human
+ * acceptance and the orchestrator's check. `undefined` when none of them carries a valid date — an
+ * older record the display must not invent a place for.
+ */
+export function terminalAt(task: Pick<TaskSnapshot, 'merged' | 'acceptedAt' | 'checkAt'>): number | undefined {
+  let latest: number | undefined
+  for (const value of [task.merged?.at, task.acceptedAt, task.checkAt]) {
+    if (typeof value !== 'string') continue
+    const at = Date.parse(value)
+    if (Number.isFinite(at) && (latest === undefined || at > latest)) latest = at
+  }
+  return latest
+}
+
+/**
+ * «History» in display order: the most recently completed lane first. A lane's time is the latest
+ * terminal mark among its finished tasks; a lane with no readable mark follows every dated lane in
+ * plan order, and equal times keep that order too — so a poll never shuffles rows that did not
+ * change. This is the sidebar's order only: `laneTree` keeps the canonical plan order the graph uses.
+ */
+export function historyByRecency(repo: Pick<RepoSnapshot, 'tasks'>, rows: readonly LaneRow[]): LaneRow[] {
+  const completedAt = new Map<string, number>()
+  for (const task of repo.tasks) {
+    if (!isFinished(task)) continue
+    const at = terminalAt(task)
+    if (at === undefined) continue
+    const lane = laneOf(task)
+    const latest = completedAt.get(lane)
+    if (latest === undefined || at > latest) completedAt.set(lane, at)
+  }
+  const planOrder = new Map(rows.map((row, index) => [row.lane, index]))
+  const fallback = (lane: string) => planOrder.get(lane) ?? Number.MAX_SAFE_INTEGER
+  return [...rows].sort((a, b) => {
+    const aAt = completedAt.get(a.lane)
+    const bAt = completedAt.get(b.lane)
+    if (aAt === undefined && bAt === undefined) return fallback(a.lane) - fallback(b.lane)
+    if (aAt === undefined) return 1
+    if (bAt === undefined) return -1
+    return bAt - aAt || fallback(a.lane) - fallback(b.lane)
+  })
+}
+
+/**
  * The lane the camera looks at: the band under the middle of the view. In a band that packs several
  * folded lanes, the lane whose chip is closest to the middle horizontally.
  */
@@ -113,6 +156,15 @@ export function readLaneGroups(root: string, planId?: string): LaneGroups {
       history: typeof value.history === 'boolean' ? value.history : DEFAULT_LANE_GROUPS.history,
     }
   } catch { return { ...DEFAULT_LANE_GROUPS } }
+}
+
+/**
+ * The folds a scope opens with: «Now» keeps the reader's remembered choice, «History» always starts
+ * folded. The open History belongs to the visit that opened it — a stored `true` from yesterday is
+ * not a default the next mount inherits.
+ */
+export function readLaneGroupsForMount(root: string, planId?: string): LaneGroups {
+  return { now: readLaneGroups(root, planId).now, history: false }
 }
 
 export function writeLaneGroups(root: string, planId: string | undefined, groups: LaneGroups): void {

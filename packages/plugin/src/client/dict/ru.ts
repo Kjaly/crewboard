@@ -458,7 +458,7 @@ export const ru = {
   "side.lanes.now": "Сейчас · {count}",
   "side.lanes.history": "История · {count}",
   "side.lanes.noLane": "Без дорожки",
-  "side.lanes.more": "… ещё {count}",
+  "side.lanes.more": "Показать ещё {count}",
   "side.lanes.actions": "Действия для дорожки «{lane}»",
   "side.lanes.copyLink": "Скопировать ссылку на дорожку",
   "side.lanes.count.running": "{count} в работе",
