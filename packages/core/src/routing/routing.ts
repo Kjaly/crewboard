@@ -10,7 +10,7 @@ export const CLASS_LABEL_RU: Record<TaskClass, string> = {
 }
 export type Routing = { classes: Record<TaskClass, string[]>; disabled: Record<string, string> }
 export const DEFAULT_ROUTING: Routing = {
-  classes: { code: ['dsh/deepseek-flash', 'devin'], design: ['devin', 'codex/gpt-6-sol'], review: ['codex', 'devin'], research: ['devin', 'dsh/deepseek-flash'] },
+  classes: { code: ['dsh/deepseek-flash', 'devin'], design: ['devin', 'codex/gpt-6.1-sol', 'codex/gpt-6-sol'], review: ['codex', 'devin'], research: ['devin', 'dsh/deepseek-flash'] },
   disabled: {},
 }
 export { profileStorePath }

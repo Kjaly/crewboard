@@ -54,7 +54,7 @@ A successful check is cached for five minutes in `.orchestration/preflight-cache
 | --- | --- | --- |
 | `dsh/deepseek-flash` | DeepSeek V4 Flash via dsh | API |
 | `claude/opus`, `claude/fable` | Claude Opus 5, Claude Fable 5.1 | API (Claude API key) |
-| `codex/gpt-6-astra`, `codex/gpt-6-sol`, `codex/gpt-6-luna` | Codex GPT-6 models | subscription |
+| `codex/gpt-6-astra`, `codex/gpt-6.1-sol`, `codex/gpt-6-sol`, `codex/gpt-6-luna` | Codex GPT-6 models | subscription |
 | `codex/gpt-5.6-sol`, `codex/gpt-5.6-terra`, `codex/gpt-5.6-luna` | Codex GPT-5.6 models | subscription |
 
 Short aliases also work, for example `codex` for `codex/gpt-6-astra` and `claude-opus` for `claude/opus`. A `claude/<model>` or `codex/<model>` id works without registering it first, for example `-a claude/opus-5-5`. Devin is used as `devin`, with the model of the Devin profile, or as `devin/<model>` once added for one model (see [below](#subscriptions-add-models)). Models that dsh serves are not stored in the registry at all: see [models from dsh](#models-from-dsh).

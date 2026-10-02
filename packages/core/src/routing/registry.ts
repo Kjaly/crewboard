@@ -22,6 +22,7 @@ export const DEFAULT_WORKERS: WorkerEntry[] = [
   { id: 'claude/opus', kind: 'claude', model: 'opus', label: 'Claude Opus 5', billing: 'подписка' },
   { id: 'claude/fable', kind: 'claude', model: 'fable', label: 'Claude Fable 5.1', billing: 'подписка' },
   { id: 'codex/gpt-6-astra', kind: 'codex', model: 'gpt-6-astra', label: 'Codex GPT-6 Astra', billing: 'подписка' },
+  { id: 'codex/gpt-6.1-sol', kind: 'codex', model: 'gpt-6.1-sol', label: 'Codex GPT-6.1 Sol', billing: 'подписка' },
   { id: 'codex/gpt-6-sol', kind: 'codex', model: 'gpt-6-sol', label: 'Codex GPT-6 Sol', billing: 'подписка' },
   { id: 'codex/gpt-6-luna', kind: 'codex', model: 'gpt-6-luna', label: 'Codex GPT-6 Luna', billing: 'подписка' },
   { id: 'codex/gpt-5.6-sol', kind: 'codex', model: 'gpt-5.6-sol', label: 'Codex GPT-5.6 Sol', billing: 'подписка' },

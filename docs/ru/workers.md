@@ -54,7 +54,7 @@ crewboard preflight            # все включённые профили
 | --- | --- | --- |
 | `dsh/deepseek-flash` | DeepSeek V4 Flash через dsh | API |
 | `claude/opus`, `claude/fable` | Claude Opus 5, Claude Fable 5.1 | API (ключ Claude API) |
-| `codex/gpt-6-astra`, `codex/gpt-6-sol`, `codex/gpt-6-luna` | модели Codex GPT-6 | подписка |
+| `codex/gpt-6-astra`, `codex/gpt-6.1-sol`, `codex/gpt-6-sol`, `codex/gpt-6-luna` | модели Codex GPT-6 | подписка |
 | `codex/gpt-5.6-sol`, `codex/gpt-5.6-terra`, `codex/gpt-5.6-luna` | модели Codex GPT-5.6 | подписка |
 
 Работают и короткие псевдонимы, например `codex` для `codex/gpt-6-astra` и `claude-opus` для `claude/opus`. Идентификатор вида `claude/<модель>` или `codex/<модель>` можно использовать без регистрации, например `-a claude/opus-5-5`. Devin вызывается как `devin` с моделью из профиля Devin или как `devin/<модель>`, если добавлен для одной модели (см. [ниже](#подписки-добавить-модели)). Модели, которые даёт dsh, в реестре не хранятся вовсе: см. [модели из dsh](#модели-из-dsh).

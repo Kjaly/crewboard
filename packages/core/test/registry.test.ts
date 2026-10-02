@@ -5,16 +5,30 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_WORKERS, defaultMinCliVersion, deleteWorker, loadRegistry, registryPath, saveWorker } from '../src/routing/registry.js'
 import { removeWorker } from '../src/routing/delete.js'
 import { DEFAULT_ROUTING, loadRouting, saveRouting } from '../src/routing/routing.js'
+import { canonicalWorkerId, workerAliases } from '../src/routing/identity.js'
+import { resolveProfile } from '../src/orchestration/backends.js'
 
 describe('worker registry', () => {
   it('uses the complete legacy direct worker list when no registry file exists', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'orch-registry-'))
-    const got = await loadRegistry(join(dir, 'workers.json'))
+    const file = join(dir, 'workers.json')
+    const env = { CREWBOARD_WORKERS_FILE: file }
+    const got = await loadRegistry(file)
     expect(got).toEqual({ version: 1, workers: DEFAULT_WORKERS })
     expect(DEFAULT_WORKERS.map((w) => w.id)).toEqual([
-      'dsh/deepseek-flash', 'claude/opus', 'claude/fable', 'codex/gpt-6-astra', 'codex/gpt-6-sol',
+      'dsh/deepseek-flash', 'claude/opus', 'claude/fable', 'codex/gpt-6-astra', 'codex/gpt-6.1-sol', 'codex/gpt-6-sol',
       'codex/gpt-6-luna', 'codex/gpt-5.6-sol', 'codex/gpt-5.6-terra', 'codex/gpt-5.6-luna',
     ])
+    expect(DEFAULT_WORKERS.find((worker) => worker.id === 'codex/gpt-6.1-sol')).toMatchObject({
+      kind: 'codex', model: 'gpt-6.1-sol', label: 'Codex GPT-6.1 Sol', billing: 'подписка',
+    })
+    expect(canonicalWorkerId('codex-gpt-6.1-sol')).toBe('codex/gpt-6.1-sol')
+    expect(canonicalWorkerId('codex-gpt-6-sol')).toBe('codex/gpt-6-sol')
+    expect(workerAliases('codex/gpt-6-sol')).toContain('codex-gpt-6-sol')
+    expect(await resolveProfile(env, dir, 'codex/gpt-6.1-sol')).toMatchObject({ backend: 'codex-cli', model: 'gpt-6.1-sol' })
+    expect(await resolveProfile(env, dir, 'codex-gpt-6.1-sol')).toMatchObject({ backend: 'codex-cli', model: 'gpt-6.1-sol' })
+    expect(await resolveProfile(env, dir, 'codex-gpt-6-sol')).toMatchObject({ backend: 'codex-cli', model: 'gpt-6-sol' })
+    expect(await resolveProfile(env, dir, 'codex')).toMatchObject({ backend: 'codex-cli', model: 'gpt-6-astra' })
     // The floor belongs to Opus 5.5 whatever the registry calls it; Opus 5 has none.
     expect(defaultMinCliVersion('claude/opus-5-5', 'claude-opus-5-5')).toBe('2.1.280')
     expect(defaultMinCliVersion('claude-opus', 'opus-5-5')).toBe('2.1.280')

@@ -23,6 +23,7 @@ it('uses the builtin routing when no preset is chosen', async () => {
   const result = await resolveRouting(root, undefined, env)
   expect(result.source).toBe('builtin')
   expect(result.routing).toEqual(DEFAULT_ROUTING.classes)
+  expect(result.routing.design).toEqual(['devin', 'codex/gpt-6.1-sol', 'codex/gpt-6-sol'])
 })
 
 it('plan wins over repository, and repository wins over builtin', async () => {
@@ -33,6 +34,19 @@ it('plan wins over repository, and repository wins over builtin', async () => {
   expect((await resolveRouting(root, undefined, env)).source).toBe('repository')
   await setPlanPreset(root, 'main', 'claude', env)
   expect(await resolveRouting(root, 'main', env)).toMatchObject({ source: 'plan', routing: { code: ['claude/opus'] } })
+})
+
+it('keeps an explicit custom preset order as saved', async () => {
+  const { root, env } = await fixture()
+  const custom = {
+    code: ['codex/gpt-6-sol', 'codex/gpt-6-luna'],
+    design: ['codex/gpt-6-sol', 'codex/gpt-6.1-sol'],
+    review: ['codex', 'codex/gpt-6-sol'],
+    research: ['dsh/deepseek-flash', 'codex/gpt-6-sol'],
+  }
+  await savePreset({ id: 'mine', label: 'Mine', routing: custom }, env)
+  await setRepositoryPreset(root, 'mine', env)
+  expect((await resolveRouting(root, undefined, env)).routing).toEqual(custom)
 })
 
 it('intersects with machine disabled workers and reports them', async () => {
