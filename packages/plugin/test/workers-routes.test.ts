@@ -56,7 +56,8 @@ it('reads and saves the routing through the host', async () => {
   // `codex/gpt-6-sol` sits in the default `design` list; its unlabeled saved twin folded in,
   // so the surviving row falls back to the direct table's human label.
   expect(byId.has('codex-gpt-6-sol')).toBe(false)
-  expect(byId.get('codex/gpt-6-sol')).toMatchObject({ label: 'Codex GPT-6 Sol', usedIn: [{ class: 'design', position: 2 }] })
+  expect(byId.get('codex/gpt-6.1-sol')).toMatchObject({ label: 'Codex GPT-6.1 Sol', provider: 'Codex', main: true, usedIn: [{ class: 'design', position: 2 }] })
+  expect(byId.get('codex/gpt-6-sol')).toMatchObject({ label: 'Codex GPT-6 Sol', usedIn: [{ class: 'design', position: 3 }] })
   expect(byId.get('devin')).toMatchObject({ label: 'Devin SWE-2', provider: 'Devin', billing: 'промо', main: true })
   // The saved profile `codex` is gpt-6-astra: folded into the direct row, which keeps the saved
   // label and inherits the `codex` entry's slot in the default `review` class.
