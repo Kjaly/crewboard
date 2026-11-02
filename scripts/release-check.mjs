@@ -24,7 +24,12 @@ try {
   for (const file of files) if (/^package\/(src|test)\/|\.crewboard\//.test(file)) fail(`must not ship ${file}`)
   const manifest = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'))
   if (manifest.name !== 'crewboard') fail(`package name is ${manifest.name}`)
-  if (manifest.bin?.crewboard !== './dist/main.js') fail('bin crewboard must point at ./dist/main.js')
+  if (manifest.bin?.crewboard !== 'dist/main.js') fail('bin crewboard must point at dist/main.js')
+  // `npm publish` rewrites a manifest it finds invalid, and drops what it cannot fix (a `./` bin path, with npm 11):
+  // `pack` does not, so only a publish dry run shows what npm would actually publish.
+  const dry = spawnSync('npm', ['publish', '--dry-run'], { cwd: pkgDir, encoding: 'utf8' })
+  const corrected = (dry.stderr ?? '').split('\n').filter((l) => /errors corrected|was invalid and removed/.test(l))
+  if (corrected.length) fail(`npm would rewrite package.json on publish: ${corrected.join(' ')}`)
   if (!readFileSync(join(pkgDir, 'dist', 'main.js'), 'utf8').startsWith('#!/usr/bin/env node')) fail('dist/main.js has no shebang')
   // The packed CLI must run on its own, the way npx runs it: from the unpacked tarball, without this repository's
   // node_modules, against an empty home.

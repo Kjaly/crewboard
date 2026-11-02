@@ -26,7 +26,7 @@
     "node": ">=24"
   },
   "bin": {
-    "crewboard": "./dist/main.js"
+    "crewboard": "dist/main.js"
   },
   "files": [
     "dist",
