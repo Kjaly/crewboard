@@ -23,12 +23,12 @@ const FRAME = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
  * either a signature that occurred inside compressed data (decoded together with the next piece) or a last frame still
  * being written (dropped).
  */
-async function decode(file: string): Promise<string> {
+async function decode(file: string, firstOnly = false): Promise<string> {
   const buf = await readFile(file)
   const starts: number[] = []
   for (let i = buf.indexOf(FRAME); i !== -1; i = buf.indexOf(FRAME, i + FRAME.length)) starts.push(i)
   let out = ''
-  for (let k = 0; k < starts.length; ) {
+  for (let k = 0; k < starts.length && !(firstOnly && out); ) {
     let next = k + 1
     for (; next <= starts.length; next++) {
       try {
@@ -86,7 +86,8 @@ export async function readDshSession(file: string): Promise<{ sessionId: string;
 /** The working folder a dsh session belongs to, from its first frame alone: enough to skip other folders' sessions. */
 export async function dshSessionCwd(file: string): Promise<string | undefined> {
   try {
-    const first = zstdDecompressSync(await readFile(file)).toString('utf8').split('\n', 1)[0] ?? ''
+    // Only the first frame: some Node releases refuse a buffer whose last frame is still being written.
+    const first = (await decode(file, true)).split('\n', 1)[0] ?? ''
     const e = obj(JSON.parse(first))
     return e.type === 'session' && typeof e.cwd === 'string' ? e.cwd : undefined
   } catch {
