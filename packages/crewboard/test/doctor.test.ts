@@ -36,6 +36,11 @@ describe('worker readiness', () => {
     expect(result).toEqual([expect.objectContaining({ ok: false, checks: [expect.objectContaining({ detail: expect.stringContaining('/home/x/.crewboard/agents.json') })] })])
   })
 
+  it('says a CLI that hangs timed out, not that it is missing', async () => {
+    const result = await checkAgents({ agents: builtinAgents, env, exec: dshHangs, timeoutMs: 100 })
+    expect(result.find((a) => a.id === 'deepseek')?.checks[0]).toMatchObject({ detail: expect.stringMatching(/time/i), fix: expect.not.stringMatching(/install/) })
+  })
+
   it('never shows what the Claude sign-in status says beyond signed in or not', async () => {
     const result = await checkAgents({ agents: builtinAgents, env, exec: installed, timeoutMs: 100 })
     expect(JSON.stringify(result)).not.toContain('secret@example.com')
@@ -73,8 +78,10 @@ describe('connecting the lead', () => {
     expect(out.print).toContain(text)
   })
 
-  it('explains a missing client CLI instead of throwing', async () => {
-    const out = await connectLead({ client: 'claude', url, exec: missing })
-    expect(out.error).toMatch(/claude/)
+  it.each([
+    ['a missing client CLI', missing, { error: expect.stringMatching(/claude is not installed/) }],
+    ['a server already added', (async () => ({ code: 1, stdout: '', stderr: 'MCP server crewboard already exists in user config', timedOut: false })) as Exec, { error: expect.stringMatching(/already has an MCP server named crewboard/) }],
+  ] as const)('explains %s instead of failing blindly', async (_n, exec, expected) => {
+    expect(await connectLead({ client: 'claude', url, exec })).toEqual(expected)
   })
 })

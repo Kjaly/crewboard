@@ -171,7 +171,7 @@ export function createHttpServer(api: Api, opts: { now?: () => number; mcpIdleMs
     const asset = ASSETS[url.pathname]
     if (asset && req.method === 'GET') {
       const body = api.uiDir ? await readFile(join(api.uiDir, asset)).catch(() => undefined) : undefined
-      if (!body) return res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }).end('Интерфейс не собран: выполните pnpm build')
+      if (!body) return res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }).end('The screen is not built: run pnpm build')
       return res.writeHead(200, { 'content-type': TYPES[asset.split('.').pop() ?? ''] ?? 'application/octet-stream', 'cache-control': 'no-cache' }).end(body)
     }
     return json(res, 404, { error: 'not found' })

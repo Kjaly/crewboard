@@ -78,12 +78,14 @@ describe('worker split', () => {
   })
 
   it(`creates at most ${MAX_SPLIT} children`, async () => {
-    const { fake, sup, tree } = await setup()
+    const { fake, sup, tree, store } = await setup()
     fake.script({ final: split(Array.from({ length: 30 }, (_, i) => `- Часть ${i + 1}`)) })
     fake.setFallback({ hold: true })
     await sup.tick()
     await sup.tick()
     expect((await tree()).filter((n) => n.parentId === 'p').length).toBe(MAX_SPLIT)
+    const notes = (await store.read('g')).filter((e) => e.type === 'progress' && e.assignmentId === 'p')
+    expect(notes.some((e) => e.type === 'progress' && e.text.includes(String(30 - MAX_SPLIT)))).toBe(true)
   })
 
   it('keeps text for a worker waiting on its parts instead of relaunching it early', async () => {

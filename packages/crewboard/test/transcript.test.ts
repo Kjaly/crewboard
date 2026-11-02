@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { projectFolder } from '../src/history/paths.js'
 import { HISTORY_LIMIT, createHistory } from '../src/history/sessions.js'
+import { journalHistory } from '../src/history/journal.js'
 import { readTranscript } from '../src/history/transcript.js'
 
 // Lines in the shape Claude Code writes them (checked on a real transcript, 2026-11-02).
@@ -150,7 +151,7 @@ async function codexFixture(extra?: { claude?: boolean }) {
   await writeFile(file, lines([
     cx.meta(40, 'codex-1', base.repo),
     cx.msg(40, 'user', '<environment_context>\n  <cwd>/repo</cwd>\n</environment_context>'),
-    cx.msg(41, 'user', 'Нужен раздел Usage'),
+    cx.msg(41, 'user', 'Нужен раздел Usage, пример <tag>name</tag> оставь'),
     cx.msg(42, 'assistant', 'Поручу черновик Codex.'),
     cx.call(43, 'c1', 'assign', { project: base.repo, goalId: 'g1', title: 'Раздел Usage', criteria: [], resultKind: 'local', provider: 'codex' }),
     cx.out(43, 'c1', '{"assignmentId":"a-2"}'),
@@ -161,6 +162,17 @@ async function codexFixture(extra?: { claude?: boolean }) {
   const env = { ...(extra?.claude === false ? {} : { CREWBOARD_CLAUDE_PROJECTS: base.root }), CREWBOARD_CODEX_SESSIONS: sessions, CREWBOARD_DSH_SESSIONS: sessions }
   return { ...base, file, history: createHistory({ env, onRead: (f) => { read.push(f) } }), reads: () => read.length, readFiles: () => read }
 }
+
+describe('journal history', () => {
+  it('names the lead that started the goal and the one that took it over', () => {
+    const e = { goalId: 'g1', assignmentId: 'g1', actor: 'lead' as const, ts: at(1) }
+    const items = journalHistory([
+      { ...e, seq: 1, type: 'goal_started', title: 'G', criteria: [], client: 'claude-code' },
+      { ...e, seq: 2, type: 'adopted', client: 'codex-mcp-client' },
+    ])
+    expect(items.filter((i) => i.kind === 'session').map((i) => (i.kind === 'session' ? i.sessionId : ''))).toEqual(['claude-code', 'codex-mcp-client'])
+  })
+})
 
 describe('Codex transcripts', () => {
   it('reads crewboard calls Codex makes from code inside its exec tool', async () => {
@@ -183,11 +195,42 @@ describe('Codex transcripts', () => {
     expect(h.items.some((i) => i.kind === 'owner' && i.text === 'Проверь README')).toBe(true)
   })
 
+  it('gives each crewboard call in one exec its own result', async () => {
+    const { repo, root } = await fixture()
+    const sessions = await mkdtemp(join(tmpdir(), 'cb-codex-exec-'))
+    const day = join(sessions, '2026', '11', '02')
+    await mkdir(day, { recursive: true })
+    const assign = (title: string) => `text(await tools.mcp__crewboard__crewboard_assign({project:"${repo}", goalId:"g7", provider:"codex", title:\`${title}\`, criteria:[]}));`
+    await writeFile(join(day, 'rollout-two.jsonl'), lines([
+      cx.meta(60, 'codex-two', repo),
+      cx.exec(61, 'x1', `${assign('First part')}\n${assign('Second part')}`),
+      cx.execOut(61, 'x1', '{"assignmentId":"a-1"}\n{"assignmentId":"a-2"}'),
+    ]))
+    const history = createHistory({ env: { CREWBOARD_CLAUDE_PROJECTS: root, CREWBOARD_CODEX_SESSIONS: sessions, CREWBOARD_DSH_SESSIONS: sessions } })
+    const cards = (await history.goalHistory(repo, 'g7')).items.filter((i) => i.kind === 'assignment')
+    expect(cards.map((c) => (c.kind === 'assignment' ? [c.title, c.assignmentId] : []))).toEqual([['First part', 'a-1'], ['Second part', 'a-2']])
+  })
+
+  it('keeps the card of work assigned in the same exec that started its goal', async () => {
+    const { repo, root } = await fixture()
+    const sessions = await mkdtemp(join(tmpdir(), 'cb-codex-exec-'))
+    const day = join(sessions, '2026', '11', '02')
+    await mkdir(day, { recursive: true })
+    await writeFile(join(day, 'rollout-one-exec.jsonl'), lines([
+      cx.meta(60, 'codex-one', repo),
+      cx.exec(61, 'x1', `const g = await tools.mcp__crewboard__crewboard_start_goal({project:"${repo}", title:"Docs", criteria:[]});\ntext(await tools.mcp__crewboard__crewboard_assign({project:"${repo}", goalId: g.goalId, provider:"codex", title:\`Part $1\`, criteria:[]}));`),
+      cx.execOut(61, 'x1', '{"goalId":"g8"}\n{"assignmentId":"a-8"}'),
+    ]))
+    const history = createHistory({ env: { CREWBOARD_CLAUDE_PROJECTS: root, CREWBOARD_CODEX_SESSIONS: sessions, CREWBOARD_DSH_SESSIONS: sessions } })
+    const cards = (await history.goalHistory(repo, 'g8')).items.filter((i) => i.kind === 'assignment' && i.tool === 'assign')
+    expect(cards).toEqual([expect.objectContaining({ assignmentId: 'a-8', title: 'Part $1' })])
+  })
+
   it('reads a Codex conversation into the goal history, without its service messages', async () => {
     const { history, repo } = await codexFixture()
     const h = await history.goalHistory(repo, 'g1')
     const words = h.items.flatMap((i) => (i.kind === 'owner' || i.kind === 'lead' ? [`${i.kind}:${i.text}`] : []))
-    expect(words).toEqual(expect.arrayContaining(['owner:Нужен раздел Usage', 'lead:Поручу черновик Codex.']))
+    expect(words).toEqual(expect.arrayContaining(['owner:Нужен раздел Usage, пример <tag>name</tag> оставь', 'lead:Поручу черновик Codex.']))
     expect(words.some((w) => w.includes('environment_context'))).toBe(false)
     expect(h.items.find((i) => i.kind === 'assignment' && i.title === 'Раздел Usage')).toMatchObject({ assignmentId: 'a-2' })
     expect(h.items.some((i) => i.kind === 'assignment' && i.title === 'Чужое')).toBe(false)

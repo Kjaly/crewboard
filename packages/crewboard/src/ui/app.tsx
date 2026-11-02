@@ -332,7 +332,8 @@ export function App(props: { api: Api }) {
   }
 
   return (
-    <div className="shell">
+    // No project yet means no goals sidebar: the screen takes the whole width instead of the sidebar's column.
+    <div className={projects && projects.length > 0 ? 'shell' : 'shell solo'}>
       {projects && projects.length > 0 && <Sidebar projects={projects} project={target?.project} goalId={target?.goalId} onPick={pick} drawer={sheet} open={navOpen} />}
       {sheet && navOpen && <div className="scrim on nav-scrim" onClick={() => setNavOpen(false)} aria-hidden="true" />}
       <div className="app">

@@ -48,7 +48,7 @@ Any agent Crewboard's adapters can run joins with an entry in `~/.crewboard/agen
 | `label`, `color` | how the screen shows the agent |
 | `enabled` | `false` turns an agent off, built-in ones included |
 
-An entry with the id of a built-in agent changes only the fields it names. The lead sees the list with `crewboard_agents` and hands work by `id`; a worker may split work onto any of them. A goal that used an agent you later removed still opens; new work for that agent is refused with the reason.
+An id is letters, digits, `.`, `-` or `_` (so a worker can name it in a split), and `lead` is reserved. An entry with the id of a built-in agent changes only the fields it names. The lead sees the list with `crewboard_agents` and hands work by `id`; a worker may split work onto any of them. A goal that used an agent you later removed still opens; new work for that agent is refused with the reason.
 
 A broken file is reported with its path when work starts, and the lead hears why.
 

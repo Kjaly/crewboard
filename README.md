@@ -77,4 +77,4 @@ See [workers](docs/en/workers.md) for models, defaults and how a worker splits i
 
 ## Status
 
-Version 1.0.0. Used on macOS with Claude Code, Codex CLI and DeepSeek Harness. Linux should work; Windows is untested. The server listens on 127.0.0.1 only and has no login of its own: see [security](SECURITY.md).
+Version 1.1.0. Used on macOS with Claude Code, Codex CLI and DeepSeek Harness. Linux should work; Windows is untested. The server listens on 127.0.0.1 only and has no login of its own: see [security](SECURITY.md).

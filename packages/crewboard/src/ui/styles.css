@@ -151,9 +151,9 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 .track{position:relative;background-image:linear-gradient(to right,var(--line) 1px,transparent 1px);background-size:12.5% 100%}
 .nowline{position:absolute;top:0;bottom:0;width:1px;background:var(--accent)}
 .lb{position:absolute;height:26px;border-radius:6px;padding:0 8px;display:flex;align-items:center;font-size:12px;white-space:nowrap;overflow:hidden;border:1px solid transparent}
-.lb.claude{background:color-mix(in srgb,var(--claude) 16%,var(--surface));border-color:color-mix(in srgb,var(--claude) 40%,transparent)}
-.lb.codex{background:color-mix(in srgb,var(--codex) 16%,var(--surface));border-color:color-mix(in srgb,var(--codex) 40%,transparent)}
-.lb.deepseek{background:color-mix(in srgb,var(--deepseek) 16%,var(--surface));border-color:color-mix(in srgb,var(--deepseek) 40%,transparent)}
+/* Any agent's bar: its registry color, a built-in's own color, or neutral grey for an agent with none. */
+.lb{background:color-mix(in srgb,var(--ag,var(--text-3)) 16%,var(--surface));border-color:color-mix(in srgb,var(--ag,var(--text-3)) 40%,transparent)}
+.lb[data-agent=claude]{--ag:var(--claude)} .lb[data-agent=codex]{--ag:var(--codex)} .lb[data-agent=deepseek]{--ag:var(--deepseek)}
 .lb.cancel{background:transparent;border-style:dashed;border-color:var(--line-strong);color:var(--text-3)}
 
 .scrim{display:none}
@@ -230,6 +230,7 @@ fieldset.handoff{border:0;margin:0;padding:0;min-width:0}
 
 /* Shell: projects and goals on the left, the work in the middle, the context on the right. */
 .shell{display:grid;grid-template-columns:260px minmax(0,1fr);min-height:100dvh}
+.shell.solo{grid-template-columns:minmax(0,1fr)}
 .app{min-width:0}
 .side-nav{position:sticky;top:0;height:100dvh;overflow:auto;border-right:1px solid var(--line);background:var(--surface);padding:12px 10px 24px;display:flex;flex-direction:column;gap:14px}
 .side-nav .brand{font-weight:600;font-size:14px;padding:4px 8px 2px}

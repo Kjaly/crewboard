@@ -111,11 +111,23 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
       return
     }
     // A part may name any registered agent; an unknown name leaves the part with its worker's agent.
-    const known = new Set((await agents.list().catch(() => [])).map((a) => a.id))
+    let registryError: string | undefined
+    const known = new Set(
+      (
+        await agents.list().catch((error: unknown) => {
+          registryError = error instanceof Error ? error.message : String(error)
+          return []
+        })
+      ).map((a) => a.id),
+    )
     const outcome = parseOutcome(r.finalText ?? '', known)
     if (outcome.kind === 'question') await append(goalId, { type: 'question', goalId, assignmentId: node.id, actor: 'worker', text: outcome.text, options: outcome.options })
     else await append(goalId, { type: 'reported', goalId, assignmentId: node.id, actor: 'worker', summary: outcome.summary, ...(outcome.kind === 'split' ? { split: true } : {}), ...(outcome.code ? { code: outcome.code } : {}) })
     if (outcome.kind === 'split') {
+      // What the split could not honour is said in the journal, not dropped silently.
+      const dropped = outcome.parts.length - MAX_SPLIT
+      if (dropped > 0) await append(goalId, { type: 'progress', goalId, assignmentId: node.id, actor: 'system', text: `Split into ${outcome.parts.length} parts; only the first ${MAX_SPLIT} were created, ${dropped} dropped`, code: 'split_truncated', detail: String(dropped) })
+      if (registryError) await append(goalId, { type: 'progress', goalId, assignmentId: node.id, actor: 'system', text: `Agent tags in the split were ignored, the agent registry cannot be read: ${registryError}`, code: 'split_registry', detail: registryError })
       for (const part of outcome.parts.slice(0, MAX_SPLIT)) {
         await append(goalId, {
           type: 'assigned', goalId, assignmentId: `a-${randomBytes(3).toString('hex')}`, actor: 'worker', parentId: node.id, title: part.title, criteria: part.criteria,

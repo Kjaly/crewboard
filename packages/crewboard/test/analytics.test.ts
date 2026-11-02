@@ -12,6 +12,12 @@ const ended = (min: number, id: string, runId: string, usage?: { usd?: number; i
   ev(min, { type: 'run_ended', goalId: 'g', assignmentId: id, actor: 'system', runId, outcome: 'completed', ...(usage ? { usage } : {}) })
 
 describe('goal analytics', () => {
+  it('books an assignment handed over to the agent of its latest run', () => {
+    const events = [assigned(1, 'a', 'codex', 'Тесты'), started(2, 'a', 'c1', 'codex/gpt-6.1-sol'), ended(3, 'a', 'c1'), ev(4, { type: 'reassigned', goalId: 'g', assignmentId: 'a', actor: 'lead', provider: 'claude' }), started(5, 'a', 'c2', 'claude/sonnet')]
+    expect(goalAnalytics(events, new Date(at(30))).byAssignment).toEqual([expect.objectContaining({ assignmentId: 'a', provider: 'claude', runs: 2 })])
+  })
+
+
   it.each([
     ['a registered custom agent', [assigned(1, 'a', 'kimi', 'Тесты'), started(2, 'a', 'k1', 'dsh/moonshot/kimi-k3')], ['kimi']],
     ['an old DeepSeek goal', [assigned(1, 'a', 'deepseek', 'Тесты'), started(2, 'a', 'd1', 'dsh/deepseek-flash')], ['deepseek']],

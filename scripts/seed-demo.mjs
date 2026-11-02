@@ -26,6 +26,16 @@ const home = join(base, 'home')
 const claude = join(base, 'claude-projects')
 mkdirSync(home, { recursive: true })
 writeFileSync(join(home, 'projects.json'), `${JSON.stringify({ projects: [root] }, null, 2)}\n`)
+// One agent of the owner's own, next to the built-in three: Kimi reached through a dsh route.
+const agentsFile = `${JSON.stringify({ agents: { kimi: { label: 'Kimi', run: 'dsh', model: 'moonshot/kimi-k3' } } }, null, 2)}\n`
+writeFileSync(join(home, 'agents.json'), agentsFile)
+// The same agents with no project yet: the first-run screen.
+const emptyHome = join(base, 'home-empty')
+mkdirSync(emptyHome, { recursive: true })
+writeFileSync(join(emptyHome, 'agents.json'), agentsFile)
+// No Codex or dsh sessions: the demo's history must never pick up the machine's own.
+const noSessions = join(base, 'no-sessions')
+mkdirSync(noSessions, { recursive: true })
 
 const now = Date.now()
 const at = (minAgo) => new Date(now - minAgo * 60_000).toISOString()
@@ -37,7 +47,7 @@ const assign = (minAgo, id, title, provider, extra = {}) =>
 const run = (minAgo, id, agent, n) => ev(minAgo, { type: 'run_started', assignmentId: id, runId: `demo-${id}-${n}`, agent, cwd: root })
 const end = (minAgo, id, n, usage) => ev(minAgo, { type: 'run_ended', assignmentId: id, runId: `demo-${id}-${n}`, outcome: 'completed', ...(usage ? { usage } : {}) })
 
-ev(62, { type: 'goal_started', assignmentId: goalId, actor: 'lead', title: tr('Кухня полного цикла', 'Full-cycle kitchen'), criteria: tr(['Покупатель собирает кухню сам, без подсказок', 'Короб, фурнитура и вырезы считаются из одной модели', 'Сборочная инструкция строится из модели'], ['The buyer assembles the kitchen alone, no help needed', 'Carcass, hardware and cut-outs come from one model', 'The assembly guide is built from the model']), quote: tr('Хочу кухню полного цикла: как у шкафа, только с ящиками, мойкой и сборкой.', 'I want a full-cycle kitchen: like the wardrobe, but with drawers, a sink and assembly.') })
+ev(62, { type: 'goal_started', assignmentId: goalId, actor: 'lead', title: tr('Кухня полного цикла', 'Full-cycle kitchen'), criteria: tr(['Покупатель собирает кухню сам, без подсказок', 'Короб, фурнитура и вырезы считаются из одной модели', 'Сборочная инструкция строится из модели'], ['The buyer assembles the kitchen alone, no help needed', 'Carcass, hardware and cut-outs come from one model', 'The assembly guide is built from the model']), client: 'claude-code', quote: tr('Хочу кухню полного цикла: как у шкафа, только с ящиками, мойкой и сборкой.', 'I want a full-cycle kitchen: like the wardrobe, but with drawers, a sink and assembly.') })
 
 assign(60, 'hw', tr('Исследовать петли и направляющие для кухни', 'Research hinges and runners for the kitchen'), 'deepseek', { resultKind: 'answer', criteria: tr(['Не меньше трёх производителей', 'Совместимость с толщиной фасада'], ['At least three manufacturers', 'Fits the front panel thickness']), quote: tr('Встроенная мойка, подсветку тоже, собирает сам покупатель.', 'Built-in sink, lighting too, the buyer assembles it.') })
 run(60, 'hw', 'dsh/deepseek-flash', 1)
@@ -72,12 +82,16 @@ run(40, 'pdf', 'dsh/deepseek-flash', 1)
 ev(8, { type: 'progress', assignmentId: 'pdf', actor: 'worker', text: tr('Раскладываю шаги сборки по панелям короба', 'Laying out assembly steps across the carcass panels') })
 ev(6, { type: 'owner_requested', assignmentId: 'pdf', actor: 'owner', requestId: 'r-demo1', action: 'stop' })
 ev(5, { type: 'request_decided', assignmentId: 'pdf', actor: 'lead', requestId: 'r-demo1', decision: 'declined', reason: tr('Инструкция нужна покупателю для сборки, остановка сорвёт цель', 'The buyer needs the guide to assemble; stopping it would break the goal') })
+assign(26, 'copy', tr('Текст страницы товара', 'Product page copy'), 'kimi', { criteria: tr(['Три абзаца: что это, из чего, как собрать', 'Без обещаний сроков доставки'], ['Three paragraphs: what it is, what it is made of, how to assemble', 'No delivery-time promises']), quote: tr('И текст для страницы товара.', 'And the copy for the product page.') })
+run(25, 'copy', 'dsh/moonshot/kimi-k3', 1)
+ev(9, { type: 'reported', assignmentId: 'copy', actor: 'worker', summary: tr('Текст готов: три абзаца, сроки доставки не упомянуты.', 'Copy ready: three paragraphs, no delivery times mentioned.') })
+end(9, 'copy', 1, { inputTokens: 38000, outputTokens: 5200, usd: 0.04 })
 
 const goalDir = join(root, '.crewboard', 'goals', goalId)
 mkdirSync(goalDir, { recursive: true })
 writeFileSync(join(root, '.crewboard', '.gitignore'), '*\n')
 writeFileSync(join(goalDir, 'events.jsonl'), `${events.map((e) => JSON.stringify(e)).join('\n')}\n`)
-writeFileSync(join(goalDir, 'meta.json'), `${JSON.stringify({ goalId, title: tr('Кухня полного цикла', 'Full-cycle kitchen'), createdAt: at(62), leadLastSeen: new Date(now).toISOString() }, null, 2)}\n`)
+writeFileSync(join(goalDir, 'meta.json'), `${JSON.stringify({ goalId, title: tr('Кухня полного цикла', 'Full-cycle kitchen'), createdAt: at(62), leadLastSeen: new Date(now).toISOString(), lead: { client: 'claude-code', version: '2.1.316' } }, null, 2)}\n`)
 
 // The lead's conversation, in the shape Claude Code writes its transcripts.
 const session = 'demo-session-1'
@@ -111,4 +125,4 @@ const folder = join(claude, root.replace(/[^a-zA-Z0-9]/g, '-'))
 mkdirSync(folder, { recursive: true })
 writeFileSync(join(folder, `${session}.jsonl`), `${lines.map((l) => JSON.stringify(l)).join('\n')}\n`)
 
-console.log(JSON.stringify({ repo: root, goalId, env: { CREWBOARD_HOME: home, CREWBOARD_CLAUDE_PROJECTS: claude } }, null, 2))
+console.log(JSON.stringify({ repo: root, goalId, emptyHome, env: { CREWBOARD_HOME: home, CREWBOARD_CLAUDE_PROJECTS: claude, CREWBOARD_CODEX_SESSIONS: noSessions, CREWBOARD_DSH_SESSIONS: noSessions } }, null, 2))

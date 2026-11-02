@@ -17,7 +17,11 @@ export function journalHistory(events: GoalEvent[]): HistoryItem[] {
     if (e.type === 'assigned') titles.set(e.assignmentId, e.title)
     const title = titles.get(e.assignmentId)
     const card = (tool: string): HistoryItem => ({ kind: 'assignment', ts: e.ts, tool, goalId: e.goalId, assignmentId: e.assignmentId, ...(title ? { title } : {}) })
-    if (e.type === 'goal_started' && e.quote) items.push({ kind: 'owner', ts: e.ts, text: e.quote })
+    if (e.type === 'goal_started') {
+      // The lead that started the goal opens the history, as each takeover opens its part.
+      items.push({ kind: 'session', ts: e.ts, sessionId: e.client ?? 'lead' })
+      if (e.quote) items.push({ kind: 'owner', ts: e.ts, text: e.quote })
+    }
     else if (e.type === 'assigned' && e.actor === 'lead') items.push(card('assign'))
     else if (e.type === 'adopted') items.push({ kind: 'session', ts: e.ts, sessionId: e.client ?? 'lead' })
     else if (e.actor === 'owner' && e.type === 'answered') items.push({ kind: 'owner', ts: e.ts, text: e.text })

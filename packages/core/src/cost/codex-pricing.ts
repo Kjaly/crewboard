@@ -7,6 +7,8 @@ type Price = { input: number; output: number; cacheRead: number }
  * rate: a call that reports any leaves the model unpriced rather than guessing (cs1).
  */
 const PRICES: Record<string, Price> = {
+  // Crewboard's default Codex model: $2 / $10, cached input $0.10 (OpenAI API pricing, checked 2026-11-03).
+  'gpt-6.1-sol': { input: 2, output: 10, cacheRead: 0.1 },
   'gpt-6-astra': { input: 10, output: 50, cacheRead: 1 },
   'gpt-6-sol': { input: 2, output: 10, cacheRead: 0.2 },
   'gpt-6-luna': { input: 0.1, output: 0.5, cacheRead: 0.01 },

@@ -33,7 +33,12 @@ crewboard() { node "$CREWBOARD_MAIN" "$@"; }
 
 ## 2. Open the screen
 
-Open http://127.0.0.1:4700/. With no goals yet, the screen shows how to connect a lead, for each known client, with a copy button.
+Open http://127.0.0.1:4700/. With no goals yet, the screen shows how to connect a lead, for each known client, with a copy button, and which workers are ready on this machine.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/en/empty-dark.png">
+  <img alt="The first-run screen: connect-a-lead tabs for Claude Code, Codex, dsh and any other client, the command to copy, and the workers that are ready." src="../assets/en/empty-light.png">
+</picture>
 
 ## 3. Connect your lead
 

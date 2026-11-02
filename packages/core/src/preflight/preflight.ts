@@ -101,6 +101,9 @@ export async function preflightAgent(profile: AgentProfile, deps: PreflightDeps,
   const checks: Check[] = []
   const tx = (key: string, vars?: MessageVars) => orchText(deps.lang, `preflight.${key}`, vars)
   const sh = (cmd: string, args: string[], timeoutMs = 20_000) => deps.exec(cmd, args, { timeoutMs })
+  // A CLI that hangs is there but stuck; calling it missing sends the user to install what they already have.
+  const absent = (v: { timedOut: boolean }) => tx(v.timedOut ? 'timedOut' : 'notFound')
+  const install = (v: { timedOut: boolean }, hint: string) => (v.timedOut ? tx('timedOutFix') : hint)
   // The binary is `cursor-agent`, not `cursor` — the worker kind and the CLI's own name differ here alone.
   const bin = (kind: keyof WorkerCommands) => deps.commands?.[kind] ?? (kind === 'cursor' ? 'cursor-agent' : kind)
 
@@ -119,7 +122,7 @@ export async function preflightAgent(profile: AgentProfile, deps: PreflightDeps,
     case 'claude-code': {
       const v = await sh(bin('claude'), ['--version'])
       const versionText = (v.stdout || v.stderr).trim()
-      checks.push({ name: 'binary', ok: v.code === 0, detail: versionText || tx('notFound'), fix: tx('installClaude') })
+      checks.push({ name: 'binary', ok: v.code === 0, detail: versionText || absent(v), fix: install(v, tx('installClaude')) })
       // The isolated route needs `--bare`, so its floor is the model's minimum raised by the policy floor; the default
       // route (the user's own sign-in) needs only the model's minimum.
       const isolated = crewboardEnv(deps.env ?? process.env, 'CREWBOARD_CLAUDE_AUTH') === 'isolated'
@@ -155,7 +158,7 @@ export async function preflightAgent(profile: AgentProfile, deps: PreflightDeps,
     }
     case 'codex-cli': {
       const v = await sh(bin('codex'), ['--version'])
-      checks.push({ name: 'binary', ok: v.code === 0, detail: v.stdout.trim() || tx('notFound'), fix: 'brew install --cask codex' })
+      checks.push({ name: 'binary', ok: v.code === 0, detail: v.stdout.trim() || absent(v), fix: install(v, 'brew install --cask codex') })
       // `codex login status` exits 0 with «Logged in using …» and 1 with «Not logged in».
       const a = await sh(bin('codex'), ['login', 'status'])
       const loginText = stripAnsi(a.stdout + a.stderr)
@@ -175,7 +178,7 @@ export async function preflightAgent(profile: AgentProfile, deps: PreflightDeps,
       checks.push({
         name: 'binary',
         ok: v.code === 0 && Boolean(version?.startsWith('3000.')),
-        detail: version ? `devin ${version}` : tx('notFound'),
+        detail: version ? `devin ${version}` : absent(v),
         fix: 'brew install --cask devin-cli',
       })
       const a = await sh(bin('devin'), ['auth', 'status'])
@@ -190,7 +193,7 @@ export async function preflightAgent(profile: AgentProfile, deps: PreflightDeps,
       checks.push({
         name: 'binary',
         ok: v.code === 0 && compareSemver(version, OPENCODE_MIN) >= 0,
-        detail: version || tx('notFound'),
+        detail: version || absent(v),
         fix: tx('opencodeFix', { minimum: OPENCODE_MIN }),
       })
       const provider = profile.model.split('/')[0] ?? ''
@@ -213,7 +216,7 @@ export async function preflightAgent(profile: AgentProfile, deps: PreflightDeps,
     // rb1: the binary is `cursor-agent`; `status`/`whoami` prints "Not logged in" when signed out.
     case 'cursor-agent': {
       const v = await sh(bin('cursor'), ['--version'])
-      checks.push({ name: 'binary', ok: v.code === 0, detail: stripAnsi(v.stdout).trim() || tx('notFound'), fix: tx('cursorFix') })
+      checks.push({ name: 'binary', ok: v.code === 0, detail: stripAnsi(v.stdout).trim() || absent(v), fix: install(v, tx('cursorFix')) })
       const a = await sh(bin('cursor'), ['status'])
       const statusText = stripAnsi(a.stdout + a.stderr)
       const loggedIn = a.code === 0 && !/not logged in/i.test(statusText)
@@ -233,7 +236,7 @@ export async function preflightAgent(profile: AgentProfile, deps: PreflightDeps,
       // OS keychain (or credentials configured under a project/settings scope the check does not see) passes
       // here while a truly unsigned run still fails on its own with an auth error.
       const v = await sh(bin('gemini'), ['--version'])
-      checks.push({ name: 'binary', ok: v.code === 0, detail: stripAnsi(v.stdout).trim() || tx('notFound'), fix: tx('geminiFix') })
+      checks.push({ name: 'binary', ok: v.code === 0, detail: stripAnsi(v.stdout).trim() || absent(v), fix: install(v, tx('geminiFix')) })
       const source = await geminiCredentialSource(deps.env ?? process.env)
       checks.push({ name: 'auth', ok: true, detail: tx(source ? 'geminiCreds' : 'geminiAuthUnknown', source ? { source } : undefined), ...(source ? {} : { fix: tx('geminiSignIn') }) })
       break
@@ -243,7 +246,7 @@ export async function preflightAgent(profile: AgentProfile, deps: PreflightDeps,
       // models` is the auth probe — listing the account's models needs a login, so a failure is reported as
       // not signed in. Its exact signed-out wording is unverified: any auth-looking text also counts.
       const v = await sh(bin('grok'), ['version'])
-      checks.push({ name: 'binary', ok: v.code === 0, detail: stripAnsi(v.stdout).trim() || tx('notFound'), fix: tx('grokFix') })
+      checks.push({ name: 'binary', ok: v.code === 0, detail: stripAnsi(v.stdout).trim() || absent(v), fix: install(v, tx('grokFix')) })
       const a = await sh(bin('grok'), ['models'])
       const statusText = stripAnsi(a.stdout + a.stderr)
       const loggedIn = a.code === 0 && !/not logged in|log ?in required|please (?:run |log ?in|sign ?in)|unauthori[sz]ed|unauthenticated|\b401\b/i.test(statusText)
@@ -252,7 +255,7 @@ export async function preflightAgent(profile: AgentProfile, deps: PreflightDeps,
     }
     case 'dsh': {
       const v = await sh(bin('dsh'), ['--version'])
-      checks.push({ name: 'binary', ok: v.code === 0, detail: v.stdout.trim() || tx('notFound'), fix: 'npm i -g @deepseek-ai/dsh' })
+      checks.push({ name: 'binary', ok: v.code === 0, detail: v.stdout.trim() || absent(v), fix: install(v, 'npm i -g @deepseek-ai/dsh') })
       const p = await sh(bin('dsh'), ['--profile', 'acp', '--dump-config'], 60_000)
       checks.push({
         name: 'profile',

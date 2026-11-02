@@ -11,7 +11,7 @@ const EVENT_TEXT: Partial<Record<GoalEvent['type'], (e: GoalEvent) => string>> =
   goal_started: () => T.event.goal_started,
   assigned: () => T.event.assigned,
   run_started: () => T.event.run_started,
-  progress: (e) => (e.type === 'progress' ? e.text : ''),
+  progress: (e) => (e.type === 'progress' ? (e.code ? T.system(e.code, e.detail) : e.text) : ''),
   question: (e) => (e.type === 'question' ? T.event.question(e.text) : ''),
   escalated: (e) => (e.type === 'escalated' ? T.event.escalated(e.why) : ''),
   answered: (e) => (e.type === 'answered' ? (e.actor === 'owner' ? T.event.answeredByYou(e.text) : T.event.answeredByLead(e.text)) : ''),

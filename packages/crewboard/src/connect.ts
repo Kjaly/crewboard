@@ -33,6 +33,10 @@ export async function connectLead(o: { client: LeadClientId; url: string; exec: 
   const [cmd, args] = run(o.url)
   const text = [cmd, ...args].join(' ')
   const result = await o.exec(cmd, args).catch((error: unknown) => ({ code: 127, stdout: '', stderr: error instanceof Error ? error.message : String(error), timedOut: false }))
-  if (result.code !== 0) return { error: `${text} failed: ${(result.stderr || result.stdout).trim() || `exit ${result.code}`}. Is ${cmd} installed and on PATH?` }
-  return { ran: text }
+  const output = `${result.stderr}\n${result.stdout}`.trim()
+  if (result.code === 0) return { ran: text }
+  // Not connected to this address: the existing entry may point elsewhere, so the command fails with what to do.
+  if (/already exists/i.test(output)) return { error: `${cmd} already has an MCP server named crewboard. To point it at ${o.url}, remove it first (${cmd} mcp remove${o.client === 'claude' ? ' --scope user' : ''} crewboard) and connect again.` }
+  if (result.code === 127 || /ENOENT/.test(output)) return { error: `${cmd} is not installed or not on PATH; install it, or connect another client` }
+  return { error: `${text} failed: ${output || `exit ${result.code}`}` }
 }

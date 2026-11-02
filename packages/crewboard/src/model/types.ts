@@ -10,7 +10,7 @@ export type Actor = 'lead' | 'owner' | 'worker' | 'system'
 export const REQUEST_ACTIONS = ['clarify', 'stop', 'handoff', 'start_now', 'cancel', 'reopen', 'revive', 'discuss'] as const
 export type RequestAction = (typeof REQUEST_ACTIONS)[number]
 /** Texts Crewboard itself writes into a journal. Stored as a code, so the screen words them in the owner's language. */
-export const SYSTEM_TEXTS = ['emergency_stop', 'owner_stop', 'run_failed', 'parent_cancelled', 'no_report', 'split'] as const
+export const SYSTEM_TEXTS = ['emergency_stop', 'owner_stop', 'run_failed', 'parent_cancelled', 'no_report', 'split', 'split_truncated', 'split_registry'] as const
 export type SystemText = (typeof SYSTEM_TEXTS)[number]
 
 const base = {
@@ -23,7 +23,7 @@ const base = {
 const text = z.string()
 
 export const goalEventSchema = z.discriminatedUnion('type', [
-  z.object({ ...base, type: z.literal('goal_started'), title: text, criteria: z.array(text), quote: text.optional() }),
+  z.object({ ...base, type: z.literal('goal_started'), title: text, criteria: z.array(text), quote: text.optional(), client: text.optional() }),
   z.object({
     ...base,
     type: z.literal('assigned'),
@@ -37,7 +37,7 @@ export const goalEventSchema = z.discriminatedUnion('type', [
     after: z.array(z.string()),
   }),
   z.object({ ...base, type: z.literal('run_started'), runId: text, agent: text, cwd: text }),
-  z.object({ ...base, type: z.literal('progress'), text }),
+  z.object({ ...base, type: z.literal('progress'), text, code: z.enum(SYSTEM_TEXTS).optional(), detail: text.optional() }),
   z.object({ ...base, type: z.literal('question'), text, options: z.array(text) }),
   z.object({ ...base, type: z.literal('escalated'), text, options: z.array(text), why: text }),
   z.object({ ...base, type: z.literal('answered'), text }),

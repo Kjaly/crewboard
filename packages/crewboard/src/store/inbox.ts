@@ -25,12 +25,18 @@ export function isLeadEvent(e: GoalEvent, workerParts: ReadonlySet<string> = new
 type Delivered = { delivered: Record<string, number> }
 
 /**
+ * How long a batch a session took keeps it from waking `crewboard wait`. A lead whose client died without closing its
+ * session would otherwise hide new events until the idle sweep; past this, the worst case is one empty wake.
+ */
+export const INBOX_HOLD_MS = 2 * 60_000
+
+/**
  * The lead's inbox across every goal of one repository; confirmed delivery is remembered in `.crewboard/inbox.json`.
  * Delivery is at least once: what a lead session takes stays unconfirmed until the same session takes again, so a
  * lead that drops out before acting hands its events to the next session. What was handed out lives in memory only:
  * a restarted server hands every unconfirmed event out again.
  */
-export function createInbox(store: EventStore) {
+export function createInbox(store: EventStore, now: () => number = Date.now) {
   const path = join(projectDir(store.repo), 'inbox.json')
   const load = async (): Promise<Delivered> => {
     try {
@@ -41,6 +47,7 @@ export function createInbox(store: EventStore) {
   }
   let chain: Promise<unknown> = Promise.resolve()
   const offered = new Map<string, Map<string, number>>()
+  const offeredAt = new Map<string, number>()
   const highest = (events: GoalEvent[]) => {
     const top = new Map<string, number>()
     for (const e of events) top.set(e.goalId, Math.max(top.get(e.goalId) ?? 0, e.seq))
@@ -68,17 +75,22 @@ export function createInbox(store: EventStore) {
       for (const [goalId, seq] of offered.get(session) ?? []) await this.ack(goalId, seq)
       const events = await this.pending()
       offered.set(session, highest(events))
+      offeredAt.set(session, now())
       return events
     },
     /** Unconfirmed events no live session holds: what should wake a waiting lead. */
     async unseen(): Promise<GoalEvent[]> {
       const held = new Map<string, number>()
-      for (const top of offered.values()) for (const [goalId, seq] of top) held.set(goalId, Math.max(held.get(goalId) ?? 0, seq))
+      for (const [session, top] of offered) {
+        if (now() - (offeredAt.get(session) ?? 0) > INBOX_HOLD_MS) continue
+        for (const [goalId, seq] of top) held.set(goalId, Math.max(held.get(goalId) ?? 0, seq))
+      }
       return (await this.pending()).filter((e) => e.seq > (held.get(e.goalId) ?? 0))
     },
     /** Forgets what a session held without confirming it: the next session gets those events again. */
     release(session: string): void {
       offered.delete(session)
+      offeredAt.delete(session)
     },
     ack(goalId: string, seq: number): Promise<void> {
       const next = chain.then(async () => {

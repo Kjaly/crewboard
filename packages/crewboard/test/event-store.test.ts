@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createEventStore } from '../src/store/event-store.js'
-import { createInbox } from '../src/store/inbox.js'
+import { INBOX_HOLD_MS, createInbox } from '../src/store/inbox.js'
 import { goalDir } from '../src/store/paths.js'
 import type { NewEvent } from '../src/model/types.js'
 
@@ -24,6 +24,21 @@ describe('event store', () => {
     for (let i = 0; i < 3; i++) await store.append('g1', progress(i))
     await appendFile(join(goalDir(root, 'g1'), 'events.jsonl'), '{"seq":4,')
     expect((await createEventStore(root).read('g1')).length).toBe(3)
+  })
+
+  it('numbers after a line it cannot read, never repeating its number', async () => {
+    const root = await repo()
+    const store = createEventStore(root)
+    for (let i = 0; i < 3; i++) await store.append('g1', progress(i))
+    await appendFile(join(goalDir(root, 'g1'), 'events.jsonl'), '{"seq":4,"type":"from_a_newer_version"}\n')
+    expect((await createEventStore(root).append('g1', progress(4))).seq).toBe(5)
+  })
+
+  it('keeps a takeover when the lead is marked present at the same moment', async () => {
+    const store = createEventStore(await repo())
+    await store.writeMeta({ goalId: 'g1', title: 'G', createdAt: new Date(0).toISOString() })
+    await Promise.all([store.touchLead('g1', new Date(1), { client: 'codex-mcp-client' }), store.touchLead('g1', new Date(2))])
+    expect((await store.readMeta('g1'))?.lead).toEqual({ client: 'codex-mcp-client' })
   })
 
   it('keeps project data out of git', async () => {
@@ -58,6 +73,17 @@ describe('lead inbox', () => {
     await store.writeMeta({ goalId: 'g1', title: 'Кухня', createdAt: new Date().toISOString() })
     await store.append('g1', { type: 'question', goalId: 'g1', assignmentId: 'a', actor: 'worker', text: 'Шторка?', options: [] })
     expect(await act(createInbox(store))).toBe(expected)
+  })
+
+  it('wakes a waiting lead for a batch a silent session took long ago', async () => {
+    const store = createEventStore(await repo())
+    await store.writeMeta({ goalId: 'g1', title: 'Кухня', createdAt: new Date().toISOString() })
+    await store.append('g1', { type: 'question', goalId: 'g1', assignmentId: 'a', actor: 'worker', text: 'Шторка?', options: [] })
+    let clock = 0
+    const inbox = createInbox(store, () => clock)
+    await inbox.take('dead-session')
+    clock = INBOX_HOLD_MS + 1
+    expect((await inbox.unseen()).length).toBe(1)
   })
 
   it('keeps the reports of split-off parts away from the lead', async () => {

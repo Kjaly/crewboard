@@ -16,6 +16,7 @@ describe('lead clients', () => {
     ['claude-code', 'Claude Code'],
     ['codex-mcp-client', 'Codex'],
     ['dsh-acp', 'dsh'],
+    ['claude-desktop', 'claude-desktop'],
     ['my-agent', 'my-agent'],
     ['', undefined],
   ])('%s is shown as %s', (client, label) => {
@@ -39,8 +40,12 @@ describe('agent registry', () => {
     expect(agents.coreId((await agents.get('codex'))!, 'gpt-6-luna')).toBe('codex/gpt-6-luna')
   })
 
-  it('reports a broken file with its path', async () => {
-    const { home, agents } = await withFile({ agents: { x: { run: 'nope', model: 'm' } } })
+  it.each([
+    ['an unknown run', { x: { run: 'nope', model: 'm' } }],
+    ['the reserved id lead', { lead: { run: 'dsh', model: 'm' } }],
+    ['an id a split tag cannot name', { 'my agent': { run: 'dsh', model: 'm' } }],
+  ])('reports a broken file with its path: %s', async (_n, entries) => {
+    const { home, agents } = await withFile({ agents: entries })
     await expect(agents.list()).rejects.toBeInstanceOf(AgentsFileError)
     await expect(agents.list()).rejects.toMatchObject({ path: join(home, 'agents.json') })
   })

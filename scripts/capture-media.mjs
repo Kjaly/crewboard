@@ -3,7 +3,7 @@
 // Workers are replaced by a script that sleeps, so an answer or a request on screen never starts a real agent.
 //
 //   PLAYWRIGHT=<path to the playwright package> CHROMIUM=<browser executable> node scripts/capture-media.mjs [--lang en|ru] [--only shots|video]
-// Needs ffmpeg on PATH. Writes docs/assets/<lang>/{now,request,history,analytics,mobile}-{dark,light}.png,
+// Needs ffmpeg on PATH. Writes docs/assets/<lang>/{now,request,history,analytics,mobile,empty}-{dark,light}.png,
 // walkthrough.mp4 and walkthrough.gif.
 import { execFileSync, spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -29,7 +29,7 @@ const L = {
     locale: 'en-US', history: 'History', analytics: 'Analytics', now: 'Now', guide: /Assembly guide/, mobile: /Mobile kitchen properties/, geo: /^Cut-out geometry tests/,
     firstWords: 'I want a full-cycle kitchen', option: 'Bottom sheet', handoff: 'Hand over',
     cap: {
-      intro: '<h1>Crew<b>board</b></h1><p>One Claude Code chat leads. Codex, Claude and DeepSeek do the work.</p>',
+      intro: '<h1>Crew<b>board</b></h1><p>One chat leads: Claude Code, Codex or dsh. Any agent does the work.</p>',
       tree: 'The tree shows who is doing what, right now',
       question: 'A worker’s question reached you: answer in one click',
       request: 'Every action is a request. The lead decides',
@@ -42,7 +42,7 @@ const L = {
     locale: 'ru-RU', history: 'История', analytics: 'Аналитика', now: 'Сейчас', guide: /Сборочная инструкция/, mobile: /Мобильная панель/, geo: /^Тесты геометрии/,
     firstWords: 'Хочу кухню полного цикла', option: 'Шторка снизу', handoff: 'Передать',
     cap: {
-      intro: '<h1>Crew<b>board</b></h1><p>Ведёт один чат Claude Code. Работают Codex, Claude и DeepSeek.</p>',
+      intro: '<h1>Crew<b>board</b></h1><p>Ведёт один чат: Claude Code, Codex или dsh. Работает любой агент.</p>',
       tree: 'Дерево показывает, кто чем занят прямо сейчас',
       question: 'Вопрос исполнителя дошёл до вас: ответ в один клик',
       request: 'Любое действие — это просьба. Решает ведущий',
@@ -54,15 +54,30 @@ const L = {
 }
 
 /** Seeds the demo goal in a neutral folder (so no user directory shows on screen) and starts the server on it. */
-const startDemo = async (lang) => {
+const startDemo = async (lang, o = {}) => {
   const demoDir = join('/tmp', 'crewboard-demo')
   rmSync(demoDir, { recursive: true, force: true })
   const seed = JSON.parse(execFileSync('node', [join(root, 'scripts', 'seed-demo.mjs'), '--dir', demoDir, '--lang', lang]).toString())
   // A stand-in worker that just keeps working: an answer or a handover on screen shows a live run, and no agent starts.
-  const worker = join(demoDir, 'worker.sh')
-  writeFileSync(worker, '#!/bin/sh\nexec sleep 90\n', { mode: 0o755 })
+  // It also answers the readiness checks the first-run screen shows (version, sign-in, dsh profile), with no CLI run.
+  const stub = (name, version) => {
+    const file = join(demoDir, `${name}.sh`)
+    const answers = [
+      `[ "$1" = "--version" ] && { echo "${version}"; exit 0; }`,
+      `[ "$1 $2 $3" = "auth status --json" ] && { echo '{"loggedIn":true}'; exit 0; }`,
+      `[ "$1 $2" = "login status" ] && { echo 'Logged in using ChatGPT'; exit 0; }`,
+      `[ "$1 $3" = "--profile --dump-config" ] && exit 0`,
+      '[ "$1" = "--help" ] && { echo "--bare"; exit 0; }',
+    ]
+    writeFileSync(file, `#!/bin/sh\n${answers.join('\n')}\nexec sleep 90\n`, { mode: 0o755 })
+    return file
+  }
   const server = spawn('node', [join(root, 'packages', 'crewboard', 'dist', 'main.js'), 'serve', '--port', String(port)], {
-    env: { ...process.env, ...seed.env, ANTHROPIC_API_KEY: 'demo-not-used', CREWBOARD_CLAUDE_COMMAND: worker, CREWBOARD_CODEX_COMMAND: worker, CREWBOARD_DSH_COMMAND: worker },
+    env: {
+      // The operator's own Crewboard settings (a dsh argument list, a runner) could route a check to a real CLI.
+      ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('CREWBOARD_') && !k.startsWith('ORCH_'))), ...seed.env, ...(o.empty ? { CREWBOARD_HOME: seed.emptyHome } : {}), ANTHROPIC_API_KEY: 'demo-not-used', DEEPSEEK_API_KEY: 'demo-not-used',
+      CREWBOARD_CLAUDE_COMMAND: stub('claude', '2.1.316 (Claude Code)'), CREWBOARD_CODEX_COMMAND: stub('codex', 'codex-cli 0.166.0'), CREWBOARD_DSH_COMMAND: stub('dsh', '0.1.5'),
+    },
     stdio: 'ignore',
   })
   for (let i = 0; i < 50; i++) {
@@ -91,7 +106,8 @@ const shots = async (lang) => {
     const context = await browser.newContext({ locale: l.locale, viewport: opts.viewport ?? { width: 1440, height: 900 }, deviceScaleFactor: 2, colorScheme: scheme, ...(opts.mobile ? { isMobile: true, hasTouch: true } : {}) })
     const page = await context.newPage()
     await page.goto(url)
-    await page.getByRole('tree').waitFor()
+    if (opts.empty) await page.locator('.workers li').first().waitFor()
+    else await page.getByRole('tree').waitFor()
     await page.evaluate(() => document.fonts.ready)
     if (act) await act(page)
     await page.waitForTimeout(500)
@@ -116,6 +132,15 @@ const shots = async (lang) => {
       console.log(`captured ${lang}/${name}-${scheme}.png (${kb(file)})`)
     }
   await stop()
+  // The first-run screen: no goal yet, how to connect a lead, which workers are ready.
+  const stopEmpty = await startDemo(lang, { empty: true })
+  for (const scheme of ['dark', 'light']) {
+    const src = await raw('empty', scheme, { empty: true }, undefined)
+    const file = join(out, `empty-${scheme}.png`)
+    await frameWindow(browser, { src, scheme, out: file })
+    console.log(`captured ${lang}/empty-${scheme}.png (${kb(file)})`)
+  }
+  await stopEmpty()
 }
 
 const W = 1280

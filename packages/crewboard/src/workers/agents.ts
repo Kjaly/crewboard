@@ -29,7 +29,8 @@ export const BUILTIN_AGENTS: readonly AgentEntry[] = [
 
 const fileSchema = z.object({
   agents: z.record(
-    z.string().min(1),
+    // An id a split tag can name; `lead` is how the screen names the lead and cannot be a worker.
+    z.string().regex(/^[a-z0-9][a-z0-9._-]*$/i, 'an agent id is letters, digits, dot, dash or underscore').refine((id) => id.toLowerCase() !== 'lead', 'the id "lead" is reserved'),
     z.object({
       label: z.string().min(1).optional(),
       run: z.enum(AGENT_RUNS).optional(),

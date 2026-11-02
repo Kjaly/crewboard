@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { nodeExec } from '@crewboard/core'
 import { createApp } from './app.js'
+import { duration, flag, portOf } from './cli.js'
 import { connectLead } from './connect.js'
 import { checkAgents, readinessLine, readinessTable } from './doctor.js'
 import { createAgents } from './workers/agents.js'
@@ -26,18 +27,16 @@ const USAGE = `crewboard — local Crewboard server
   crewboard wait --project <path> [--port ${DEFAULT_PORT}] [--timeout 10m]
       wait until the lead has news; exit 0 = news, 2 = timeout, 1 = server unreachable`
 
-const flag = (args: string[], name: string): string | undefined => {
-  const i = args.indexOf(`--${name}`)
-  return i >= 0 ? args[i + 1] : undefined
-}
-const duration = (text: string | undefined, fallbackMs: number): number => {
-  const m = text ? /^(\d+)(ms|s|m|h)?$/.exec(text) : null
-  if (!m) return fallbackMs
-  return Number(m[1]) * ({ ms: 1, s: 1000, m: 60_000, h: 3_600_000 } as const)[(m[2] ?? 's') as 'ms' | 's' | 'm' | 'h']
+/** `--port`, or a plain refusal: a typo must not start the server on NaN or reach a port nobody named. */
+const portOrExit = (args: string[]): number => {
+  const port = portOf(args, DEFAULT_PORT)
+  if (port !== undefined) return port
+  console.error(`crewboard: --port needs a number from 1 to 65535, got ${flag(args, 'port') ?? 'nothing'}`)
+  process.exit(1)
 }
 
 async function serve(args: string[]): Promise<void> {
-  const port = Number(flag(args, 'port') ?? DEFAULT_PORT)
+  const port = portOrExit(args)
   const env = process.env
   const uiDir = fileURLToPath(new URL('./ui', import.meta.url))
   const app = createApp({ env, uiDir, backendFor: (repo) => realBackendFor({ repo, env, home: homedir() }) })
@@ -64,7 +63,7 @@ async function wait(args: string[]): Promise<number> {
     console.error('wait: --project <path> is required')
     return 1
   }
-  const port = Number(flag(args, 'port') ?? DEFAULT_PORT)
+  const port = portOrExit(args)
   const until = Date.now() + duration(flag(args, 'timeout'), 10 * 60_000)
   while (Date.now() < until) {
     const slice = Math.min(until - Date.now(), 600_000)
@@ -95,7 +94,7 @@ async function connect(args: string[]): Promise<number> {
     console.error('connect: name the lead client: claude, codex, dsh or other')
     return 1
   }
-  const url = `http://127.0.0.1:${Number(flag(args, 'port') ?? DEFAULT_PORT)}/mcp`
+  const url = `http://127.0.0.1:${portOrExit(args)}/mcp`
   const out = await connectLead({ client, url, exec: nodeExec })
   if (out.error) {
     console.error(`connect: ${out.error}`)
@@ -107,7 +106,7 @@ async function connect(args: string[]): Promise<number> {
 
 async function doctor(): Promise<number> {
   const result = await checkAgents({ agents: createAgents(process.env), env: process.env, exec: nodeExec })
-  console.log(readinessTable(result))
+  console.log(result.length ? readinessTable(result) : 'no workers enabled: every agent in ~/.crewboard/agents.json is turned off')
   return result.some((a) => a.ok) ? 0 : 1
 }
 

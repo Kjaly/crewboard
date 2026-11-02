@@ -1,5 +1,7 @@
+import type { CSSProperties } from 'react'
 import type { CostCell, GoalAnalytics } from '../../analytics.js'
 import type { ProviderId } from '../../model/types.js'
+import { agentOf } from '../agents.js'
 import { T, providerLabel } from '../text.js'
 import { Avatar } from './badges.js'
 
@@ -69,8 +71,9 @@ export function AnalyticsView(props: { analytics: GoalAnalytics | undefined }) {
                   {placed.map(({ b, s, e, r }) => (
                     <div
                       key={`${b.assignmentId}-${b.start}`}
-                      className={`lb ${lane.provider} ${b.outcome === 'failed' || b.outcome === 'cancelled' ? 'cancel' : ''}`}
-                      style={{ left: `${pct(s)}%`, width: `${Math.max(pct(e) - pct(s), 2)}%`, top: 10 + r * 32 }}
+                      className={`lb ${b.outcome === 'failed' || b.outcome === 'cancelled' ? 'cancel' : ''}`}
+                      data-agent={lane.provider}
+                      style={{ left: `${pct(s)}%`, width: `${Math.max(pct(e) - pct(s), 2)}%`, top: 10 + r * 32, ...(agentOf(lane.provider)?.color ? { '--ag': agentOf(lane.provider)?.color } : {}) } as CSSProperties}
                       title={b.title}
                     >
                       {b.title}

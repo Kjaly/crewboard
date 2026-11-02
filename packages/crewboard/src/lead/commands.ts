@@ -46,7 +46,7 @@ export function createLeadCommands(projectOf: (path: string) => Promise<ProjectC
       const goalId = `${slug(i.title) || 'goal'}-${id(2)}`
       const lead = leadCall.getStore()
       await ctx.store.writeMeta({ goalId, title: i.title, createdAt: now().toISOString(), leadLastSeen: now().toISOString(), ...(lead ? { lead } : {}) })
-      await ctx.store.append(goalId, { type: 'goal_started', goalId, assignmentId: goalId, actor: 'lead', title: i.title, criteria: i.criteria, ...(i.quote ? { quote: i.quote } : {}) })
+      await ctx.store.append(goalId, { type: 'goal_started', goalId, assignmentId: goalId, actor: 'lead', title: i.title, criteria: i.criteria, ...(i.quote ? { quote: i.quote } : {}), ...(lead ? { client: lead.client } : {}) })
       return { goalId }
     },
     async assign(i: { project: string; goalId: string; parentId?: string; title: string; criteria: string[]; resultKind: ResultKind; provider: ProviderId; model?: string; quote?: string; after?: string[] }) {
@@ -69,7 +69,13 @@ export function createLeadCommands(projectOf: (path: string) => Promise<ProjectC
       const ctx = await projectOf(i.project)
       const events = await ctx.inbox.take(session)
       sessionProjects.set(session, (sessionProjects.get(session) ?? new Set()).add(ctx))
-      for (const goalId of new Set(events.map((e) => e.goalId))) await ctx.store.touchLead(goalId, now())
+      try {
+        for (const goalId of new Set(events.map((e) => e.goalId))) await ctx.store.touchLead(goalId, now())
+      } catch (error) {
+        // The lead gets an error, not the batch: the next call must hand the batch out again, not confirm it.
+        ctx.inbox.release(session)
+        throw error
+      }
       return events
     },
     /** A lead session ended: what it took without confirming goes to the next session. */

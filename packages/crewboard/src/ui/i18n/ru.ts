@@ -51,6 +51,8 @@ export const ru = {
       case 'parent_cancelled': return `отменена ветка выше: ${detail}`
       case 'no_report': return 'Исполнитель завершил работу без итога'
       case 'split': return 'Работа разделена на части'
+      case 'split_truncated': return `Разбиение урезано, отброшено частей сверх предела: ${detail}`
+      case 'split_registry': return `Метки агентов в разбиении не учтены, реестр агентов не читается: ${detail}`
     }
   },
   appTitle: 'Crewboard',
@@ -77,7 +79,7 @@ export const ru = {
   inWork: (n: number) => `${n} в работе`,
   allFinished: 'всё завершено',
   leadAway: 'ведущий не на связи',
-  waitingYou: (n: number) => `${n} ждёт вас`,
+  waitingYou: (n: number) => `${n} ${plural(n, 'ждёт', 'ждут', 'ждут')} вас`,
   waitingLead: (n: number) => `${n} ${plural(n, 'ждёт', 'ждут', 'ждут')} ведущего`,
   running: (n: number) => `${n} ${plural(n, 'идёт', 'идут', 'идут')}`,
   queued: (n: number) => `${n} в очереди`,

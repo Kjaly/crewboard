@@ -113,8 +113,9 @@ export function doingOf(own: GoalEvent[], status: Status, titles: ReadonlyMap<st
   if (latest?.type === 'run_ended' && latest.outcome === 'failed') return latest.reason ? { kind: 'failed', reason: latest.reason } : { kind: 'failed' }
   const reported = lastOf(own, 'reported')
   if (reported && seqOf(reported) >= seqOf(lastOf(own, 'run_started'))) return { kind: 'reported' }
-  const progress = lastOf(own, 'progress')?.text
-  return progress ? { kind: 'text', text: progress } : { kind: 'working' }
+  const progress = lastOf(own, 'progress')
+  if (progress?.code) return { kind: 'system', code: progress.code, ...(progress.detail !== undefined ? { detail: progress.detail } : {}) }
+  return progress?.text ? { kind: 'text', text: progress.text } : { kind: 'working' }
 }
 
 function requestOf(own: GoalEvent[]): AssignmentView['request'] {

@@ -53,6 +53,8 @@ export const en: Strings = {
       case 'parent_cancelled': return `a branch above was cancelled: ${detail}`
       case 'no_report': return 'The worker finished without a report'
       case 'split': return 'The work is split into parts'
+      case 'split_truncated': return `The split was cut short: ${detail} parts beyond the limit were dropped`
+      case 'split_registry': return `Agent tags in the split were ignored, the agent registry cannot be read: ${detail}`
     }
   },
   appTitle: 'Crewboard',

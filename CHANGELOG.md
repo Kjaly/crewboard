@@ -2,7 +2,9 @@
 
 All notable changes to Crewboard are documented here. This changelog follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - 2026-11-03
+
+The first release on npm: `npx crewboard serve`.
 
 ### Added
 
@@ -22,8 +24,16 @@ All notable changes to Crewboard are documented here. This changelog follows [Ke
 
 - **The lead's inbox no longer loses events** when a lead chat drops out before acting: a batch is confirmed by the same session's next call.
 - A clarification sent to queued work now reaches the worker's first prompt, and answer and decision work launches read-only on Claude and Codex.
+- The first-run screen uses the full width, and an agent from your registry gets its bar on the analytics timeline even without a color.
+- `--port` takes only a port number; `crewboard connect` tells a missing CLI from a server that is already added; `doctor` says when a CLI timed out instead of calling it missing, and explains an empty registry.
+- A takeover is no longer undone by a presence mark written at the same moment, and a lead chat that died without closing hides new events from `crewboard wait` for two minutes at most, not until the idle sweep.
+- History: several Crewboard calls in one Codex `exec` each get their own result, the owner's own `<tags>` stay in their words, the journal history names the lead that started the goal, and only `claude-code` is shown as Claude Code.
+- Analytics book handed-over work to the agent of its latest run, and Codex's default `gpt-6.1-sol` has its API price.
+- Agent ids are checked (letters, digits, `.`, `-`, `_`; `lead` is reserved), a split beyond 8 parts or with an unreadable registry says what it dropped, and the journal never reuses the number of a line it cannot read.
 
-## [1.0.0] - Unreleased
+## [1.0.0] - 2026-11-02
+
+Published on GitHub only; 1.1.0 is the first version on npm.
 
 A new Crewboard. You lead from one chat (Claude Code over MCP); Crewboard runs the workers and shows the work. The DeepSeek Harness plugin and the old plan, contract and review workflow are gone.
 

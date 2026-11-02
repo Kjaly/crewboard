@@ -44,7 +44,8 @@ export function goalAnalytics(events: GoalEvent[], now: Date): GoalAnalytics {
     add(byProvider[provider], end?.usage)
     const row = byAssignment.get(e.assignmentId) ?? { assignmentId: e.assignmentId, title: titles.get(e.assignmentId) ?? e.assignmentId, provider, runs: 0, runsWithoutData: 0, subscriptionRuns: 0 }
     add(row, end?.usage)
-    byAssignment.set(e.assignmentId, row)
+    // Work handed over is booked to the agent that ran it last.
+    byAssignment.set(e.assignmentId, { ...row, provider })
   }
   // The axis spans the runs themselves; it reaches «now» only while something still runs.
   const bars = [...lanes.values()].flatMap((l) => l.bars)
