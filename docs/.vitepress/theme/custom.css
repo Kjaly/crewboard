@@ -1,0 +1,39 @@
+/* The site wears the screen's own palette: neutral greys and one burnt-orange accent. */
+:root {
+  --vp-font-family-base: Geist, ui-sans-serif, system-ui, sans-serif;
+  --vp-font-family-mono: 'Geist Mono', ui-monospace, monospace;
+  --vp-c-brand-1: #c2410c;
+  --vp-c-brand-2: #9a330a;
+  --vp-c-brand-3: #c2410c;
+  --vp-c-brand-soft: rgb(194 65 12 / 0.12);
+  --vp-c-bg: #f6f6f4;
+  --vp-c-bg-alt: #f0f0ed;
+  --vp-c-bg-soft: #ececea;
+  --vp-c-divider: #e3e3df;
+  --vp-home-hero-name-color: var(--vp-c-brand-1);
+  --vp-home-hero-image-filter: none;
+}
+.dark {
+  --vp-c-brand-1: #f6a77a;
+  --vp-c-brand-2: #f0884f;
+  --vp-c-brand-3: #c2410c;
+  --vp-c-brand-soft: rgb(240 136 79 / 0.14);
+  --vp-c-bg: #111113;
+  --vp-c-bg-alt: #0d0d0f;
+  --vp-c-bg-soft: #18181b;
+  --vp-c-divider: #2a2a2f;
+  --vp-home-hero-name-color: var(--vp-c-brand-2);
+}
+.VPHero .name { letter-spacing: -0.045em; }
+.VPHero .text { letter-spacing: -0.03em; }
+.home-media img, .home-media video, .vp-doc picture img { display: block; width: 100%; height: auto; }
+.home-media { max-width: 1152px; margin: 0 auto; padding: 0 24px 48px; display: grid; gap: 40px; }
+@media (min-width: 960px) { .home-media { padding: 0 64px 64px; } }
+.home-media video { border-radius: 12px; }
+.home-media figcaption { margin-top: 12px; font-size: 14px; color: var(--vp-c-text-2); text-align: center; }
+.vp-doc .phone { max-width: 320px; margin: 0 auto; }
+.hero-phone { position: absolute; top: 50%; left: 50%; width: 240px; max-width: 70vw; transform: translate(-50%, -50%); animation: hero-in 700ms cubic-bezier(.23,1,.32,1) both; }
+@media (min-width: 960px) { .hero-phone { width: 290px; } }
+@keyframes hero-in { from { opacity: 0; transform: translate(-50%, -46%); } }
+@media (prefers-reduced-motion: reduce) { .hero-phone { animation: none; } }
+.VPHero .image-bg { opacity: 0; }

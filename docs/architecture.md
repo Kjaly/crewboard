@@ -1,49 +1,51 @@
 # Architecture
 
-Crewboard has one plan engine and two ways to operate it: the `crewboard` CLI (also installed as `orch`) and a DeepSeek Harness (`dsh`) plugin, `dsh-crewboard`. The plan is durable repository data; the screen is a live projection of it.
+Crewboard is one local Node.js process: an HTTP server that the lead talks to over MCP, that runs workers, and that serves the screen.
 
-## Packages and boundaries
+## Packages
 
-| Package | Responsibility | Boundary |
-| --- | --- | --- |
-| `packages/core` | Plan schema and store, dependency graph, run backends, worker routing, supervision, evidence, verdict, and worktree lifecycle. | Node-side code with no React or dsh runtime package dependency. It does contain explicit adapters for the `dsh` ACP process, dsh workspace storage, and dsh-bill records; those are not browser service access. |
-| `packages/cli` | `crewboard` command parsing and presentation. | Calls core; does not own a second plan model. |
-| `packages/plugin/src/host` | dsh host integration: repository discovery, snapshots, HTTP and SSE routes, tools, chat wakeups, native confirmation, and host localization. | Calls core and exposes a narrow API to the browser. Reads optional dsh host services only after injection. |
-| `packages/plugin/src/client` | React screen, settings, notifications, and navigation. | Consumes host API and SSE; uses dsh slots and optional client services through structural faces. No Node modules or dsh runtime imports in the browser bundle. |
+| Package | Responsibility |
+| --- | --- |
+| `packages/crewboard` | The product, published as `crewboard`: the journal, the supervisor, the lead's MCP tools, the HTTP API with live updates, the React screen. |
+| `packages/core` | Private, bundled into `crewboard`: worker backends for the Claude and Codex CLIs and for dsh, their detached run supervisors, event normalising, cost readers. |
 
-The host and client are built as separate entry points. dsh loads the host plugin and browser bundle; `crewboard` works on a repository without the screen.
-
-## From plan file to screen
+## Data flow
 
 ```mermaid
 flowchart LR
-  A[".orchestration/ plan files"] --> B["core: validate, sync runs, derive task views"]
-  B --> C["host: repository snapshots"]
-  C --> D["HTTP snapshot + SSE updates"]
-  D --> E["client store"]
-  E --> F["graph, work, review views"]
-  E --> G["task detail and review queue"]
-  H["crewboard CLI"] --> B
-  G --> I["guarded host actions"]
-  I --> B
+  L["Lead chat (Claude Code)"] -- "MCP tools" --> S["crewboard server"]
+  S -- "events" --> J[".crewboard/goals/&lt;goal&gt;/events.jsonl"]
+  S -- "launch, poll, steer, cancel" --> W["Workers: codex, claude, dsh"]
+  J --> T["Derived tree and statuses"]
+  T -- "HTTP + SSE" --> U["Screen"]
+  U -- "answers, requests" --> S
+  C["~/.claude/projects transcripts"] -. "read only" .-> H["History"]
+  H --> U
+  S -- "crewboard wait (long-poll)" --> L
 ```
 
-The active plan is selected by `.orchestration/current`; the original `main` plan remains `.orchestration/plan.json`, and additional plans live in `.orchestration/plans/`. Core parses each plan, checks dependencies and run state, derives ready, blocked, running, and review states, and builds a repository snapshot. The host combines dsh workspace repositories with configured paths, refreshes snapshots through a file watcher and polling, and serves them over HTTP and SSE. The React store keeps selection and view preferences per plan and renders the snapshot. Task details and diffs are fetched on demand. Background plans are synced too, so their finished runs can raise attention while another plan is open.
+## Journal
 
-Plan writes take a lock, compare revisions, and replace files atomically. A corrupt plan is copied aside and treated as read-only until repaired. This prevents a broken file from silently becoming a new empty plan.
+Every goal is an append-only journal of events: goal started, assigned, run started and ended (with cost), progress, question, escalated, answered, steered, reported, returned, closed, cancelled, reassigned, reopened, owner requested, request decided. Appends to a goal are serialised in the process and numbered; a line cut short by a crash is skipped on read.
 
-## Trust and human decisions
+Statuses are never stored. `buildTree` derives each node's status from its own events and its parent's status: queued, running, waiting for the lead, waiting for the owner, done, cancelled, abandoned, and paused for a goal whose lead is silent. The same derivation feeds the screen, the lead's `crewboard_status` and the supervisor.
 
-Workers can write in their task worktrees and report results. Their report, event feed, and verdict are evidence for review; none of them grants acceptance. Core derives verdict facts from the result claim, run outcome, changed files, and known contract checks. An independent orchestrator judgement is kept beside the worker's report as a result attestation: it binds the latest run, proof hash, HEAD and contract revision, and its history is preserved rather than rewriting the run or its evidence (see [independently attest a worker result](en/review.md#independently-attest-a-worker-result)). A contract that assigns the commit to the orchestrator declares `<commit_owner>orchestrator</commit_owner>`, and the orchestrator then checks, commits and reports in the same copy before acceptance. The orchestrator may accept and merge **routine checked work** automatically: `crewboard accept <id> --auto` then `crewboard merge <id> --auto`, or the `orchestra_close` tool. Those paths are gated in core, not in the caller — a completed or recovered run, a matching orchestrator check (or a current positive attestation), a positive verdict with no bad or warned facts, no declared `<human_review>`, no conflict with the base or another task in review, a clean copy, and passing receipt checks whose commit and contract revision match the current worktree HEAD and current contract. A person still makes the judgment decisions: `accept` without `--auto`, `reject`, `supersede`, `drop`, `mark-merged`, and `plan restore` need an interactive terminal or the screen's native confirmation, and there is no agent tool for them. The dsh host checks action requests, resolves the repository and task, and asks for native confirmation before a screen decision. Automatic and manual merge both try the merge with `git merge-tree` first and refuse a conflict without touching files.
+## Supervisor
 
-The browser is outside the trusted write boundary. It calls host routes with the plugin client header and validated request bodies; the header is a request guard, not authentication against an arbitrary local client. The host enforces the decision and mutation rules. Contracts and task paths are read relative to the repository; core validates task and worktree operations before touching files. Automatic worktree removal is conservative and reports why a copy remains.
+Every two seconds, and right after a new assignment, the supervisor walks each goal of each registered repository. It starts queued work whose dependencies are done, reads every open run through core's `RunBackend`, records progress, turns the worker's last message into a result, a question or a split, and resumes a worker whose split-off parts all finished. A launch the backend refuses is recorded as a failed run. Each project's ticks and the lead's commands run through one queue, so a run is never started twice.
 
-## dsh service access and other decisions
+## The lead
 
-- Cordis services are available through injection, not by assuming a root context property is readable. The client accessor in `src/client/dsh.ts` and the host accessor in `src/host/boundary.ts` validate the small structural face needed by each side, adopt replacements, and release references on disposal. Optional service absence disables only its related feature.
-- The browser follows dsh's locale snapshot and subscription; the host reads the stored locale preference through the injected settings service. English is the fallback. User-authored names, contracts, and reports remain unchanged.
-- Worker selection resolves a plan preset, then a repository preset, then the built-in order; machine-level disablement still wins. The registry is data, so the CLI and screen see the same workers.
-- Graph layout is loaded separately from the main client bundle. Folding and lenses help read large plans without removing the underlying tasks or dependencies.
-- Run evidence stays alongside completed runs. Review and batch acceptance preserve each task's verdict, making a later audit possible after worktree cleanup.
+The MCP server is the lead's only way in. It has no separate planning model: the lead chat decides, Crewboard records and carries out. Requests from the screen are journal events the lead reads in its inbox; accepting one carries out the action in the same step as the decision. `crewboard wait` long-polls the inbox so the lead's background command wakes it.
 
-See the [README](../README.md) and the [user guides](README.md) for installation and operation, and [CONTRIBUTING](../CONTRIBUTING.md) for development checks.
+## The screen
+
+A React 18 bundle served by the same process. It reads `/api/projects`, `/api/goals/:id` and friends, and subscribes to `/api/live` (server-sent events) for journal appends; bursts are coalesced into one refresh per 250 ms. Writes from the screen (answers, requests, emergency stop) accept only JSON from the same origin.
+
+## History
+
+The history tab reads Claude Code's transcripts, never writes them. A goal's sessions are the transcript files, in the repository's folder or its subfolders' folders under `~/.claude/projects`, that call a `crewboard_*` tool with that goal. Lines Claude Code injects itself (`isMeta`, compaction summaries, notifications) are not the owner's words and are left out.
+
+## Trust
+
+The server listens on 127.0.0.1 and has no login: any local process can use it. Workers run with the permissions of the user who started the server, in the repository or in worktrees under `.crewboard/worktrees/`. See [security](../SECURITY.md).

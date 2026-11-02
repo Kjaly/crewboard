@@ -2,13 +2,34 @@
 
 All notable changes to Crewboard are documented here. This changelog follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-The public history starts with the first public snapshot of the repository (0.3.0, 2026-09-24, without a tag or an npm release); its changes are folded into 0.4.0, the first release snapshot. The 0.1.0 and 0.2.0 entries below describe internal milestones from before that snapshot, under the working name dsh-orchestra; they were never published and have no Git tags.
+## [1.0.0] - Unreleased
 
-## [0.4.0] - Unreleased
+A new Crewboard. You lead from one chat (Claude Code over MCP); Crewboard runs the workers and shows the work. The DeepSeek Harness plugin and the old plan, contract and review workflow are gone.
+
+### Added
+
+- **The lead's MCP tools.** Start a goal, assign work to Codex, Claude or DeepSeek, read the inbox, answer or escalate a worker's question, steer, return, close, cancel, decide the owner's requests, see the tree, adopt a goal. `crewboard wait` long-polls the lead's inbox so a background command wakes it.
+- **A journal per goal.** Every goal is an append-only event log in `<repo>/.crewboard/`; statuses are derived from it, never stored.
+- **Workers through their own CLIs.** Codex, Claude Code (with an explicit `ANTHROPIC_API_KEY`) and DeepSeek through dsh. A worker hands back with a result, a question or a split into up to 8 child assignments; a worker that forgets the format still hands back its last message.
+- **The Now screen.** Projects and goals in a sidebar, a live tree with what each worker is doing, the selected node's context, answers to escalated questions, requests from the tree (clarify, stop, hand over, start now, reopen, revive, discuss) decided by the lead, and an emergency stop while the lead is away.
+- **History.** The whole conversation with the lead, read from Claude Code's transcripts, with assignments as cards and jumps to and from the tree.
+- **Analytics.** Provider lanes over time and costs by provider and assignment: money, an estimate at API prices and «no data» kept apart.
+- **English and Russian.** The screen follows the browser's language, and a header button switches it.
+- **A documentation site.** The guides in both languages as a VitePress site with search, deployed to GitHub Pages.
+
+### Removed
+
+- The `dsh-crewboard` plugin, the old `crewboard`/`orch` CLI and their plan files, contracts, review gates, presets and lanes. Old `.orchestration/` folders in repositories are left untouched and no longer read.
+
+## Before 1.0
+
+The entries below describe the plugin-based Crewboard that 1.0.0 replaces.
+
+### [0.4.0] - Unreleased
 
 First public release snapshot. Crewboard is packaged as two npm packages: [`crewboard`](https://www.npmjs.com/package/crewboard), the command-line interface, and [`dsh-crewboard`](https://www.npmjs.com/package/dsh-crewboard), the DeepSeek Harness plugin. Packaging and the trusted-publishing release workflow are implemented; publishing the versions is a maintainer step, and npm availability is verified at release time rather than claimed by this changelog (see [releasing](docs/releasing.md)).
 
-### Added
+#### Added
 
 - **npm packages.** `npm install -g crewboard` installs the CLI as `crewboard` and `orch`; `dsh plugin --profile web add dsh-crewboard` adds the screen to dsh. The CLI bundles the plan engine and has no private runtime dependency. The release workflow builds and publishes both packages from CI with npm trusted publishing when a `v*` tag is pushed.
 - **Repository sidebar.** A two-level list of repositories and plans with pinning and hiding, and a **Needs you** queue for work waiting for a person across repositories. Waiting work also shows in the browser tab title, the favicon, and browser notifications.
@@ -43,7 +64,7 @@ First public release snapshot. Crewboard is packaged as two npm packages: [`crew
 - **Heavy checks take turns.** `crewboard slot -- <command…>` waits for a free machine-wide check slot, then runs `<command>` with its exit code and output unchanged, printing `waiting for a check slot (N ahead)` while it waits; `crewboard slot --set <n>` sets the slot count (default: a quarter of the machine's cores, at least one) and a bare `crewboard slot` shows it. The lock lives at `~/.config/crewboard/slots/`, one file per held slot with its process, host and time, like `plan.lock`; a crashed holder's slot is taken over at once. The baseline and `crewboard verify <id> --run-checks` already go through a slot, so several worktrees preparing at once and several checked runs no longer race each other for CPU; a worker's rules now ask it to run its own long commands through `crewboard slot` too.
 - **Cost across a day, a sprint or a worker.** `crewboard cost [--all-plans] [--all-repos] [--since <date>] [--until <date>] [--by worker|task|plan|class|effort|day] [--csv|--json]` groups runs by any of those slices instead of only by worker; `--json` rows carry `taskId`, `planId`, `class` and `effort` next to `worker` and `model`, cash and the API-rate estimate stay separate as before, and a subscription's quota is shown per quota window (`quotaWindows`, keyed by provider, account and window) instead of summed across windows that mean different things. Draft and repair attempts, which run outside any task, are their own **Planning** line, never blended into a worker's or a task's totals. Codex's token counts are now priced too, from the same published per-model rates Claude's are, so a Codex run under a subscription gets an API-rate estimate instead of staying unknown; the Claude price table now also covers Sonnet 5, Fable 5.1 and Opus 5.5, so the reworked Claude preset's cost shows up correctly — Opus 5.5 has its own row rather than inheriting Opus 5's price, and the lookup matches a model id exactly, or by its base id once a dated snapshot suffix is stripped, so an unpriced minor version stays unknown instead of silently taking an older model's rate. `--csv` prints one row per slice with a stable header.
 
-### Changed
+#### Changed
 
 - **Settings → Workers in three sections.** Every worker is listed once: **Subscriptions** (one block per CLI with its status — signed in, sign-in needed, not installed — its sign-in command, **Check access** and **Add models**; a CLI that is not signed in shows no model table; a model at several efforts is one row with a chip and an **Enabled** switch per effort), **Via dsh (API)** (dsh's catalog by provider, «Keys and models live in dsh.», **Open dsh settings**; a model gone from dsh is **Blocked in dsh** with its switch disabled; with no dsh models at all, the built-in DeepSeek V4 Flash route is one «waiting for a key in dsh» line instead) and **Other / imported · N**, folded: duplicates found by transport, model and effort rather than by the alias table (**Keep one**, **Remove the rest**), an older tool's unused profiles (**Add as worker**, **Remove**) and stale ids (**Remove** takes them out of the routing and presets). Billing and section follow the transport, never the id, so Gemini CLI or Grok CLI profiles are no longer «API». The switch column is **Enabled**; **Used in** shows chips that open the preset and class they name; a preset entry for a switched-off or missing worker stays listed as «not available on this machine» with a link back to the worker. The CLI checks run when the screen opens. `crewboard workers` prints the same three groups.
 - **Provider blocks fold to one line.** Each CLI under **Subscriptions** and each dsh provider under **Via dsh (API)** folds to its name, status, «N models · M in presets» and main action (**Check access** or **Add models**); a click on the line opens it. A provider whose models the routing or a preset uses starts open, the others folded, and each viewer's choice is remembered in the browser; **Expand all** / **Fold all** sit at each section's head. A CLI Crewboard has no runner for (OpenCode today, and any other discovered CLI) starts folded and says «Crewboard does not run tasks on OpenCode yet — models listed for reference»: its models have no **Enabled** switch, their menu keeps only **Remove**, and no preset, routing, launch or onboarding picker offers them; a list that still names one marks it «does not run on this machine». `crewboard workers` prints one summary line per provider, and `--all` every model.
@@ -62,7 +83,7 @@ First public release snapshot. Crewboard is packaged as two npm packages: [`crew
 - **Worker prompts put the steady part first.** Every worker prompt — a launch, a relaunch, **Continue** — is the worker rules, then the contract, then what changes per run, so a prompt cache can reuse the start. The rules also ask the worker to send long check output to a file and read back only the failing part or the tail.
 - **Drafting never writes to the checkout, and picks a worker that can run.** A draft worker reads the repository without write access: Claude Code in plan permission mode, Codex in its read-only sandbox, dsh and Devin in a temporary detached worktree outside the checkout that is removed afterwards. The worker is picked like a run's (preflight, then the `research` preset order): the spec picker shows «The draft will be written by: X» with a choice and why a worker was skipped, and the CLI prints it. A failed attempt shows the first line of the worker's error with a hint (log in, enable, update); **Repair** is now **Try again** (`crewboard plan draft retry`, `repair` still works), and an automatic pick that failed is not kept for the retry.
 
-### Fixed
+#### Fixed
 
 - Failure texts follow the interface language. Core now emits codes with parameters — the stalled and other run alarms, failure reasons, a failed recipe step and its timeout, the runner's stop and late-direction notes, a refused split — and the screen and the CLI say them from their dictionaries; feeds written by older builds in Russian still display, in the reader's language. A usage limit reads «Usage limit reached» for every worker, not only Claude.
 - A relaunch never works on a half-merged copy. When bringing a reused copy up to the base conflicts, the undo of that merge is now checked: it is retried briefly (another git process may hold `index.lock` on a loaded machine), and if the copy is still mid-merge or has conflict markers in its files, `run`, `continue`, `verify --return` and a relaunch stop with one sentence that names the copy and the command that cleans it, instead of running the baseline or a worker on that tree. `crewboard merge` likewise says so, with the command, when git refuses to undo a failed merge in the main checkout, instead of reporting the checkout as unchanged. The last lines a refusal shows of a failed step leave out a test runner's crash dump (stack frames, code frames, vitest's `Serialized Error: {…}`), so the errors above it stay visible; the file keeps everything.

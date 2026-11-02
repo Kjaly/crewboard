@@ -35,7 +35,8 @@ export class ProfileError extends Error {
 export type Backends = {
   forAgent(agent: string, runId?: string): Promise<RunBackend>
 }
-export type BackendsOptions = { env: NodeJS.ProcessEnv; home: string; exec: Exec; root: string }
+/** `runsRoot`: where run records live; defaults to the plan's `<root>/.orchestration/runs`. */
+export type BackendsOptions = { env: NodeJS.ProcessEnv; home: string; exec: Exec; root: string; runsRoot?: string }
 
 /**
  * The binaries a launch runs when `CREWBOARD_<KIND>_COMMAND` replaces one; preflight checks these, so the
@@ -65,6 +66,7 @@ export function workerCommands(env: NodeJS.ProcessEnv): WorkerCommands {
 }
 
 export function createBackends(o: BackendsOptions): Backends {
+  const runsRoot = o.runsRoot ?? join(o.root, CREWBOARD_DIR, 'runs')
   const value = (name: string) => crewboardEnv(o.env, `CREWBOARD_${name}`)
   const dshCommand = value('DSH_COMMAND')
   const dshArgs = value('DSH_ARGS')
@@ -79,7 +81,7 @@ export function createBackends(o: BackendsOptions): Backends {
   const devinCommand = value('DEVIN_COMMAND')
   const devinArgs = value('DEVIN_ARGS')
   const dsh = createDshBackend({
-    runsRoot: join(o.root, CREWBOARD_DIR, 'runs'),
+    runsRoot,
     billRecords: dshBillRecordsPath(o.env, o.home),
     ...(dshCommand ? { command: dshCommand, args: JSON.parse(dshArgs ?? '[]') as string[] } : {}),
     // Inline mode keeps the supervisor in this process (tests, debugging): a launch returns when the run ends.
@@ -90,21 +92,21 @@ export function createBackends(o: BackendsOptions): Backends {
   const inline = cliRunner === 'inline' ? { startRunner: (args: Parameters<typeof runCliRun>[0], env: NodeJS.ProcessEnv) => runCliRun(args, undefined, env) } : {}
   const profileOf = (agent: string) => resolveProfile(o.env, o.home, agent).catch(() => undefined)
   const cli = {
-    claude: createCliBackend({ kind: 'claude', runsRoot: join(o.root, CREWBOARD_DIR, 'runs'), env: o.env, ...(claudeCommand ? { command: claudeCommand } : {}), ...inline, profileOf }),
-    codex: createCliBackend({ kind: 'codex', runsRoot: join(o.root, CREWBOARD_DIR, 'runs'), env: o.env, ...(codexCommand ? { command: codexCommand } : {}), ...inline, profileOf }),
-    opencode: createCliBackend({ kind: 'opencode', runsRoot: join(o.root, CREWBOARD_DIR, 'runs'), env: o.env, ...(opencodeCommand ? { command: opencodeCommand } : {}), ...inline, profileOf }),
+    claude: createCliBackend({ kind: 'claude', runsRoot, env: o.env, ...(claudeCommand ? { command: claudeCommand } : {}), ...inline, profileOf }),
+    codex: createCliBackend({ kind: 'codex', runsRoot, env: o.env, ...(codexCommand ? { command: codexCommand } : {}), ...inline, profileOf }),
+    opencode: createCliBackend({ kind: 'opencode', runsRoot, env: o.env, ...(opencodeCommand ? { command: opencodeCommand } : {}), ...inline, profileOf }),
     // The binary is `cursor-agent`, not `cursor` — the worker kind and the CLI's own name differ here alone.
-    cursor: createCliBackend({ kind: 'cursor', runsRoot: join(o.root, CREWBOARD_DIR, 'runs'), env: o.env, command: cursorCommand ?? 'cursor-agent', ...inline, profileOf }),
+    cursor: createCliBackend({ kind: 'cursor', runsRoot, env: o.env, command: cursorCommand ?? 'cursor-agent', ...inline, profileOf }),
     // rb1: Gemini's `--approval-mode plan` is docs-verified only — drafts get a detached worktree, not trust.
-    gemini: createCliBackend({ kind: 'gemini', runsRoot: join(o.root, CREWBOARD_DIR, 'runs'), env: o.env, readOnlyLaunch: false, ...(geminiCommand ? { command: geminiCommand } : {}), ...inline, profileOf }),
-    grok: createCliBackend({ kind: 'grok', runsRoot: join(o.root, CREWBOARD_DIR, 'runs'), env: o.env, ...(grokCommand ? { command: grokCommand } : {}), ...inline, profileOf }),
+    gemini: createCliBackend({ kind: 'gemini', runsRoot, env: o.env, readOnlyLaunch: false, ...(geminiCommand ? { command: geminiCommand } : {}), ...inline, profileOf }),
+    grok: createCliBackend({ kind: 'grok', runsRoot, env: o.env, ...(grokCommand ? { command: grokCommand } : {}), ...inline, profileOf }),
   }
   return {
     async forAgent(agent, runId) {
       if (runId && LEGACY_RUN_ID.test(runId)) return createLegacyRuns(o.env, o.home)
       // `devin/<model>` (pv1): a Devin worker added for one model; the model comes with the launch.
       if (agent === 'devin' || agent.startsWith('devin/')) return createDevinBackend({
-        runsRoot: join(o.root, CREWBOARD_DIR, 'runs'),
+        runsRoot,
         ...(devinCommand ? { command: devinCommand, commandArgs: JSON.parse(devinArgs ?? '[]') as string[] } : {}),
       })
       const kind = cliKindOf(PROFILE_ALIASES[agent] ?? agent)

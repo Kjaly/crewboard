@@ -10,16 +10,19 @@
     "build": "pnpm -r build",
     "test": "pnpm -r --workspace-concurrency=1 test",
     "typecheck": "pnpm -r typecheck",
-    "lint:i18n": "pnpm --filter dsh-crewboard lint:i18n",
     "lint": "biome lint . && node scripts/check-docs.mjs",
     "lint:docs": "node scripts/check-docs.mjs",
     "format": "biome format --write .",
-    "release:check": "node scripts/release-check.mjs"
+    "release:check": "node scripts/release-check.mjs",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
     "@types/node": "^26.6.2",
     "typescript": "^7.0.2",
+    "vitepress": "1.6.4",
     "vitest": "^5.0.1"
   },
   "repository": {

@@ -1,0 +1,123 @@
+import type { Strings } from './ru.js'
+
+const s = (n: number, one: string, many: string) => (n === 1 ? one : many)
+
+/** Every visible string of the screen in English, in the same shape as the Russian dictionary. */
+export const en: Strings = {
+  locale: 'en-US',
+  switchLang: 'Переключить на русский',
+  langCode: 'RU',
+  meInitial: 'Me',
+  event: {
+    goal_started: 'Goal set',
+    assigned: 'Assigned',
+    run_started: 'Worker started',
+    question: (t) => `Question: ${t}`,
+    escalated: (why) => `The lead passed the question to you: ${why}`,
+    answeredByYou: (t) => `You answered: ${t}`,
+    answeredByLead: (t) => `The lead answered: ${t}`,
+    steered: (t) => `Clarification: ${t}`,
+    reported: (t) => `Result: ${t}`,
+    returned: (t) => `Returned: ${t}`,
+    failed: (t) => `Run failed: ${t}`,
+    closed: (t) => `Closed: ${t}`,
+    cancelled: (t) => `Cancelled: ${t}`,
+    adopted: 'A new lead took over the goal',
+  },
+  doing: (d) => {
+    switch (d.kind) {
+      case 'text': return d.text
+      case 'done': return 'Done'
+      case 'cancelled': return `Cancelled: ${d.code ? en.system(d.code, d.detail) : d.reason}`.trim()
+      case 'system': return en.system(d.code, d.detail)
+      case 'abandoned': return 'Abandoned: the owner no longer leads this work'
+      case 'paused': return 'Paused: the lead is offline'
+      case 'waiting_owner': return 'Waiting for your answer'
+      case 'returned': return `Returned: ${d.note}`
+      case 'asking': return `Asking: ${d.text}`
+      case 'after': return `Starts after: ${d.titles.join(', ')}`
+      case 'queued': return 'Queued'
+      case 'leading': return 'The lead is leading the goal'
+      case 'failed': return `Run failed: ${d.reason ?? 'unknown reason'}`
+      case 'reported': return 'Reported a result, awaiting a decision'
+      case 'working': return 'Working'
+      case 'children': return `Waiting for its assignments: ${d.done} of ${d.total} done`
+    }
+  },
+  system: (code, detail = '') => {
+    switch (code) {
+      case 'emergency_stop': return 'emergency stop by the owner while the lead was offline'
+      case 'owner_stop': return "stopped at the owner's request"
+      case 'run_failed': return `run failed: ${detail || 'unknown reason'}`
+      case 'parent_cancelled': return `a branch above was cancelled: ${detail}`
+      case 'no_report': return 'The worker finished without a report'
+      case 'split': return 'The work is split into parts'
+    }
+  },
+  appTitle: 'Crewboard',
+  tabs: { now: 'Now', history: 'History', analytics: 'Analytics', soon: 'Coming in the next update' },
+  summary: 'Summary',
+  noData: 'no data',
+  analyticsHint: 'For looking back after the work: who was busy, what ran in parallel, what it cost.',
+  analyticsEmpty: 'No runs yet.',
+  costsByProvider: 'Costs by provider',
+  costsByAssignment: 'Costs by assignment',
+  costCols: { who: 'Provider', what: 'Assignment', runs: 'Runs', money: 'Money', api: 'At API prices', tokens: 'Tokens: in / out' },
+  you: 'You',
+  openInHistory: 'Open in history',
+  historyUnavailable: 'The full conversation is unavailable: no Claude Code transcript was found.',
+  historyTruncated: 'Showing the latest part of a long conversation.',
+  historySession: (when) => `Conversation with the lead · ${when}`,
+  actionsCount: (n) => `${n} ${s(n, 'action', 'actions')}`,
+  historyTool: { start_goal: 'Goal set', adopt_goal: 'Goal taken over', close: 'Work closed', cancel: 'Work cancelled', escalate: 'Question passed to you', answer: 'Answer to the worker', steer: 'Clarification to the worker', return: 'Work returned', decide_request: 'Decision on your request', status: 'The lead looked at the tree', inbox: 'The lead read the inbox' },
+  sidebar: 'Projects and goals',
+  goalsButton: 'Goals',
+  waitingN: (n) => `${n} waiting for you`,
+  inWork: (n) => `${n} in progress`,
+  allFinished: 'all finished',
+  leadAway: 'lead is offline',
+  waitingYou: (n) => `${n} waiting for you`,
+  waitingLead: (n) => `${n} waiting for the lead`,
+  running: (n) => `${n} running`,
+  queued: (n) => `${n} queued`,
+  finished: (n) => `${n} finished`,
+  askButton: 'Waiting for you',
+  theme: 'Switch theme',
+  offline: 'No connection to the server. Reconnecting…',
+  loading: 'Loading…',
+  projects: 'Projects',
+  goals: 'Goals',
+  tree: 'Assignments',
+  context: 'Assignment context',
+  finishedGroup: (n) => `Finished ${n}`,
+  close: 'Close',
+  origin: 'Where it came from',
+  originByWorker: 'The worker split this part of the work off itself.',
+  criteria: 'Done when',
+  inside: 'Assignments inside',
+  history: 'History',
+  workdir: 'Working folder',
+  assignedBy: 'Assigned by',
+  lead: 'Lead',
+  emptyTitle: 'Connect Claude Code',
+  emptyText: 'No goals yet. Connect Crewboard to your main Claude Code chat and ask it to set a goal.',
+  copy: 'Copy',
+  copied: 'Copied',
+  question: { via: 'The lead could not decide alone', own: 'Your own answer', send: 'Answer', placeholder: 'Write an answer for the worker', failed: 'The answer was not sent. Check the connection and try again.' },
+  status: { queued: 'Queued', running: 'Running', waiting_answer: 'Waiting for the lead', waiting_owner: 'Waiting for you', done: 'Done', cancelled: 'Cancelled', abandoned: 'Abandoned', paused: 'Paused' },
+  action: { clarify: 'Clarify', stop: 'Stop', handoff: 'Hand over', start_now: 'Start sooner', cancel: 'Cancel', reopen: 'Reopen', revive: 'Bring back', discuss: 'Discuss with the lead' },
+  actionVerb: { clarify: 'clarify', stop: 'stop', handoff: 'hand over', start_now: 'start sooner', cancel: 'cancel', reopen: 'reopen', revive: 'bring back', discuss: 'discuss' },
+  emergencyStop: 'Emergency stop',
+  emergencyConfirm: 'Yes, stop it now',
+  emergencyHint: 'The lead is offline. The stop takes effect at once; the lead learns about it later.',
+  actions: 'Actions',
+  actionText: 'What to tell the lead',
+  actionSend: 'Send',
+  handoffTo: 'Hand over to',
+  requestPending: (verb) => `Requested: ${verb}. The lead is deciding`,
+  requestDeclined: (reason) => `The lead declined: ${reason}`,
+  requestFailed: 'The request was not sent. Check the connection and try again.',
+  discussCopied: 'Message for the lead copied',
+  discussPrompt: (title, goalId, id) => `Let's discuss the assignment "${title}" (${goalId}/${id}): `,
+  provider: { claude: 'Claude', codex: 'Codex', deepseek: 'DeepSeek', lead: 'Lead' },
+}

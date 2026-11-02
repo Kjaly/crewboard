@@ -2,18 +2,14 @@
 
 ## Reporting a vulnerability
 
-Please report suspected vulnerabilities privately through GitHub's
-“Report a vulnerability” feature for this repository:
-https://github.com/Kjaly/crewboard/security/advisories/new
+Please report suspected vulnerabilities privately through GitHub's "Report a vulnerability" feature for this repository: https://github.com/Kjaly/crewboard/security/advisories/new
 
-Include the affected version or commit, a description of the issue, steps to
-reproduce it, and any known impact. Please avoid filing public issues for
-unfixed vulnerabilities. Private vulnerability reporting through GitHub is the reporting channel.
+Include the affected version or commit, a description, steps to reproduce and the known impact. Please do not file public issues for unfixed vulnerabilities.
 
 ## Trust boundary
 
-The plugin's HTTP routes rely on authentication provided by DeepSeek Harness;
-the plugin does not provide an independent authentication layer for those
-routes. Acceptance of orchestration actions is confirmed through a native
-macOS dialog. These controls define the intended trust boundary and should not
-be treated as protection against a compromised or misconfigured host.
+- The server listens on 127.0.0.1 only and has **no login of its own**. Any process on the machine that can reach the port can call the API and the lead's MCP tools, and so can start workers in any Git repository the user can read. Run it only on a machine you trust.
+- The screen's write routes (answers, requests, emergency stop) accept only JSON requests from the server's own origin, so a web page on another site cannot post to them from the browser.
+- Workers run with the permissions of the user who started the server, in the repository or in worktrees under `.crewboard/worktrees/`. What a worker does is bounded by its own CLI's sandbox and permission settings.
+- Automated Claude runs require an explicit `ANTHROPIC_API_KEY`; Crewboard never writes the key to its journals or run records.
+- The history tab reads Claude Code's transcripts under `~/.claude/projects` and never writes there.

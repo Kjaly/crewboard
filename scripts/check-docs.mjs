@@ -4,17 +4,26 @@ import { fileURLToPath } from 'node:url'
 
 // Checks the public documentation: every relative link and image resolves, every `#anchor` into a
 // Markdown file names a real heading, and each English guide in docs/en has a Russian twin in docs/ru.
-// Screenshots are captured by hand from a live dsh host, so a listed shot that is not in the tree yet
+// Screenshots come from scripts/capture-media.mjs, so a listed shot that is not in the tree yet
 // is reported as pending instead of failing; `--strict` (for a release) turns pending into an error.
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const strict = process.argv.includes('--strict')
 
-/** The capture list from docs/notes/2026-09-24-release-research.md §5. */
-export const SCREENSHOTS = ['hero-graph', 'work', 'review', 'sidebar-needs-you', 'task-panel', 'run-ledger', 'settings'].map((name) => `docs/assets/${name}.png`)
+/** The capture list: produced by scripts/capture-media.mjs from the live app on demo data. */
+export const SCREENSHOTS = ['en', 'ru'].flatMap((lang) => [
+  ...['now', 'request', 'history', 'analytics', 'mobile'].flatMap((name) => ['dark', 'light'].map((scheme) => `docs/assets/${lang}/${name}-${scheme}.png`)),
+  `docs/assets/${lang}/walkthrough.gif`,
+  `docs/assets/${lang}/walkthrough.mp4`,
+])
 
-// Worker journals are local working notes and are not published.
-const SKIP_DIRS = new Set(['docs/tmp'])
+/** Names of the product 1.0 replaced: the user guides must not send anyone to them. */
+const FORBIDDEN = [/dsh-crewboard/, /\borch\b(?!estrat)/, /crewboard accept/, /plugin --profile/, /\bSend back\b/, /orchestra_[a-z]/]
+const GUIDES = /^(README(\.[a-z]+)?\.md|docs\/(en|ru)\/.+\.md)$/
+
+// Worker journals are local working notes and are not published. Notes, audits, evals and plans are records of
+// decisions as they were made: their links point at code of that day and are not kept current.
+const SKIP_DIRS = new Set(['docs/tmp', 'docs/notes', 'docs/audits', 'docs/evals', 'docs/superpowers'])
 
 function markdownFiles() {
   const files = readdirSync(root).filter((name) => /^README(\.[a-z]+)?\.md$/.test(name) || name === 'CONTRIBUTING.md' || name === 'CHANGELOG.md')
@@ -51,7 +60,8 @@ export function links(text) {
   const out = []
   const body = prose(text)
   for (const match of body.matchAll(/!?\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g)) out.push({ target: match[1], image: match[0].startsWith('!') })
-  for (const match of body.matchAll(/<img\b[^>]*\bsrc="([^"]+)"/g)) out.push({ target: match[1], image: true })
+  for (const match of body.matchAll(/<(?:img|video)\b[^>]*\bsrc="([^"]+)"/g)) out.push({ target: match[1], image: true })
+  for (const match of body.matchAll(/<source\b[^>]*\bsrcset="([^"\s]+)/g)) out.push({ target: match[1], image: true })
   return out
 }
 
@@ -78,6 +88,11 @@ for (const file of markdownFiles()) {
       errors.push(`${file}: ${target} has no heading #${fragment}`)
     }
   }
+}
+
+for (const file of markdownFiles().filter((f) => GUIDES.test(f))) {
+  const body = prose(read(file))
+  for (const word of FORBIDDEN) if (word.test(body)) errors.push(`${file}: mentions ${word.source}, which 1.0 removed`)
 }
 
 const guides = (lang) => existsSync(path.join(root, 'docs', lang)) ? readdirSync(path.join(root, 'docs', lang)).filter((name) => name.endsWith('.md')) : []

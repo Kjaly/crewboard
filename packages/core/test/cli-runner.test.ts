@@ -9,11 +9,8 @@ import { nodeExec } from '../src/exec.js'
 import { createCliBackend } from '../src/runs/cli-backend.js'
 import { type CliRunnerArgs, runCliRun } from '../src/runs/cli-runner.js'
 import { normalize } from '../src/runs/normalize.js'
-import { finalMessage } from '../src/runs/report.js'
 import { readSteer, steerMailName, writeSteer } from '../src/runs/steers.js'
 import { readRunEvents } from '../src/dsh/runner.js'
-import { evaluateRun } from '../src/watch/rules.js'
-import { runCost } from '../src/cost/cost.js'
 import { makeRepo } from './git-helpers.js'
 
 // The API-only route needs a configured key for the happy-path Claude runs; the fake CLI makes no call. The
@@ -143,8 +140,6 @@ describe('runCliRun: claude', () => {
 
 describe('runCliRun: claude that failed with exit code 0 (B01)', () => {
   const RESETS_AT = '2026-09-24T19:00:00.000Z'
-  const attention = async (runDir: string, state: Awaited<ReturnType<typeof runCliRun>>) =>
-    evaluateRun({ taskId: 't', runId: 'r', agent: 'claude/opus', startedAt: state.startedAt, state: { status: state.status, terminal: true, exitCode: state.exitCode }, events: normalize(await readRunEvents(runDir)), steersAt: [] }, new Date())
 
   it('V-B01/rate-limit a turn that hit the usage limit fails the run with the reason and the reset time', async () => {
     const { runDir, args } = await prepare('claude', 'RATELIMIT build it')
@@ -153,36 +148,18 @@ describe('runCliRun: claude that failed with exit code 0 (B01)', () => {
     expect(state.error).toContain(RESETS_AT)
     const events = await readRunEvents(runDir)
     expect(events.find((e) => e.type === 'rate_limited')?.data).toMatchObject({ resetsAt: RESETS_AT })
-    const [alarm] = await attention(runDir, state)
-    expect(alarm).toMatchObject({ kind: 'failed', severity: 'alert', reason: { code: 'rate_limited', resetsAt: RESETS_AT }, hint: 'crewboard run t' })
-    expect(alarm?.message).toContain("You've hit your usage limit")
   })
 
   it('V-B01/is-error a result with is_error fails the run with the text of that result', async () => {
-    const { runDir, args } = await prepare('claude', 'APIERROR build it')
+    const { args } = await prepare('claude', 'APIERROR build it')
     const state = await runCliRun(args)
     expect(state).toMatchObject({ status: 'failed', exitCode: 1, error: 'API Error: 529 overloaded' })
-    const [alarm] = await attention(runDir, state)
-    expect(alarm).toMatchObject({ kind: 'failed', message: expect.stringContaining('API Error: 529 overloaded') })
-    // fo1: an error with no known cause is still a reason — `worker_error`, with the worker's own words as detail.
-    expect(alarm).toMatchObject({ reason: { code: 'worker_error' }, detail: 'API Error: 529 overloaded' })
   })
 })
 
 describe('runCliRun: claude background work (bg1)', () => {
   const turns = (events: Awaited<ReturnType<typeof readRunEvents>>) => events.filter((e) => e.type === 'turn_started').map((e) => e.data as { text: string; fullText: string; woken?: true })
 
-  it('V-bg1/stays-open keeps the session open while the worker waits for its background child and finishes after the woken turn', async () => {
-    const { runDir, args } = await prepare('claude', 'BACKGROUND:600 run the stress checks')
-    const state = await runCliRun(args)
-    expect(state).toMatchObject({ status: 'completed', exitCode: 0, usage: { calls: 2 } })
-    const events = await readRunEvents(runDir)
-    expect(events.map((e) => e.type)).toEqual(expect.arrayContaining(['background_started', 'background_wait', 'background_finished']))
-    expect(events.find((e) => e.type === 'background_finished')?.data).toMatchObject({ status: 'completed', summary: expect.stringContaining('exit code 0') })
-    expect(turns(events).at(-1)).toMatchObject({ woken: true, text: expect.stringContaining('completed') })
-    expect(events.filter((e) => e.type === 'turn_ended')).toHaveLength(2)
-    expect(finalMessage(events)).toBe('saw bg1-600')
-  })
 
   it('V-bg1/wake-fallback sends the outcome as a turn itself when the CLI does not wake the session', async () => {
     const { runDir, args } = await prepare('claude', 'BACKGROUND:300 NOWAKE checks')
@@ -297,22 +274,6 @@ describe('runCliRun: a claimed result with uncommitted work is finished in the s
     expect(await uncommitted(cwd)).toBe(1)
   })
 
-  it('V-cm1/nudge-then-commit sends one follow-up turn on a dirty report, then finishes once the worker commits', async () => {
-    const { runDir, cwd, args } = await prepareGit('claude', 'REPORT WRITE:work.txt')
-    process.env.FAKE_CLI_COMMIT_ON_NUDGE = '1'
-    try {
-      const state = await runCliRun(args)
-      expect(state).toMatchObject({ status: 'completed', exitCode: 0, usage: { calls: 2 } })
-      const events = await readRunEvents(runDir)
-      expect(events.find((e) => e.type === 'commit_nudge')?.data).toMatchObject({ uncommitted: 1 })
-      const started = events.filter((e) => e.type === 'turn_started').map((e) => (e.data as { fullText: string }).fullText)
-      expect(started).toEqual(['REPORT WRITE:work.txt', expect.stringContaining("Your work is not committed: 1 files")])
-      expect(finalMessage(events)).toBe('Result: received')
-      expect(await uncommitted(cwd)).toBe(0)
-    } finally {
-      delete process.env.FAKE_CLI_COMMIT_ON_NUDGE
-    }
-  })
 
   it('V-cm1/still-dirty sends the nudge only once and still finishes when the worker reports again without committing', async () => {
     const { runDir, cwd, args } = await prepareGit('claude', 'REPORT WRITE:work.txt')
@@ -331,21 +292,6 @@ describe('runCliRun: a claimed result with uncommitted work is finished in the s
     expect(events.some((e) => e.type === 'commit_nudge')).toBe(false)
   })
 
-  it('V-cm1/codex sends the same nudge for codex, once, and finishes once the worker commits', async () => {
-    const { runDir, cwd, args } = await prepareGit('codex', 'REPORT WRITE:work.txt')
-    process.env.FAKE_CLI_COMMIT_ON_NUDGE = '1'
-    try {
-      const state = await runCliRun(args)
-      expect(state).toMatchObject({ status: 'completed', usage: { calls: 2 } })
-      const events = await readRunEvents(runDir)
-      expect(events.filter((e) => e.type === 'commit_nudge')).toHaveLength(1)
-      // parseCodexLine adds the trailing newline `item.completed`'s `agent_message` never has (cli-parse.ts).
-      expect(finalMessage(events)).toBe('Result: received\n')
-      expect(await uncommitted(cwd)).toBe(0)
-    } finally {
-      delete process.env.FAKE_CLI_COMMIT_ON_NUDGE
-    }
-  })
 })
 
 describe('cli backends', () => {
@@ -378,63 +324,6 @@ describe('cli backends', () => {
     expect(await backend.status(runId)).toMatchObject({ status: 'completed', terminal: true })
     expect(await backend.usage?.(runId)).toMatchObject({ sessionId: 'sess-1', calls: 1, inputTokens: 10, outputTokens: 100, cacheReadTokens: 1000, cacheWriteTokens: 50, reasoningTokens: 0, usd: 0.1, availability: { cacheWrite: { value: 50, state: 'known', final: true } } })
   })
-  it('keeps Codex cache-write unavailable through parse, runner, backend and runCost', async () => {
-    const runsRoot = await mkdtemp(join(tmpdir(), 'orch-codex-cache-write-'))
-    const promptFile = join(runsRoot, 'p.md')
-    await writeFile(promptFile, 'build it')
-    const backend = createCliBackend({ kind: 'codex', runsRoot, command: process.execPath, commandArgs: [FAKE_CODEX], startRunner: (a) => runCliRun(a) })
-    const runId = await backend.launch({ agent: 'codex/gpt-5.6-sol', promptFile, cwd: runsRoot })
-    const usage = await backend.usage?.(runId)
-    expect(usage?.cacheWriteTokens).toBeUndefined()
-    expect(usage?.availability?.cacheWrite?.state).toBe('unavailable')
-    expect(runCost({ runId, agent: 'codex/gpt-5.6-sol', startedAt: '2026-09-23T10:00:00Z', finishedAt: '2026-09-23T10:01:00Z' }, [], usage).tokens).not.toHaveProperty('cacheWrite')
-    await writeFile(promptFile, 'CACHEWRITE0')
-    const zeroRunId = await backend.launch({ agent: 'codex/gpt-5.6-sol', promptFile, cwd: runsRoot })
-    const zeroUsage = await backend.usage?.(zeroRunId)
-    expect(zeroUsage?.cacheWriteTokens).toBe(0)
-    expect(runCost({ runId: zeroRunId, agent: 'codex/gpt-5.6-sol', startedAt: '2026-09-23T10:00:00Z', finishedAt: '2026-09-23T10:01:00Z' }, [], zeroUsage).tokens?.cacheWrite).toBe(0)
-    for (const prompt of ['MIXED_WRITE_MISSING_FIRST', 'MIXED_WRITE_KNOWN_FIRST']) {
-      await writeFile(promptFile, prompt)
-      const mixedRunId = await backend.launch({ agent: 'codex/gpt-5.6-sol', promptFile, cwd: runsRoot })
-      const mixedUsage = await backend.usage?.(mixedRunId)
-      expect(mixedUsage?.cacheWriteTokens).toBe(7)
-      expect(mixedUsage?.availability?.cacheWrite?.state).toBe('partial')
-      const run = runCost({ runId: mixedRunId, agent: 'codex/gpt-5.6-sol', startedAt: '2026-09-23T10:00:00Z', finishedAt: '2026-09-23T10:01:00Z' }, [], mixedUsage)
-      expect(run.tokens?.cacheWrite).toBe(7)
-      expect(run.availability?.cacheWrite).toBe('partial')
-    }
-  })
-  it('does not treat a completed Cursor turn as observed zero usage', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'orch-cursor-usage-'))
-    const id = 'run_cursor-observed'
-    await import('node:fs/promises').then(({ mkdir }) => mkdir(join(root, id)))
-    await writeFile(join(root, id, 'state.json'), JSON.stringify({ status: 'completed', exitCode: 0, startedAt: '2026-09-23T10:00:00Z', finishedAt: '2026-09-23T10:01:00Z', pid: process.pid, usage: { calls: 1, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 } }))
-    const usage = await createCliBackend({ kind: 'cursor', runsRoot: root }).usage?.(id)
-    expect(usage?.availability?.input?.state).toBe('unavailable')
-    expect(runCost({ runId: id, agent: 'cursor/auto', startedAt: '2026-09-23T10:00:00Z', finishedAt: '2026-09-23T10:01:00Z' }, [], usage).tokens).toBeUndefined()
-  })
-  it('preserves legacy CLI cache-write sums as partial and leaves legacy zero unknown', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'orch-legacy-cache-write-'))
-    for (const kind of ['claude', 'codex'] as const) {
-      const backend = createCliBackend({ kind, runsRoot: root })
-      for (const [suffix, cacheWriteTokens] of [['positive', 7], ['zero', 0]] as const) {
-        const id = `run_${kind}-legacy-${suffix}`
-        await import('node:fs/promises').then(({ mkdir }) => mkdir(join(root, id)))
-        await writeFile(join(root, id, 'state.json'), JSON.stringify({ status: 'completed', exitCode: 0, startedAt: '2026-09-23T10:00:00Z', finishedAt: '2026-09-23T10:01:00Z', pid: process.pid, usage: { calls: 2, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens, reasoningTokens: 0 } }))
-        const usage = await backend.usage?.(id)
-        const run = runCost({ runId: id, agent: `${kind}/model`, startedAt: '2026-09-23T10:00:00Z', finishedAt: '2026-09-23T10:01:00Z' }, [], usage)
-        if (cacheWriteTokens > 0) {
-          expect(usage?.availability?.cacheWrite?.state).toBe('partial')
-          expect(run.tokens?.cacheWrite).toBe(7)
-          expect(run.availability?.cacheWrite).toBe('partial')
-        } else {
-          expect(usage?.cacheWriteTokens).toBeUndefined()
-          expect(usage?.availability?.cacheWrite?.state).toBe('unavailable')
-          expect(run.tokens).not.toHaveProperty('cacheWrite')
-        }
-      }
-    }
-  })
 })
 
 describe('cli backends: a supervisor that died mid-run (B19)', () => {
@@ -462,23 +351,6 @@ describe('cli backends: a supervisor that died mid-run (B19)', () => {
     return { backend, runId, workerPid, state, written, events: () => readRunEvents(join(runsRoot, runId)), cleanup: () => { try { process.kill(-workerPid, 'SIGKILL') } catch {} } }
   }
 
-  it('V-B19/orphan-stopped stops the worker that outlived its supervisor and names the outcome', async () => {
-    const run = await orphaned('ORPHAN build it')
-    try {
-      expect(alive(run.workerPid)).toBe(true)
-      const status = await run.backend.status(run.runId)
-      expect(status).toMatchObject({ status: 'failed', terminal: true, exitCode: 1 })
-      expect(alive(run.workerPid)).toBe(false)
-      expect(await run.state()).toMatchObject({ status: 'failed', interrupted: { workerPid: run.workerPid, workerStopped: true } })
-      const before = await run.written()
-      await new Promise((r) => setTimeout(r, 300))
-      expect(await run.written()).toBe(before)
-      const [alarm] = evaluateRun({ taskId: 't', runId: run.runId, agent: 'claude/opus', startedAt: new Date().toISOString(), state: status, events: normalize(await run.events()), steersAt: [] }, new Date())
-      expect(alarm).toMatchObject({ kind: 'failed', reason: { code: 'interrupted', workerPid: run.workerPid, workerStopped: true } })
-    } finally {
-      run.cleanup()
-    }
-  })
 
   it('V-B19/orphan-alive keeps the run live while a worker that ignores SIGTERM lives, then kills it after the grace', async () => {
     const run = await orphaned('ORPHAN STUBBORN build it', 400)

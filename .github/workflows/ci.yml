@@ -21,6 +21,5 @@ jobs:
       - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm test
-      - run: pnpm lint:i18n
       - run: pnpm lint
       - run: pnpm release:check

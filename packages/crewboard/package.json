@@ -1,0 +1,61 @@
+{
+  "name": "crewboard",
+  "version": "1.0.0",
+  "description": "Watch and steer coding agents from your lead chat: one local board for Claude, Codex and DeepSeek work.",
+  "license": "MIT",
+  "author": "Anton Varlamkin",
+  "keywords": [
+    "claude-code",
+    "codex",
+    "deepseek",
+    "mcp",
+    "coding-agents",
+    "orchestration"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kjaly/crewboard.git",
+    "directory": "packages/crewboard"
+  },
+  "homepage": "https://github.com/Kjaly/crewboard#readme",
+  "bugs": {
+    "url": "https://github.com/Kjaly/crewboard/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "crewboard": "./dist/main.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@crewboard/core": "workspace:*",
+    "@phosphor-icons/react": "^2.1.10",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
+    "@types/react": "~18.3.31",
+    "@types/react-dom": "~18.3.7",
+    "esbuild": "^0.28.2",
+    "jsdom": "^30.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}

@@ -1,193 +1,70 @@
 # Getting started
 
-[Documentation](../README.md) · **English** | [Русский](../ru/getting-started.md)
+**English** | [Русский](../ru/getting-started.md)
 
-This guide takes one repository from an empty plan to a decision on the first result. It uses the CLI; the same plan appears on the dsh screen once the [plugin is set up](plugin-setup.md).
+This guide takes you from a fresh checkout to a first goal that a worker finishes.
 
-## Before you start
+## 1. Install and start the server
 
-- Node.js 24 or newer, pnpm 11.5.2, and Git, with the CLI built from a source checkout (the npm release is not published yet): `pnpm install --frozen-lockfile && pnpm build`. See [README: install](../../README.md#install).
-- At least one worker CLI, installed and ready: Codex (`codex`), Devin (`devin`), or dsh (`dsh`); for automated Claude Code (`claude`) add an explicit `ANTHROPIC_API_KEY` — its subscription sign-in is not used. See [workers](workers.md).
-- A Git repository with at least one commit. Crewboard creates task worktrees from it.
-
-`crewboard` and `orch` are the same program; the help and messages use whichever name you typed. The commands below write `crewboard`; from a source checkout, run them as `node packages/cli/dist/main.js …` or define the alias shown in the [install steps](../../README.md#install).
-
-## 1. Create a plan
-
-Run commands from inside the repository:
+You need Node.js 24 or newer, pnpm 11.5.2 and Git.
 
 ```sh
-crewboard init --goal "Split the API into modules"
+git clone https://github.com/Kjaly/crewboard.git
+cd crewboard
+pnpm install --frozen-lockfile
+pnpm build
+node packages/crewboard/dist/main.js serve
 ```
 
-This creates `.orchestration/plan.json` (the `main` plan) and adds `.orchestration/` to `.git/info/exclude`, so plan data is not committed by accident. A repository can hold several plans; see `crewboard plan` in the [CLI reference](cli.md#plans).
-
-## 2. Write a contract
-
-A task can run only with a contract: a file in the repository that states the result you want and how to check it. Keep it short and concrete.
-
-Every contract Crewboard writes has the same sections, in this order: the title, **Context**, **Result**, **Checks**, **Not in scope**, **Sources**, and **Report**. The same template is used when you approve a plan draft, create a follow-up or a superseding task, run `crewboard task add --template`, or when the orchestrator creates a task. Context, Not in scope and Sources appear only when they have content; Checks and Report are always there:
-
-- **Checks** holds a `<checks>` block with one command per line. The review screen uses it to tell which checks the worker reported running. The block opens at a line that is exactly `<checks>` and closes at a line that is exactly `</checks>`; a tag mentioned inside a sentence, a code span or fenced code is text, not a block. If a contract has several blocks, the last one counts. The same rule applies to `<paths>`.
-- **Report** asks the worker to start its final answer with the line `Result: received`, `Result: negative`, or `Result: blocked` (in Russian, `Результат: получен | отрицательный | заблокирован`). The verdict reads that line; see [review](review.md).
-
-To start from the template, let Crewboard write a skeleton and fill it in:
-
-```sh
-crewboard task add api --title "Extract the API module" --class code --template
-#   contract: .orchestration/contracts/main/api.md — fill in the result and the checks, then crewboard run api
-```
-
-A filled contract looks like this:
-
-```markdown
-# Extract the API module
-
-## Result
-
-Move the HTTP handlers from src/server.ts into src/api/ without changing behaviour.
-
-## Checks
-
-One command per line between the tags. Run each before you report and name every one in the report with its outcome.
-
-<checks>
-- pnpm test
-- pnpm typecheck
-</checks>
-
-## Not in scope
-
-- Renaming routes
-
-## Report
-
-Start your final answer with one line: `Result: received`, `Result: negative` or `Result: blocked` — pick one by the facts. …
-```
-
-You can also write a contract by hand and attach it with `--contract <file>`. `crewboard run` warns, without refusing, when a contract has no checks or does not ask for the result line.
-
-## 3. Add tasks
-
-```sh
-crewboard task add api --title "Extract the API" --class code --contract docs/tasks/api.md
-crewboard task add docs --title "Document the API" --deps api --class research --contract docs/tasks/docs.md
-crewboard status
-```
-
-`status` shows each task, what it waits for, the tasks ready to start, and the critical path:
+The server prints its address:
 
 ```text
-Split the API into modules · rev 3
-
-Preset: Default: workers that pass checks (source: builtin)
-○ api   Extract the API
-⏸ docs  Document the API · waiting for api
-
-Ready to start: api
-Critical path: api → docs
+crewboard http://127.0.0.1:4700  mcp: http://127.0.0.1:4700/mcp
 ```
 
-The class (`code`, `design`, `review`, `research`) decides which workers are tried automatically. `--kind decision` creates a task that only a person closes.
+`--port` picks another port. The server listens on 127.0.0.1 only.
 
-## 4. Run a worker
+To call it `crewboard` in this shell session, define a function with the checkout's absolute path. The rest of the docs write `crewboard`.
 
 ```sh
-crewboard workers        # the registry and the order per class
-crewboard preflight -a codex
-crewboard run api        # or: crewboard run api -a claude/opus
+CREWBOARD_MAIN="$PWD/packages/crewboard/dist/main.js"
+crewboard() { node "$CREWBOARD_MAIN" "$@"; }
 ```
 
-Without `-a`, Crewboard uses the task's own worker, or the first worker of the task's class that is enabled and passes its preflight check; with the built-in preset it then goes on to any other installed worker that passes. A worker it passed over is named, for example `claude/opus skipped: not logged in → codex/gpt-6-luna`, in the output and in the task's feed. When no worker can run the task, the refusal lists the installed workers that could and the command that routes the class to one, such as `crewboard workers route code codex/gpt-6-luna`. The run gets its own worktree next to the repository, on an `orch/api-…` branch. [Workers](workers.md) explains the order in detail.
+## 2. Open the screen
 
-## 5. Watch
+Open http://127.0.0.1:4700/. With no goals yet, the screen shows the command that connects Claude Code, with a copy button.
+
+## 3. Connect Claude Code as the lead
 
 ```sh
-crewboard events api       # the task's event feed
-crewboard trace api        # turns, model time, tool calls
-crewboard attention        # what waits on you: reviews, decisions, unmerged work, failed runs
-crewboard steer api --message "Keep the old route names"
+claude mcp add --transport http crewboard http://127.0.0.1:4700/mcp
 ```
 
-An orchestrating agent can wait in the background and wake up when something changes:
+Claude Code now has Crewboard's tools and reads its instructions on how to lead. You do not need to explain the protocol to it.
 
-```sh
-crewboard wait --for any --timeout 30m
-```
+## 4. Set up at least one worker
 
-It exits with `0` when a task was decided or a run finished, `2` on timeout, and `1` on error.
+Codex is the quickest: install the `codex` CLI and run `codex login`. Claude needs `ANTHROPIC_API_KEY`; DeepSeek needs `dsh` with a DeepSeek key. See [workers](workers.md).
 
-## 6. Decide
+## 5. Start your first goal
 
-When the run finishes, the task is waiting for review. Read the report, the evidence, and the changes — on the screen, or with `crewboard events api` and in the worktree. Then, in an interactive terminal:
+Open Claude Code inside one of your Git repositories and describe what you want, for example:
 
-```sh
-crewboard accept api
-crewboard reject api --reason "Route compatibility is not verified"
-crewboard supersede api --by api-v2
-```
+> Add a Usage section to the README. Ask Codex to draft it.
 
-`accept`, `reject` and `supersede` ask for confirmation and need an interactive terminal, so an agent cannot make those judgment calls. Routine checked work is different: the orchestrator can auto-accept and auto-merge it with `crewboard accept <id> --auto` then `crewboard merge <id> --auto` (or `orchestra_close`) while the core gates hold. [Review](review.md) describes the verdict, the gates, and evidence.
+The lead asks what it needs, agrees on the criteria with you, starts a goal and assigns the work. On the screen the goal appears in the sidebar under your repository, and the tree shows the assignment with what the worker is doing right now.
 
-Accepting does not change your base branch: the work is on the task's branch until you merge it, and tasks that depend on `api` wait for that. `crewboard accept` prints the commands; for example:
+The lead keeps `crewboard wait` running in the background, so it wakes up when a worker asks something or finishes. When the worker reports, the lead checks the result against the criteria and closes it; the node turns to **Done**.
 
-```sh
-git merge --no-ff orch/api-extract-the-api   # in the main checkout, on the base branch
-```
+## 6. If a worker asks you
 
-After the merge, the worktree is removed if your cleanup policy says so. [After acceptance: merge](review.md#after-acceptance-merge) covers uncommitted work and starting a dependent early.
+When the lead cannot answer a worker's question itself, it raises it to you. **Waiting for you** in the header lights up; open it, pick an option or write your answer. The worker continues with it, and the lead hears your answer too.
 
-## The screen
+## Where things are kept
 
-With the [plugin](plugin-setup.md) installed, open **Orchestration** (the graph icon in dsh's left column); the entry also shows how many items wait for you. The screen shows the same plans as the CLI. Its settings are under **Crewboard** in dsh settings.
+- Each repository's goals live in `<repo>/.crewboard/` (ignored by Git through its own `.gitignore`).
+- The list of known repositories is `~/.crewboard/projects.json`; `CREWBOARD_HOME` moves it.
+- The history tab reads Claude Code's own transcripts from `~/.claude/projects` and never writes there.
 
-On the first visit:
-
-- With no repository listed, the screen asks for a folder path: type it and press **Add**. The **+** next to **Repositories** in the sidebar does the same later.
-- A repository without a plan opens on the welcome screen, both right after you add it and when you click it in the sidebar. **Quiet** only collects repositories that had work before and none for a week.
-- On the welcome screen, **From a spec** drafts a plan from a document, **From chat** asks for the plan's goal and then opens a chat with the orchestrator, and **See an example** opens a sample plan with a short tour; its **Done** brings you back to the welcome screen.
-- An empty plan asks for its first task: **Add task** takes a title and, optionally, what is true when it is done, and writes the contract from the template; **Draft from spec** drafts the tasks from a document.
-- The task panel says who will run a task that nobody assigned: «Will run: Codex GPT-6 Luna (by the preset)». A worker you pick yourself outside the preset is marked **hand-picked**, a note rather than a warning.
-
-![Sidebar with two repositories; one shows a Needs you badge](../assets/sidebar-needs-you.png)
-
-*The sidebar lists repositories and plans. **Now** separates ongoing work, human decisions and run alerts across projects.*
-
-- **Now** (the ◉ button in the rail, or `#orchestra/now`) shows current work across every served plan in three blocks: **Needs you** (a presented decision or an explicit contract human review), **Work in progress** (a running worker, awaiting check, checking, or checked and awaiting the next move) and **Work alerts** (failed or stalled runs). Accepted work that is not merged stays in Now; a checked task or a bound chat is never read as «merging now», and a plan that could not be read is shown as unknown coverage, not as empty.
-- The compact **Projects** strip above the content leads with the active, pinned and current families and offers their worktree copies; the rest stay in the tree and in ⌘K. A background family stays folded and shows the same stage mark — an orchestrator check is not counted as a running worker — and a folder that is gone is collected under **Missing**. It is the one project picker and stays above **Now** too, whose header reads **All projects / Now** and leaves out the plan's view tabs, progress strip and preset picker until you return to a plan.
-- The repository tree keeps the plan you selected in the foreground even when it is genuinely finished or archived: the row stays selected and says **finished** or **archived**, while the other finished plans remain under their folded rows. Nothing is listed or counted twice.
-- Under the open plan the lane tree separates live work (**Now**) from finished lanes (**History**). **Now** starts open and remembers your fold per plan. **History** starts folded on every visit and, once you open it, shows the four most recently completed lanes — **Show more** adds four at a time while the heading keeps the full count, and a selection never unfolds it on its own.
-- Opening an existing plan is read-only and does not change the CLI's current plan. Task actions carry the selected physical folder and plan explicitly. While a plan loads or cannot be read, you can switch projects, open Now or retry; unrelated task actions stay hidden.
-- Returning to a project restores its last copy, view, task, tab, run, graph position and Activity reading position. Explicit task or lane links take priority. Work filters are remembered too. Unsent messages and delivery receipts stay in the window's memory, separate for each task and run; private text is not saved to browser storage and does not survive a page reload. If an Activity anchor has left the bounded history, reading falls back to a safe saved offset.
-
-![Graph view: tasks, dependencies, and the critical path of one plan](../assets/hero-graph.png)
-
-*The **Graph** view (key `1`) shows dependencies and the critical path. Focus lenses highlight tasks that need attention, are running, are ready, or are in review, without hiding the rest.*
-
-![Work view: tasks grouped by state, each with its worker](../assets/work.png)
-
-*The **Work** view (key `2`) groups tasks by state and shows who works on them and what waits for you.*
-
-![Review view: a finished run with its verdict and decision buttons](../assets/review.png)
-
-*The **Review** view (key `3`) collects finished work, verdicts, and plan-level totals.*
-
-![Task panel: contract, run, report, changed files, checks, and decision actions](../assets/task-panel.png)
-
-*The task panel has the overview, activity, changes, contract, your actions, and links, with **Accept** and **Send back** for a task in review.*
-
-*A running task opens on **Activity**, which reads as a live conversation: the worker's public messages as prose, technical steps folded into one compact disclosure, and a persistent status that names the current operation or the last finished step with its age — never a bare «waiting for updates». A composer at the bottom sends a direction to the latest run (plain Enter is a newline, Ctrl/⌘+Enter sends). Activity keeps the tab when the run finishes, shows the true outcome with a link to the report, and preserves any typed-but-unsent text read-only. Opening a finished task starts on **Overview**, and any tab you pick wins over the default.*
-
-![Run ledger: steps of one run with model, tools, and cost](../assets/run-ledger.png)
-
-*The run ledger shows the steps of a run, its model and tools, and what is known about its cost.*
-
-![Settings: workers, their availability, and the order per task class](../assets/settings.png)
-
-*Settings: workers, availability checks, the order per task class, presets, and worktree cleanup.*
-
-## Next
-
-- [CLI reference](cli.md) — every command and flag.
-- [Workers](workers.md) — registry, presets, and how a worker is chosen.
-- [Troubleshooting](troubleshooting.md) — when a run does not start.
+Next: [the lead](lead.md) and [the screen](screen.md).
