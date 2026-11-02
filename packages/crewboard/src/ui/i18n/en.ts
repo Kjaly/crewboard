@@ -40,13 +40,14 @@ export const en: Strings = {
       case 'leading': return 'The lead is leading the goal'
       case 'failed': return `Run failed: ${d.reason ?? 'unknown reason'}`
       case 'reported': return 'Reported a result, awaiting a decision'
+      case 'reported_to_parent': return 'Reported; the parent checks it'
       case 'working': return 'Working'
       case 'children': return `Waiting for its assignments: ${d.done} of ${d.total} done`
     }
   },
   system: (code, detail = '') => {
     switch (code) {
-      case 'emergency_stop': return 'emergency stop by the owner while the lead was offline'
+      case 'emergency_stop': return 'emergency stop by the owner'
       case 'owner_stop': return "stopped at the owner's request"
       case 'run_failed': return `run failed: ${detail || 'unknown reason'}`
       case 'parent_cancelled': return `a branch above was cancelled: ${detail}`
@@ -58,6 +59,7 @@ export const en: Strings = {
   tabs: { now: 'Now', history: 'History', analytics: 'Analytics', soon: 'Coming in the next update' },
   summary: 'Summary',
   noData: 'no data',
+  bySubscription: 'by subscription',
   analyticsHint: 'For looking back after the work: who was busy, what ran in parallel, what it cost.',
   analyticsEmpty: 'No runs yet.',
   costsByProvider: 'Costs by provider',
@@ -65,7 +67,8 @@ export const en: Strings = {
   costCols: { who: 'Provider', what: 'Assignment', runs: 'Runs', money: 'Money', api: 'At API prices', tokens: 'Tokens: in / out' },
   you: 'You',
   openInHistory: 'Open in history',
-  historyUnavailable: 'The full conversation is unavailable: no Claude Code transcript was found.',
+  historyUnavailable: 'The full conversation is unavailable: no transcript of the lead was found.',
+  historyFromJournal: "The lead's conversation is not available: this is the course of the work from Crewboard's journal.",
   historyTruncated: 'Showing the latest part of a long conversation.',
   historySession: (when) => `Conversation with the lead · ${when}`,
   actionsCount: (n) => `${n} ${s(n, 'action', 'actions')}`,
@@ -99,17 +102,29 @@ export const en: Strings = {
   workdir: 'Working folder',
   assignedBy: 'Assigned by',
   lead: 'Lead',
-  emptyTitle: 'Connect Claude Code',
-  emptyText: 'No goals yet. Connect Crewboard to your main Claude Code chat and ask it to set a goal.',
+  emptyTitle: 'Connect your lead',
+  emptyText: 'No goals yet. Connect Crewboard to your main agent chat — Claude Code, Codex, dsh or any MCP client — and ask it to set a goal.',
+  connectWith: 'Lead client',
+  workersTitle: 'Workers',
+  workerReady: 'ready',
+  workerNotReady: 'not ready:',
+  connectClient: { claude: 'Claude Code', codex: 'Codex', dsh: 'dsh', other: 'Other client' },
+  connectHint: {
+    claude: 'Run in a terminal:',
+    codex: 'Run in a terminal:',
+    dsh: 'Add to your dsh profile (the @deepseek-ai/dsh-mcp-client module):',
+    other: 'MCP server address, Streamable HTTP:',
+  },
   copy: 'Copy',
   copied: 'Copied',
   question: { via: 'The lead could not decide alone', own: 'Your own answer', send: 'Answer', placeholder: 'Write an answer for the worker', failed: 'The answer was not sent. Check the connection and try again.' },
-  status: { queued: 'Queued', running: 'Running', waiting_answer: 'Waiting for the lead', waiting_owner: 'Waiting for you', done: 'Done', cancelled: 'Cancelled', abandoned: 'Abandoned', paused: 'Paused' },
+  status: { queued: 'Queued', running: 'Running', waiting_answer: 'Waiting for the lead', waiting_owner: 'Waiting for you', reported: 'Reported', done: 'Done', cancelled: 'Cancelled', abandoned: 'Abandoned', paused: 'Paused' },
   action: { clarify: 'Clarify', stop: 'Stop', handoff: 'Hand over', start_now: 'Start sooner', cancel: 'Cancel', reopen: 'Reopen', revive: 'Bring back', discuss: 'Discuss with the lead' },
   actionVerb: { clarify: 'clarify', stop: 'stop', handoff: 'hand over', start_now: 'start sooner', cancel: 'cancel', reopen: 'reopen', revive: 'bring back', discuss: 'discuss' },
   emergencyStop: 'Emergency stop',
   emergencyConfirm: 'Yes, stop it now',
-  emergencyHint: 'The lead is offline. The stop takes effect at once; the lead learns about it later.',
+  emergencyHint: 'Stops at once, without the lead. The lead hears about it in its inbox.',
+  leadAwayHint: 'The lead is offline: there may be no answer to a request; the emergency stop works now.',
   actions: 'Actions',
   actionText: 'What to tell the lead',
   actionSend: 'Send',

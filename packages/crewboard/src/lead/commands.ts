@@ -3,6 +3,8 @@ import { buildTree, flatten } from '../model/project.js'
 import type { AssignmentView, EventOf, GoalEvent, NewEvent, ProviderId, ResultKind } from '../model/types.js'
 import type { ProjectContext } from '../app.js'
 import { decideRequest } from '../requests.js'
+import { leadCall } from './call.js'
+import { type Agents, builtinAgents } from '../workers/agents.js'
 
 const id = (n: number) => randomBytes(n).toString('hex')
 const slug = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24)
@@ -10,7 +12,9 @@ const slug = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]
 type Target = { project: string; goalId: string; assignmentId: string }
 
 /** What a lead can do. The MCP tools call these; each resolves the project and records that the lead is alive. */
-export function createLeadCommands(projectOf: (path: string) => Promise<ProjectContext>, now: () => Date) {
+export function createLeadCommands(projectOf: (path: string) => Promise<ProjectContext>, now: () => Date, agents: Agents = builtinAgents) {
+  // The projects each lead session took inbox events from, so a closed session releases them everywhere.
+  const sessionProjects = new Map<string, Set<ProjectContext>>()
   const goalCtx = async (project: string, goalId: string) => {
     const ctx = await projectOf(project)
     const meta = await ctx.store.readMeta(goalId)
@@ -32,15 +36,22 @@ export function createLeadCommands(projectOf: (path: string) => Promise<ProjectC
     (await ctx.store.read(t.goalId)).findLast((e): e is EventOf<'question'> => e.type === 'question' && e.assignmentId === t.assignmentId)
 
   return {
+    /** Who the lead can hand work to, with what each can do. */
+    async agents() {
+      return (await agents.list()).map((a) => ({ id: a.id, label: a.label, run: a.run, model: a.model, readOnly: a.readOnly }))
+    },
     async startGoal(i: { project: string; title: string; criteria: string[]; quote?: string }) {
       const ctx = await projectOf(i.project)
       await ctx.register()
       const goalId = `${slug(i.title) || 'goal'}-${id(2)}`
-      await ctx.store.writeMeta({ goalId, title: i.title, createdAt: now().toISOString(), leadLastSeen: now().toISOString() })
+      const lead = leadCall.getStore()
+      await ctx.store.writeMeta({ goalId, title: i.title, createdAt: now().toISOString(), leadLastSeen: now().toISOString(), ...(lead ? { lead } : {}) })
       await ctx.store.append(goalId, { type: 'goal_started', goalId, assignmentId: goalId, actor: 'lead', title: i.title, criteria: i.criteria, ...(i.quote ? { quote: i.quote } : {}) })
       return { goalId }
     },
     async assign(i: { project: string; goalId: string; parentId?: string; title: string; criteria: string[]; resultKind: ResultKind; provider: ProviderId; model?: string; quote?: string; after?: string[] }) {
+      const list = await agents.list()
+      if (!list.some((a) => a.id === i.provider)) throw new Error(`unknown agent ${i.provider}; available: ${list.map((a) => a.id).join(', ')}`)
       return (await goalCtx(i.project, i.goalId)).exclusive(async (ctx) => {
         const parentId = i.parentId ?? i.goalId
         await node(ctx, { project: i.project, goalId: i.goalId, assignmentId: parentId })
@@ -53,16 +64,18 @@ export function createLeadCommands(projectOf: (path: string) => Promise<ProjectC
         return { assignmentId }
       })
     },
-    async inbox(i: { project: string }): Promise<GoalEvent[]> {
+    /** Every event this session has not confirmed; calling again confirms the previous batch. */
+    async inbox(i: { project: string }, session: string): Promise<GoalEvent[]> {
       const ctx = await projectOf(i.project)
-      const pending = await ctx.inbox.pending()
-      const top = new Map<string, number>()
-      for (const e of pending) top.set(e.goalId, Math.max(top.get(e.goalId) ?? 0, e.seq))
-      for (const [goalId, seq] of top) {
-        await ctx.inbox.ack(goalId, seq)
-        await ctx.store.touchLead(goalId, now())
-      }
-      return pending
+      const events = await ctx.inbox.take(session)
+      sessionProjects.set(session, (sessionProjects.get(session) ?? new Set()).add(ctx))
+      for (const goalId of new Set(events.map((e) => e.goalId))) await ctx.store.touchLead(goalId, now())
+      return events
+    },
+    /** A lead session ended: what it took without confirming goes to the next session. */
+    releaseSession(session: string): void {
+      for (const ctx of sessionProjects.get(session) ?? []) ctx.inbox.release(session)
+      sessionProjects.delete(session)
     },
     async answer(t: Target & { text: string }) {
       return (await goalCtx(t.project, t.goalId)).exclusive(async (ctx) => {
@@ -112,7 +125,10 @@ export function createLeadCommands(projectOf: (path: string) => Promise<ProjectC
     async adopt(i: { project: string; goalId: string }) {
       const ctx = await goalCtx(i.project, i.goalId)
       await ctx.register()
-      await ctx.store.append(i.goalId, { type: 'adopted', goalId: i.goalId, assignmentId: i.goalId, actor: 'lead' })
+      // A goal's lead changes only by a takeover: other calls mark the lead present without claiming the goal.
+      const lead = leadCall.getStore()
+      await ctx.store.touchLead(i.goalId, now(), lead)
+      await ctx.store.append(i.goalId, { type: 'adopted', goalId: i.goalId, assignmentId: i.goalId, actor: 'lead', ...(lead ? { client: lead.client } : {}) })
     },
   }
 }

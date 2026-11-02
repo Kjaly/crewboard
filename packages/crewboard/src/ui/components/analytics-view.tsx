@@ -1,6 +1,6 @@
 import type { CostCell, GoalAnalytics } from '../../analytics.js'
 import type { ProviderId } from '../../model/types.js'
-import { T } from '../text.js'
+import { T, providerLabel } from '../text.js'
 import { Avatar } from './badges.js'
 
 const money = (v: number | undefined) => (v === undefined ? T.noData : `$${v.toFixed(2)}`)
@@ -23,7 +23,7 @@ export function AnalyticsView(props: { analytics: GoalAnalytics | undefined }) {
         {provider && <Avatar provider={provider} />} {name}
       </th>
       <td>{cell.runs}</td>
-      <td>{money(cell.usd)}</td>
+      <td>{cell.usd === undefined && cell.subscriptionRuns > 0 ? T.bySubscription : money(cell.usd)}</td>
       <td>{money(cell.apiUsd)}</td>
       <td>
         {tokens(cell.inputTokens)} / {tokens(cell.outputTokens)}
@@ -60,10 +60,10 @@ export function AnalyticsView(props: { analytics: GoalAnalytics | undefined }) {
               return { b, s, e, r }
             })
             return (
-              <section className="lane" key={lane.provider} aria-label={T.provider[lane.provider]}>
+              <section className="lane" key={lane.provider} aria-label={providerLabel(lane.provider)}>
                 <div className="lane-h">
                   <Avatar provider={lane.provider} />
-                  {T.provider[lane.provider]}
+                  {providerLabel(lane.provider)}
                 </div>
                 <div className="track" style={{ height: Math.max(56, 20 + rows.length * 32) }}>
                   {placed.map(({ b, s, e, r }) => (
@@ -94,7 +94,7 @@ export function AnalyticsView(props: { analytics: GoalAnalytics | undefined }) {
             <th scope="col">{T.costCols.tokens}</th>
           </tr>
         </thead>
-        <tbody>{Object.entries(a.byProvider).map(([p, cell]) => costRow(T.provider[p as ProviderId] ?? p, cell, p as ProviderId))}</tbody>
+        <tbody>{Object.entries(a.byProvider).map(([p, cell]) => costRow(providerLabel(p) ?? p, cell, p as ProviderId))}</tbody>
       </table>
       {a.byAssignment.length > 0 && (
         <table className="costs">

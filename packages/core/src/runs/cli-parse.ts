@@ -6,6 +6,8 @@ export type TurnUsage = { input: number; output: number; cacheRead: number; cach
 export type Parsed = {
   events: Array<[string, unknown]>
   sessionId?: string
+  /** Claude's `init` event: `apiKeySource: 'none'` means the session runs on the user's Claude plan, anything else on a key. */
+  billing?: 'subscription' | 'api'
   /** Claude `--replay-user-messages`: the text of a stdin user message the session has just taken. */
   replay?: string
   turnEnd?: { stopReason: string; failed?: boolean; error?: string; usdTotal?: number; usage: TurnUsage }
@@ -45,6 +47,7 @@ export function parseClaudeLine(line: string, tools: Map<string, string>): Parse
   if (!o) return out
   if (o.type === 'system' && o.subtype === 'init' && typeof o.session_id === 'string') {
     out.sessionId = o.session_id
+    if (typeof o.apiKeySource === 'string') out.billing = o.apiKeySource === 'none' ? 'subscription' : 'api'
   } else if (o.type === 'system' && o.subtype === 'background_tasks_changed' && Array.isArray(o.tasks)) {
     out.background = o.tasks.map(obj).map((t) => ({ id: String(t.task_id ?? ''), type: String(t.task_type ?? 'task'), description: String(t.description ?? '') }))
   } else if (o.type === 'system' && o.subtype === 'task_started' && o.is_backgrounded === true) {

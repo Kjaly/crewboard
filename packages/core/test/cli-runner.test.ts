@@ -326,6 +326,34 @@ describe('cli backends', () => {
   })
 })
 
+describe('cli backends: how a Claude worker signs in', () => {
+  const launchClaude = async (claudeAuth: 'native' | 'isolated') => {
+    const runsRoot = await mkdtemp(join(tmpdir(), 'orch-auth-'))
+    const promptFile = join(runsRoot, 'p.md')
+    await writeFile(promptFile, 'build it')
+    const log = join(runsRoot, 'argv.log')
+    // The user's own Claude Code sign-in: no API key in the environment at all.
+    const { ANTHROPIC_API_KEY: _key, ...rest } = process.env
+    const env = { ...rest, FAKE_CLI_LOG: log }
+    const backend = createCliBackend({ kind: 'claude', runsRoot, env, claudeAuth, command: process.execPath, commandArgs: [FAKE_CLAUDE], startRunner: (a, e) => runCliRun(a, undefined, e) })
+    return { backend, promptFile, launch: () => backend.launch({ agent: 'claude/opus', promptFile, cwd: runsRoot }), argv: async () => JSON.parse((await readFile(log, 'utf8')).trim().split('\n')[0]!) as string[] }
+  }
+
+  it('runs natively with the user\'s own sign-in and settings, without --bare', async () => {
+    const c = await launchClaude('native')
+    const runId = await c.launch()
+    expect(await c.backend.status(runId)).toMatchObject({ status: 'completed' })
+    expect(await c.argv()).not.toContain('--bare')
+    expect((await c.backend.usage?.(runId))?.billing).toBe('subscription')
+    await expect(c.backend.steer(runId, c.promptFile, 'queue')).resolves.toBeUndefined()
+  })
+
+  it('keeps the isolated API-key-only route when asked for it', async () => {
+    const c = await launchClaude('isolated')
+    await expect(c.launch()).rejects.toMatchObject({ code: 'anthropic_api_key_missing' })
+  })
+})
+
 describe('cli backends: a supervisor that died mid-run (B19)', () => {
   const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
   const until = async (check: () => Promise<boolean> | boolean, ms = 10_000) => {

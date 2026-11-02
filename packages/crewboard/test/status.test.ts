@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { availableActions, buildTree, deriveStatus, doingOf } from '../src/model/project.js'
+import { availableActions, buildTree, deriveStatus, doingOf, statusBucket } from '../src/model/project.js'
 import { LEAD_SILENT_PAUSE_MS, STALE_ABANDON_MS } from '../src/model/thresholds.js'
 import type { Doing, GoalEvent, NewEvent, Status } from '../src/model/types.js'
 
@@ -12,6 +12,8 @@ const ev = (e: Partial<NewEvent> & { type: GoalEvent['type'] }, ts = ago(60_000)
 const assigned = () => ev({ type: 'assigned', parentId: 'g', title: 'Короб', criteria: ['c'], resultKind: 'local', provider: 'codex', after: [] })
 const started = () => ev({ type: 'run_started', runId: 'r1', agent: 'codex/', cwd: '/repo' })
 const question = () => ev({ type: 'question', text: 'Шторка?', options: [] })
+const part = () => ev({ type: 'assigned', actor: 'worker', parentId: 'p', title: 'Часть', criteria: [], resultKind: 'local', provider: 'codex', after: [] })
+const reportedPart = () => [part(), started(), ev({ type: 'reported', summary: 'ok' }), ev({ type: 'run_ended', runId: 'r1', outcome: 'completed' })]
 const ctx = (parentStatus: Status | null = 'running') => ({ parentStatus, isRoot: false, now: NOW })
 
 describe('deriveStatus', () => {
@@ -22,6 +24,10 @@ describe('deriveStatus', () => {
     ['эскалация', () => [assigned(), started(), question(), ev({ type: 'escalated', text: 'Шторка?', options: [], why: 'вкус' })], ctx(), 'waiting_owner'],
     ['ведущий сам спросил владельца, без вопроса исполнителя', () => [assigned(), started(), ev({ type: 'escalated', text: 'Цвет фасада?', options: [], why: 'вкус' })], ctx(), 'waiting_owner'],
     ['ответ получен', () => [assigned(), started(), question(), ev({ type: 'escalated', text: 'Шторка?', options: [], why: 'вкус' }), ev({ type: 'answered', text: 'Шторка' })], ctx(), 'running'],
+    ['часть исполнителя доложила', reportedPart, ctx('running'), 'reported'],
+    ['часть доложила, родитель закрыт', reportedPart, ctx('done'), 'done'],
+    ['часть доложила, родитель отменён', reportedPart, ctx('cancelled'), 'abandoned'],
+    ['часть закрыта системой в старом журнале', () => [...reportedPart(), ev({ type: 'closed', summary: 'ok' })], ctx('running'), 'done'],
     ['закрыто', () => [assigned(), started(), ev({ type: 'reported', summary: 'ok' }), ev({ type: 'closed', summary: 'ok' })], ctx(), 'done'],
     ['отменено', () => [assigned(), ev({ type: 'cancelled', reason: 'курс' })], ctx(), 'cancelled'],
     ['родитель отменён', () => [assigned(), started()], ctx('cancelled'), 'abandoned'],
@@ -34,6 +40,20 @@ describe('deriveStatus', () => {
     ['корень, ведущий на связи', () => [ev({ type: 'goal_started', assignmentId: 'g', title: 'Кухня', criteria: [] })], { parentStatus: null, isRoot: true, now: NOW, leadLastSeen: new Date(ago(60_000)) }, 'running'],
   ])('%s', (_name, events, c, expected) => {
     expect(deriveStatus(events(), c)).toBe(expected)
+  })
+})
+
+describe('statusBucket', () => {
+  it.each([
+    ['running', 'running'],
+    ['reported', 'running'],
+    ['waiting_answer', 'waiting_lead'],
+    ['waiting_owner', 'waiting_owner'],
+    ['queued', 'queued'],
+    ['done', 'finished'],
+    ['paused', undefined],
+  ] as const)('%s counts as %s', (status, expected) => {
+    expect(statusBucket(status)).toBe(expected)
   })
 })
 
@@ -89,21 +109,29 @@ describe('requests, handoffs and actions in the tree', () => {
   })
 
   it.each([
-    ['running', 'running', true, ['clarify', 'stop', 'handoff', 'discuss']],
-    ['waiting for the lead', 'waiting_answer', true, ['clarify', 'stop', 'handoff', 'discuss']],
-    ['queued', 'queued', true, ['start_now', 'cancel', 'discuss']],
-    ['done', 'done', true, ['reopen', 'discuss']],
-    ['cancelled', 'cancelled', true, ['revive', 'discuss']],
-    ['abandoned', 'abandoned', true, ['revive', 'discuss']],
-    ['waiting for you', 'waiting_owner', true, ['discuss']],
-  ] as const)('offers the right actions when %s', (_name, status, online, expected) => {
+    ['running', 'running', ['clarify', 'stop', 'handoff', 'discuss', 'emergency_stop']],
+    ['waiting for the lead', 'waiting_answer', ['clarify', 'stop', 'handoff', 'discuss', 'emergency_stop']],
+    ['queued', 'queued', ['start_now', 'cancel', 'discuss']],
+    ['done', 'done', ['reopen', 'discuss']],
+    ['cancelled', 'cancelled', ['revive', 'discuss']],
+    ['abandoned', 'abandoned', ['revive', 'discuss']],
+    ['waiting for you', 'waiting_owner', ['discuss']],
+  ] as const)('offers the right actions when %s', (_name, status, expected) => {
     const a = { ...tree(), status, request: undefined }
-    expect(availableActions(a, online)).toEqual(expected)
+    expect(availableActions(a)).toEqual(expected)
   })
 
-  it('offers only discussion while a request waits, and an emergency stop when the lead is away', () => {
+  it.each([
+    ['running', 'running', false, true],
+    ['running with a request waiting', 'running', true, true],
+    ['queued', 'queued', false, false],
+  ] as const)('emergency stop when %s', (_n, status, requested, expected) => {
+    const base = requested ? tree(ev({ type: 'owner_requested', requestId: 'r1', action: 'clarify', text: 'x' })) : tree()
+    expect(availableActions({ ...base, status }).includes('emergency_stop')).toBe(expected)
+  })
+
+  it('offers only discussion besides the emergency stop while a request waits', () => {
     const pending = tree(ev({ type: 'owner_requested', requestId: 'r1', action: 'clarify', text: 'x' }))
-    expect(availableActions(pending, true)).toEqual(['discuss'])
-    expect(availableActions({ ...tree(), status: 'running' }, false)).toContain('emergency_stop')
+    expect(availableActions(pending)).toEqual(['discuss', 'emergency_stop'])
   })
 })

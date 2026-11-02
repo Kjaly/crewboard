@@ -1,15 +1,14 @@
 import type { EventOf, GoalEvent, ProviderId, RunCost } from './model/types.js'
 
 export type Lane = { provider: ProviderId; bars: Array<{ assignmentId: string; title: string; start: string; end?: string; outcome?: 'completed' | 'failed' | 'cancelled' }> }
-export type CostCell = { usd?: number; apiUsd?: number; inputTokens?: number; outputTokens?: number; runs: number; runsWithoutData: number }
+export type CostCell = { usd?: number; apiUsd?: number; inputTokens?: number; outputTokens?: number; runs: number; runsWithoutData: number; subscriptionRuns: number }
 export type GoalAnalytics = { from: string; to: string; lanes: Lane[]; byProvider: Record<string, CostCell>; byAssignment: Array<{ assignmentId: string; title: string; provider: ProviderId } & CostCell> }
 
 
-const PROVIDER_OF: Record<string, ProviderId> = { claude: 'claude', codex: 'codex', dsh: 'deepseek' }
-const providerOf = (agent: string): ProviderId | undefined => PROVIDER_OF[agent.split('/')[0] ?? '']
 
 const add = (cell: CostCell, usage: RunCost | undefined) => {
   cell.runs += 1
+  if (usage?.billing === 'subscription') cell.subscriptionRuns += 1
   if (!usage) {
     cell.runsWithoutData += 1
     return
@@ -30,17 +29,20 @@ export function goalAnalytics(events: GoalEvent[], now: Date): GoalAnalytics {
   const lanes = new Map<ProviderId, Lane>()
   const byProvider: Record<string, CostCell> = {}
   const byAssignment = new Map<string, { assignmentId: string; title: string; provider: ProviderId } & CostCell>()
+  // The agent of a run is the one its assignment had when the run started: assigned, then any handover before it.
+  const current = new Map<string, ProviderId>()
   for (const e of events) {
+    if (e.type === 'assigned' || e.type === 'reassigned') current.set(e.assignmentId, e.provider)
     if (e.type !== 'run_started') continue
-    const provider = providerOf(e.agent)
+    const provider = current.get(e.assignmentId)
     if (!provider || e.runId.startsWith('not-started-')) continue
     const end = ends.get(e.runId)
     const lane = lanes.get(provider) ?? { provider, bars: [] }
     lane.bars.push({ assignmentId: e.assignmentId, title: titles.get(e.assignmentId) ?? e.assignmentId, start: e.ts, ...(end ? { end: end.ts, outcome: end.outcome } : {}) })
     lanes.set(provider, lane)
-    byProvider[provider] ??= { runs: 0, runsWithoutData: 0 }
+    byProvider[provider] ??= { runs: 0, runsWithoutData: 0, subscriptionRuns: 0 }
     add(byProvider[provider], end?.usage)
-    const row = byAssignment.get(e.assignmentId) ?? { assignmentId: e.assignmentId, title: titles.get(e.assignmentId) ?? e.assignmentId, provider, runs: 0, runsWithoutData: 0 }
+    const row = byAssignment.get(e.assignmentId) ?? { assignmentId: e.assignmentId, title: titles.get(e.assignmentId) ?? e.assignmentId, provider, runs: 0, runsWithoutData: 0, subscriptionRuns: 0 }
     add(row, end?.usage)
     byAssignment.set(e.assignmentId, row)
   }

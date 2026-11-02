@@ -17,6 +17,7 @@ import { Sidebar } from './components/sidebar.js'
 import type { GoalHistory } from '../history/sessions.js'
 import { Summary, countTree } from './components/summary.js'
 import { Tree } from './components/tree.js'
+import { setAgents } from './agents.js'
 import { T, lang, setLang } from './text.js'
 
 type Target = { project: string; goalId: string }
@@ -104,11 +105,30 @@ export function App(props: { api: Api }) {
     targetRef.current = target
   }, [target])
 
+  // The registry's agents: labels, colours and who work can be handed to. Re-read with the projects, so an edit
+  // of agents.json reaches the screen without a reload.
+  const [, setAgentsShown] = useState(0)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+  const loadAgents = useCallback(async () => {
+    const list = await api.agents().catch(() => undefined)
+    // The list is module-wide: a screen already gone must not overwrite what the current one loaded.
+    if (!list || !mounted.current) return
+    setAgents(list)
+    setAgentsShown((n) => n + 1)
+  }, [api])
+
   const loadProjects = useCallback(async () => {
+    void loadAgents()
     const list = await api.projects()
     setProjects(list)
     setTarget((current) => pickTarget(list, current ?? store.get<Target>('crewboard.target')))
-  }, [api])
+  }, [api, loadAgents])
 
   const loadTree = useCallback(
     async (t: Target | undefined) => {
@@ -276,7 +296,7 @@ export function App(props: { api: Api }) {
   }
   const shortcut = (key: string) => {
     if (!selected) return
-    const allowed = availableActions(selected, leadOnline)
+    const allowed = availableActions(selected)
     setSheetOpen(true)
     if (key === 's' && allowed.includes('stop')) void request('stop').catch(() => undefined)
     if (key === 'c') void discuss().catch(() => undefined)
@@ -351,7 +371,7 @@ export function App(props: { api: Api }) {
       </header>
       {!online && <OfflineBanner />}
       {projects === undefined && <p className="hint">{T.loading}</p>}
-      {projects !== undefined && !target && <EmptyState />}
+      {projects !== undefined && !target && <EmptyState api={api} />}
       {tree && view === 'history' && (
         <section role="tabpanel" aria-label={T.tabs.history} className="panel-history">
           <HistoryView
@@ -378,6 +398,7 @@ export function App(props: { api: Api }) {
             <Tree root={tree} selectedId={selected.id} onSelect={select} open={open} onToggle={toggle} onShortcut={shortcut} />
           </div>
           <ContextPanel
+            lead={projects?.find((p) => p.repo === target?.project)?.goals.find((g) => g.goalId === target?.goalId)?.lead}
             onOpenHistory={() => {
               setFocusAssignment(selected.id)
               setView('history')

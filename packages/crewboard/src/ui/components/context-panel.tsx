@@ -1,7 +1,7 @@
 import { CaretRight, X } from '../icons.js'
 import { type ReactNode, useEffect, useRef } from 'react'
 import type { AssignmentView, GoalEvent } from '../../model/types.js'
-import { T } from '../text.js'
+import { T, providerLabel } from '../text.js'
 import { Avatar, StatusBadge } from './badges.js'
 import { RequestLine } from './request-line.js'
 
@@ -35,6 +35,8 @@ export function ContextPanel(props: {
   sheet: boolean
   open: boolean
   onClose: () => void
+  /** The client that leads the goal (Claude Code, Codex, …), shown on the root. */
+  lead?: string
 }) {
   const { node, chain, events, onSelect } = props
   const giver = chain.at(-1)
@@ -63,7 +65,7 @@ export function ContextPanel(props: {
         <div className="meta">
           <StatusBadge status={node.status} />
           <span>
-            <Avatar provider={node.provider} /> <b>{T.provider[node.provider]}</b> {node.model ?? ''}
+            <Avatar provider={node.provider} /> <b>{providerLabel(node.provider)}</b> {node.parentId === null ? (props.lead ?? '') : (node.model ?? '')}
           </span>
         </div>
         {chain.length > 0 && (
@@ -84,7 +86,7 @@ export function ContextPanel(props: {
         <section className="sec">
           <h4>{T.origin}</h4>
           <div className="quote">
-            <div className="who">{node.quote ? T.you : giver && chain.length > 1 ? T.provider[giver.provider] : T.lead}</div>
+            <div className="who">{node.quote ? T.you : giver && chain.length > 1 ? providerLabel(giver.provider) : T.lead}</div>
             <p>{node.quote ?? (chain.length > 1 ? T.originByWorker : '')}</p>
           </div>
           {props.onOpenHistory && (

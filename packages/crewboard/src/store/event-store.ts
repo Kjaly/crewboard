@@ -4,7 +4,7 @@ import { type GoalEvent, type NewEvent, goalEventSchema } from '../model/types.j
 import { writeJsonAtomic } from './atomic.js'
 import { goalDir, projectDir } from './paths.js'
 
-export type GoalMeta = { goalId: string; title: string; createdAt: string; leadLastSeen?: string }
+export type GoalMeta = { goalId: string; title: string; createdAt: string; leadLastSeen?: string; lead?: { client: string; version?: string } }
 export type EventStore = ReturnType<typeof createEventStore>
 
 const parseLines = (text: string): GoalEvent[] => {
@@ -86,9 +86,10 @@ export function createEventStore(repo: string) {
       await ensureIgnored()
       await writeJsonAtomic(metaPath(meta.goalId), meta)
     },
-    async touchLead(goalId: string, at: Date): Promise<void> {
+    /** The lead is alive; `lead` (a takeover) also records which client leads the goal from now on. */
+    async touchLead(goalId: string, at: Date, lead?: { client: string; version?: string }): Promise<void> {
       const meta = await readMeta(goalId)
-      if (meta) await writeJsonAtomic(metaPath(goalId), { ...meta, leadLastSeen: at.toISOString() })
+      if (meta) await writeJsonAtomic(metaPath(goalId), { ...meta, leadLastSeen: at.toISOString(), ...(lead ? { lead } : {}) })
     },
   }
 }

@@ -1,7 +1,11 @@
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { claudeProjectsRoot, projectFolder } from './paths.js'
-import { readTranscript } from './transcript.js'
+import { codexSessionCwd, readCodexRollout } from './codex.js'
+import type { GoalEvent } from '../model/types.js'
+import { dshSessionCwd, readDshSession } from './dsh.js'
+import { journalHistory } from './journal.js'
+import { claudeProjectsRoot, codexSessionsRoot, dshSessionsRoot, projectFolder } from './paths.js'
+import { type TranscriptItem, readTranscript } from './transcript.js'
 
 export const HISTORY_LIMIT = 2000
 
@@ -10,7 +14,8 @@ export type HistoryItem =
   | { kind: 'owner' | 'lead'; ts: string; text: string }
   | { kind: 'assignment'; ts: string; tool: string; goalId: string; assignmentId?: string; title?: string }
   | { kind: 'actions'; ts: string; count: number }
-export type GoalHistory = { available: boolean; truncated: boolean; items: HistoryItem[] }
+/** Where the items come from: the lead's own conversation, or Crewboard's journal when none could be read. */
+export type GoalHistory = { available: boolean; truncated: boolean; source?: 'transcript' | 'journal'; items: HistoryItem[] }
 
 // `mcp__<server>__crewboard_assign` -> `assign`; segments cannot hold `__`, so the server name never leaks in.
 const CREWBOARD_TOOL = /(?:^|_)crewboard_((?:[a-z]+_)*[a-z]+)$/
@@ -29,10 +34,11 @@ type Entry =
   | { kind: 'owner' | 'lead'; ts: string; text: string }
   | { kind: 'crewboard'; ts: string; tool: string; goalId?: string; assignmentId?: string; title?: string }
   | { kind: 'other'; ts: string }
-type Reduced = { sessionId: string; first: string; goals: ReadonlySet<string>; entries: Entry[] }
+type Reduced = { sessionId: string; first: string; cwd?: string; goals: ReadonlySet<string>; entries: Entry[] }
+type Reader = (file: string) => Promise<{ sessionId: string; cwd?: string; items: TranscriptItem[] }>
 
-async function reduce(file: string): Promise<Reduced> {
-  const { sessionId, items } = await readTranscript(file)
+async function reduce(file: string, read: Reader): Promise<Reduced> {
+  const { sessionId, cwd, items } = await read(file)
   const results = new Map<string, string>()
   for (const i of items) if (i.kind === 'tool_result') results.set(i.toolUseId, i.text)
   const goals = new Set<string>()
@@ -53,7 +59,7 @@ async function reduce(file: string): Promise<Reduced> {
     const title = str(input.title)
     entries.push({ kind: 'crewboard', ts: i.ts, tool: m[1], ...(goalId ? { goalId } : {}), ...(assignmentId ? { assignmentId } : {}), ...(title ? { title } : {}) })
   }
-  return { sessionId, first: items.find((i) => i.ts)?.ts ?? '', goals, entries }
+  return { sessionId, first: items.find((i) => i.ts)?.ts ?? '', ...(cwd ? { cwd } : {}), goals, entries }
 }
 
 /**
@@ -61,15 +67,29 @@ async function reduce(file: string): Promise<Reduced> {
  * lead's working directory, so the repository's folder and those of its subfolders are searched. Each file is kept
  * only in reduced form, cached by size and mtime.
  */
-export function createHistory(o: { env: NodeJS.ProcessEnv }) {
+export function createHistory(o: { env: NodeJS.ProcessEnv; onRead?: (file: string) => void }) {
   const cache = new Map<string, { size: number; mtimeMs: number; reduced: Reduced }>()
 
-  const load = async (file: string): Promise<Reduced | undefined> => {
+  // Where a Codex or dsh session ran, from its first line, cached like the reduced files: other folders' sessions are
+  // skipped without being read in full or kept.
+  const cwds = new Map<string, { size: number; mtimeMs: number; cwd: string | undefined }>()
+  const cwdOf = async (file: string, peek: (file: string) => Promise<string | undefined>): Promise<string | undefined> => {
+    const s = await stat(file).catch(() => undefined)
+    if (!s) return undefined
+    const hit = cwds.get(file)
+    if (hit && hit.size === s.size && hit.mtimeMs === s.mtimeMs) return hit.cwd
+    const cwd = await peek(file)
+    cwds.set(file, { size: s.size, mtimeMs: s.mtimeMs, cwd })
+    return cwd
+  }
+
+  const load = async (file: string, read: Reader): Promise<Reduced | undefined> => {
     try {
       const s = await stat(file)
       const hit = cache.get(file)
       if (hit && hit.size === s.size && hit.mtimeMs === s.mtimeMs) return hit.reduced
-      const reduced = await reduce(file)
+      o.onRead?.(file)
+      const reduced = await reduce(file, read)
       cache.set(file, { size: s.size, mtimeMs: s.mtimeMs, reduced })
       return reduced
     } catch {
@@ -88,12 +108,52 @@ export function createHistory(o: { env: NodeJS.ProcessEnv }) {
     return files
   }
 
+  // Codex keeps every session in one dated tree, not per folder: only files changed since the goal began can mention it.
+  const codexFiles = async (sinceMs: number): Promise<string[]> => {
+    const files: string[] = []
+    const walk = async (dir: string, depth: number) => {
+      for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+        const path = join(dir, entry.name)
+        if (entry.isDirectory() && depth < 4) await walk(path, depth + 1)
+        else if (entry.isFile() && entry.name.startsWith('rollout-') && entry.name.endsWith('.jsonl')) {
+          const s = await stat(path).catch(() => undefined)
+          if (s && s.mtimeMs >= sinceMs) files.push(path)
+        }
+      }
+    }
+    await walk(codexSessionsRoot(o.env), 0)
+    return files
+  }
+  // dsh keeps one folder per working directory and one per session, each with a single session file.
+  const dshFiles = async (sinceMs: number): Promise<string[]> => {
+    const files: string[] = []
+    const root = dshSessionsRoot(o.env)
+    for (const folder of await readdir(root).catch(() => [] as string[])) {
+      for (const session of await readdir(join(root, folder)).catch(() => [] as string[])) {
+        const path = join(root, folder, session, 'session.v3.jsonl.zstd')
+        const s = await stat(path).catch(() => undefined)
+        if (s && s.mtimeMs >= sinceMs) files.push(path)
+      }
+    }
+    return files
+  }
+  const inside = (repo: string, cwd: string | undefined) => cwd !== undefined && (cwd === repo || cwd.startsWith(`${repo}/`))
+
   return {
-    async goalHistory(repo: string, goalId: string): Promise<GoalHistory> {
+    /** `since` (the goal's creation) narrows the Codex files to those that may mention the goal. */
+    async goalHistory(repo: string, goalId: string, since?: string, events?: GoalEvent[]): Promise<GoalHistory> {
       const sessions: Array<{ sessionId: string; first: string; items: HistoryItem[] }> = []
-      for (const file of await transcriptFiles(repo)) {
-        const r = await load(file)
+      const sinceMs = since ? new Date(since).getTime() : 0
+      const sources: Array<{ file: string; read: Reader; peek?: (file: string) => Promise<string | undefined> }> = [
+        ...(await transcriptFiles(repo)).map((file) => ({ file, read: readTranscript })),
+        ...(await codexFiles(sinceMs)).map((file) => ({ file, read: readCodexRollout, peek: codexSessionCwd })),
+        ...(await dshFiles(sinceMs)).map((file) => ({ file, read: readDshSession, peek: dshSessionCwd })),
+      ]
+      for (const { file, read, peek } of sources) {
+        if (peek && !inside(repo, await cwdOf(file, peek))) continue
+        const r = await load(file, read)
         if (!r?.goals.has(goalId)) continue
+        if (read !== readTranscript && !inside(repo, r.cwd)) continue
         const out: HistoryItem[] = []
         for (const e of r.entries) {
           if (e.kind === 'owner' || e.kind === 'lead') out.push(e)
@@ -107,11 +167,16 @@ export function createHistory(o: { env: NodeJS.ProcessEnv }) {
         }
         sessions.push({ sessionId: r.sessionId, first: r.first, items: out })
       }
-      if (!sessions.length) return { available: false, truncated: false, items: [] }
+      if (!sessions.length) {
+        if (!events) return { available: false, truncated: false, items: [] }
+        const items = journalHistory(events)
+        const truncated = items.length > HISTORY_LIMIT
+        return { available: true, truncated, source: 'journal', items: truncated ? items.slice(-HISTORY_LIMIT) : items }
+      }
       sessions.sort((a, b) => a.first.localeCompare(b.first))
       const items = sessions.flatMap((s) => [{ kind: 'session' as const, ts: s.first, sessionId: s.sessionId }, ...s.items])
       const truncated = items.length > HISTORY_LIMIT
-      return { available: true, truncated, items: truncated ? items.slice(-HISTORY_LIMIT) : items }
+      return { available: true, truncated, source: 'transcript', items: truncated ? items.slice(-HISTORY_LIMIT) : items }
     },
   }
 }

@@ -15,6 +15,8 @@ export type RunUsage = {
   cacheReadTokens: number
   reasoningTokens: number
   usd?: number
+  /** Claude only: the run used the user's Claude plan, so `usd` is Claude Code's API-price estimate, not a charge. */
+  billing?: 'subscription' | 'api'
   pending?: boolean
   availability?: Partial<Record<'input' | 'output' | 'cacheRead' | 'cacheWrite' | 'reasoning' | 'cash' | 'apiEquivalent', MetricAvailability>>
   observedAt?: string

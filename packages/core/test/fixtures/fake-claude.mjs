@@ -61,7 +61,7 @@ let folding = () => {}
 const runTurn = async (text) => {
   turn += 1
   if (!initDone) {
-    out({ type: 'system', subtype: 'init', session_id: 'sess-1', cwd: process.cwd() })
+    out({ type: 'system', subtype: 'init', session_id: 'sess-1', cwd: process.cwd(), apiKeySource: process.env.FAKE_API_KEY_SOURCE ?? 'none' })
     initDone = true
   }
   take(text)

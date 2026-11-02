@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { createApp } from '../src/app.js'
 import { readStream, startApp } from './helpers.js'
 
 const running: Array<{ close(): Promise<void> }> = []
@@ -28,5 +29,15 @@ describe('live stream', () => {
     const started = Date.now()
     await reading
     expect(Date.now() - started).toBeLessThan(3000)
+  })
+})
+
+describe('the server port', () => {
+  it('refuses a busy port with EADDRINUSE instead of crashing', async () => {
+    const t = await startApp()
+    running.push(t)
+    const port = Number(new URL(t.server.url).port)
+    const second = createApp({ env: t.env, backendFor: () => async () => t.fake.backend, tickMs: 60_000 })
+    await expect(second.listen(port)).rejects.toMatchObject({ code: 'EADDRINUSE' })
   })
 })

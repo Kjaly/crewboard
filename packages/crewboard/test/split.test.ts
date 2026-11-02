@@ -37,7 +37,7 @@ describe('worker split', () => {
     expect(nodes.find((n) => n.id === 'p')).toMatchObject({ status: 'running', doing: { kind: 'children', done: 0, total: 2 } })
   })
 
-  it('closes the children results for the worker and resumes it with them', async () => {
+  it('hands the children results to the worker and resumes it with them', async () => {
     const { fake, sup, tree } = await setup()
     fake.script({ final: split(['- Короб', '- Инструкция']) }, { final: '<crewboard-report>Короб готов</crewboard-report>' }, { final: '<crewboard-report>Инструкция готова</crewboard-report>' }, { hold: true })
     await sup.tick()
@@ -45,7 +45,7 @@ describe('worker split', () => {
     await sup.tick()
     await sup.tick()
     const kids = (await tree()).filter((n) => n.parentId === 'p')
-    expect(kids.map((k) => k.status)).toEqual(['done', 'done'])
+    expect(kids.map((k) => k.status)).toEqual(['reported', 'reported'])
     const resumed = fake.runs.at(-1)!
     expect(resumed.agent).toBe('claude/sonnet')
     expect(resumed.prompt).toContain('Короб готов')
@@ -57,8 +57,24 @@ describe('worker split', () => {
     fake.script({ final: split(['- Короб', '- Инструкция']) }, { fail: 'auth' }, { final: '<crewboard-report>Инструкция готова</crewboard-report>' }, { hold: true })
     for (let i = 0; i < 4; i++) await sup.tick()
     const kids = (await tree()).filter((n) => n.parentId === 'p')
-    expect(kids.map((k) => k.status).sort()).toEqual(['cancelled', 'done'])
+    expect(kids.map((k) => k.status).sort()).toEqual(['cancelled', 'reported'])
     expect(fake.runs.at(-1)!.prompt).toContain('auth')
+  })
+
+  it('finishes the reported parts, nested ones too, when the lead closes their parent', async () => {
+    const { fake, sup, tree } = await setup()
+    fake.script(
+      { final: split(['- Короб', '- Инструкция']) },
+      { final: split(['- Петли']) },
+      { final: '<crewboard-report>Инструкция готова</crewboard-report>' },
+      { final: '<crewboard-report>Петли готовы</crewboard-report>' },
+      { final: '<crewboard-report>Короб готов</crewboard-report>' },
+      { hold: true },
+    )
+    for (let i = 0; i < 8; i++) await sup.tick()
+    expect((await tree()).filter((n) => n.id !== 'g' && n.id !== 'p').map((n) => n.status)).toEqual(['reported', 'reported', 'reported'])
+    await sup.close('g', 'p', 'ok')
+    expect((await tree()).filter((n) => n.id !== 'g').map((n) => n.status)).toEqual(['done', 'done', 'done', 'done'])
   })
 
   it(`creates at most ${MAX_SPLIT} children`, async () => {

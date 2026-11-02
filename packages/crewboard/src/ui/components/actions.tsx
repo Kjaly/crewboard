@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { availableActions } from '../../model/project.js'
-import { PROVIDERS, type AssignmentView, type ProviderId, type RequestAction } from '../../model/types.js'
-import { T } from '../text.js'
+import type { AssignmentView, ProviderId, RequestAction } from '../../model/types.js'
+import { AGENTS } from '../agents.js'
+import { T, providerLabel } from '../text.js'
+
 
 export type ActionMode = 'idle' | 'clarify' | 'reopen' | 'revive' | 'handoff'
 const NEEDS_TEXT: ReadonlySet<RequestAction> = new Set(['clarify', 'reopen', 'revive'])
@@ -21,7 +23,7 @@ export function Actions(props: {
   const [sending, setSending] = useState(false)
   const [failed, setFailed] = useState(false)
   const [confirming, setConfirming] = useState(false)
-  const actions = availableActions(node, props.leadOnline)
+  const actions = availableActions(node)
 
   const run = async (fn: () => Promise<unknown>) => {
     if (sending) return
@@ -59,13 +61,14 @@ export function Actions(props: {
           </button>
         ))}
       </div>
-      {actions.includes('emergency_stop') && <p className="hint-line">{T.emergencyHint}</p>}
+      {confirming && <p className="hint-line">{T.emergencyHint}</p>}
+      {!props.leadOnline && actions.includes('emergency_stop') && <p className="hint-line">{T.leadAwayHint}</p>}
       {mode === 'handoff' && (
         <fieldset className="answers handoff">
           <legend className="sr-only">{T.handoffTo}</legend>
-          {PROVIDERS.filter((p) => p !== node.provider).map((p) => (
+          {AGENTS.map((a) => a.id).filter((p) => p !== node.provider).map((p) => (
             <button type="button" key={p} className="btn press" disabled={sending} onClick={() => void run(() => props.onRequest('handoff', undefined, p))}>
-              {T.provider[p]}
+              {providerLabel(p)}
             </button>
           ))}
         </fieldset>

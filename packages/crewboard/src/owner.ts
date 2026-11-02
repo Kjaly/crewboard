@@ -1,6 +1,7 @@
 import { basename } from 'node:path'
 import type { ProjectContext } from './app.js'
-import { buildTree, flatten } from './model/project.js'
+import { leadLabel } from './lead/clients.js'
+import { buildTree, flatten, statusBucket } from './model/project.js'
 import { LEAD_OFFLINE_MS } from './model/thresholds.js'
 import type { AssignmentView, GoalEvent, Status } from './model/types.js'
 
@@ -9,15 +10,13 @@ export class ConflictError extends Error {}
 /** The request is malformed or names nothing that exists: HTTP 400. */
 export class BadRequestError extends Error {}
 
-export type GoalSummary = { goalId: string; title: string; createdAt: string; status: Status; leadOnline: boolean; counts: Record<'waiting_owner' | 'running' | 'queued' | 'finished', number> }
+export type GoalSummary = { goalId: string; title: string; createdAt: string; status: Status; leadOnline: boolean; counts: Record<'waiting_owner' | 'running' | 'queued' | 'finished', number>; lead?: string }
 export type ProjectSummary = { repo: string; name: string; goals: GoalSummary[] }
 
+// The sidebar has no separate «waiting for the lead»: that work is still in progress.
 const bucket = (s: Status): keyof GoalSummary['counts'] | undefined => {
-  if (s === 'waiting_owner') return 'waiting_owner'
-  if (s === 'running' || s === 'waiting_answer') return 'running'
-  if (s === 'queued') return 'queued'
-  if (s === 'done' || s === 'cancelled' || s === 'abandoned') return 'finished'
-  return undefined
+  const b = statusBucket(s)
+  return b === 'waiting_lead' ? 'running' : b
 }
 
 export async function goalTree(ctx: ProjectContext, goalId: string, now: Date): Promise<AssignmentView> {
@@ -38,7 +37,8 @@ export async function summarize(ctx: ProjectContext, now: Date): Promise<Project
       if (b) counts[b] += 1
     }
     const leadOnline = meta.leadLastSeen !== undefined && now.getTime() - new Date(meta.leadLastSeen).getTime() <= LEAD_OFFLINE_MS
-    goals.push({ goalId: meta.goalId, title: meta.title, createdAt: meta.createdAt, status: root.status, leadOnline, counts })
+    const lead = leadLabel(meta.lead?.client)
+    goals.push({ goalId: meta.goalId, title: meta.title, createdAt: meta.createdAt, status: root.status, leadOnline, counts, ...(lead ? { lead } : {}) })
   }
   return { repo: ctx.repo, name: basename(ctx.repo), goals }
 }

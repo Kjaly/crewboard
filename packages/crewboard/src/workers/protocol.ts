@@ -1,4 +1,7 @@
-import { PROVIDERS, type ProviderId, type ResultKind, type SystemText } from '../model/types.js'
+import { BUILTIN_AGENTS } from './agents.js'
+
+const BUILTIN_IDS: ReadonlySet<string> = new Set(BUILTIN_AGENTS.map((a) => a.id))
+import type { ProviderId, ResultKind, SystemText } from '../model/types.js'
 
 export type SplitPart = { title: string; criteria: string[]; provider?: ProviderId }
 export type WorkerOutcome =
@@ -57,7 +60,7 @@ const TAG = /<crewboard-(report|question|split)>([\s\S]*?)<\/crewboard-\1>/g
  * The worker's last word as a result or a question. Real CLIs forget the format: an answer with no block is the
  * result, whole, so a run never hangs waiting for a tag.
  */
-export function parseOutcome(finalText: string): WorkerOutcome {
+export function parseOutcome(finalText: string, known: ReadonlySet<string> = BUILTIN_IDS): WorkerOutcome {
   const matches = [...finalText.matchAll(TAG)]
   const last = matches.at(-1)
   if (!last) {
@@ -66,7 +69,7 @@ export function parseOutcome(finalText: string): WorkerOutcome {
   }
   const body = (last[2] ?? '').trim()
   if (last[1] === 'split') {
-    const parts = body.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('- ')).map(parsePart).filter((p): p is SplitPart => p !== undefined)
+    const parts = body.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('- ')).map((l) => parsePart(l, known)).filter((p): p is SplitPart => p !== undefined)
     const summary = finalText.slice(0, last.index).replace(TAG, '').trim()
     return summary ? { kind: 'split', summary, parts } : { kind: 'split', summary: 'The work is split into parts', parts, code: 'split' }
   }
@@ -77,13 +80,13 @@ export function parseOutcome(finalText: string): WorkerOutcome {
 }
 
 /** One split line: `- [provider] Title | criterion; criterion`. An unknown provider is dropped: the parent's applies. */
-function parsePart(line: string): SplitPart | undefined {
+function parsePart(line: string, known: ReadonlySet<string>): SplitPart | undefined {
   let rest = line.slice(2).trim()
   let provider: ProviderId | undefined
-  const tagged = /^\[([a-z]+)\]\s*/.exec(rest)
+  const tagged = /^\[([a-z0-9][a-z0-9._-]*)\]\s*/i.exec(rest)
   if (tagged) {
     rest = rest.slice(tagged[0].length)
-    if ((PROVIDERS as readonly string[]).includes(tagged[1] ?? '')) provider = tagged[1] as ProviderId
+    if (known.has(tagged[1] ?? '')) provider = tagged[1] as ProviderId
   }
   const [title = '', criteria = ''] = rest.split('|')
   if (!title.trim()) return undefined

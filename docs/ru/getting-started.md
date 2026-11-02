@@ -6,7 +6,7 @@
 
 ## 1. Установите и запустите сервер
 
-Нужны Node.js 24 или новее, pnpm 11.5.2 и Git.
+Когда пакет `crewboard` будет в npm, хватит `npx crewboard serve` (Node.js 24 или новее). А пока установите из исходников: нужны Node.js 24 или новее, pnpm 11.5.2 и Git.
 
 ```sh
 git clone https://github.com/Kjaly/crewboard.git
@@ -22,7 +22,7 @@ node packages/crewboard/dist/main.js serve
 crewboard http://127.0.0.1:4700  mcp: http://127.0.0.1:4700/mcp
 ```
 
-Флаг `--port` выбирает другой порт. Сервер слушает только 127.0.0.1.
+Флаг `--port` выбирает другой порт. Сервер слушает только 127.0.0.1. Когда порт открыт, сервер также пишет, какие исполнители готовы, например `workers ready: Codex, Claude · not ready: DeepSeek (not found)`.
 
 Чтобы вызывать его командой `crewboard` в текущей сессии оболочки, объявите функцию с абсолютным путём к клону. Дальше в документации пишется просто `crewboard`.
 
@@ -33,23 +33,45 @@ crewboard() { node "$CREWBOARD_MAIN" "$@"; }
 
 ## 2. Откройте экран
 
-Откройте http://127.0.0.1:4700/. Пока целей нет, экран показывает команду подключения Claude Code с кнопкой «Скопировать».
+Откройте http://127.0.0.1:4700/. Пока целей нет, экран показывает, как подключить ведущего, для каждого известного клиента, с кнопкой «Скопировать».
 
-## 3. Подключите Claude Code как ведущего
+## 3. Подключите ведущего
+
+Ведущий — ваш привычный агентный чат. Вести может любой MCP-клиент; подключите тот, которым пользуетесь. `crewboard connect claude` или `crewboard connect codex` выполнит команду ниже за вас; `crewboard connect dsh` и `crewboard connect other` напечатают, что добавить.
+
+Claude Code:
 
 ```sh
-claude mcp add --transport http crewboard http://127.0.0.1:4700/mcp
+claude mcp add --scope user --transport http crewboard http://127.0.0.1:4700/mcp
 ```
 
-Теперь у Claude Code есть инструменты Crewboard и инструкция, как вести работу. Объяснять ему протокол не нужно.
+Codex:
+
+```sh
+codex mcp add crewboard --url http://127.0.0.1:4700/mcp
+```
+
+dsh: добавьте сервер в профиль dsh модулем `@deepseek-ai/dsh-mcp-client`:
+
+```yaml
+- name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    serverName: crewboard
+    transport: streamable-http
+    url: http://127.0.0.1:4700/mcp
+```
+
+Любой другой MCP-клиент: добавьте сервер Streamable HTTP по адресу `http://127.0.0.1:4700/mcp`.
+
+Теперь у ведущего есть инструменты Crewboard и инструкция, как вести работу. Объяснять ему протокол не нужно.
 
 ## 4. Настройте хотя бы одного исполнителя
 
-Быстрее всего с Codex: установите CLI `codex` и выполните `codex login`. Claude нужен `ANTHROPIC_API_KEY`, DeepSeek нужен `dsh` с ключом DeepSeek. Подробнее в руководстве по [исполнителям](workers.md).
+Выполните `crewboard doctor`: он покажет каждого исполнителя готовым или скажет, что поставить или куда войти. Быстрее всего с Codex: установите CLI `codex` и выполните `codex login`. Claude готов, если вы вошли в Claude Code, DeepSeek нужен `dsh` с ключом DeepSeek. Подробнее в руководстве по [исполнителям](workers.md).
 
 ## 5. Поставьте первую цель
 
-Откройте Claude Code внутри одного из своих Git-репозиториев и опишите, что хотите. Например:
+Откройте чат ведущего внутри одного из своих Git-репозиториев и опишите, что хотите. Например:
 
 > Добавь в README раздел Usage. Пусть черновик напишет Codex.
 

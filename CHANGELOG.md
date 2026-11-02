@@ -2,6 +2,27 @@
 
 All notable changes to Crewboard are documented here. This changelog follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Your own agents.** `~/.crewboard/agents.json` adds workers to the built-in Claude, Codex and DeepSeek: any adapter Crewboard runs (OpenCode, Cursor, Gemini, Grok, Devin), and models by API such as Kimi or GLM through dsh. The lead lists them with `crewboard_agents`; the screen and the analytics show each by name.
+- **Any MCP client can lead.** The empty screen and the docs give the connection for Claude Code, Codex, dsh and any other MCP client; the screen shows which client leads each goal and records takeovers.
+- **History for every lead.** Conversations are read from Claude Code, Codex and dsh transcripts; for any other lead the tab shows the course of the work from Crewboard's journal.
+- **A simple first run.** `crewboard doctor` checks which workers can run (CLI, version, sign-in), `serve` prints the same in one line and the empty screen lists it; `crewboard connect claude|codex|dsh|other` connects the lead; a busy port is one clear line. The package runs on its own from its tarball, ready for `npx crewboard`.
+- **Claude runs on your plan show as such**: Money says "by subscription" and Claude Code's estimate moves to At API prices.
+
+### Changed
+
+- **The emergency stop is always there** on running work, not only while the lead is offline. It still asks for a second click and reaches the lead through its inbox.
+- **Parts a worker splits off show Reported** until the lead closes their parent, instead of turning Done the moment they report. Their results go to the worker, not to the lead.
+- **Claude workers run as you**: the official Claude Code binary with your own sign-in (subscription or key) and your settings. `CREWBOARD_CLAUDE_AUTH=isolated` keeps the previous API-key-only `--bare` route.
+
+### Fixed
+
+- **The lead's inbox no longer loses events** when a lead chat drops out before acting: a batch is confirmed by the same session's next call.
+- A clarification sent to queued work now reaches the worker's first prompt, and answer and decision work launches read-only on Claude and Codex.
+
 ## [1.0.0] - Unreleased
 
 A new Crewboard. You lead from one chat (Claude Code over MCP); Crewboard runs the workers and shows the work. The DeepSeek Harness plugin and the old plan, contract and review workflow are gone.

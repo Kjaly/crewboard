@@ -95,14 +95,34 @@ describe('tree and context', () => {
     expect(within(panel).getByRole('heading', { name: 'Кухня полного цикла' })).toBeTruthy()
   })
 
-  it('explains how to connect Claude Code when there are no goals', async () => {
+  it.each([
+    ['Claude Code', /^claude mcp add --scope user --transport http crewboard http:\/\/.+\/mcp$/],
+    ['Codex', /^codex mcp add crewboard --url http:\/\/.+\/mcp$/],
+    ['dsh', /transport: streamable-http\n\s+url: http:\/\/.+\/mcp/],
+    ['Другой клиент', /^http:\/\/.+\/mcp$/],
+  ])('explains how to connect %s as the lead when there are no goals', async (client, command) => {
     const { api } = fakeApi({ projects: [] })
     const writeText = vi.fn(async () => undefined)
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
     render(<App api={api} />)
-    expect(await screen.findByRole('heading', { name: 'Подключите Claude Code' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Подключите ведущего' })).toBeTruthy()
+    await userEvent.click(screen.getByRole('tab', { name: client }))
     await userEvent.click(screen.getByRole('button', { name: 'Скопировать' }))
-    expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/^claude mcp add --transport http crewboard http:\/\/.+\/mcp$/))
+    expect(writeText).toHaveBeenLastCalledWith(expect.stringMatching(command))
+  })
+})
+
+describe('first run', () => {
+  it('shows which workers are ready on the empty screen', async () => {
+    const f = fakeApi({ projects: [] })
+    f.state.doctor = [
+      { id: 'codex', label: 'Codex', ok: true, checks: [{ name: 'binary', ok: true, detail: 'codex-cli 0.160.0' }] },
+      { id: 'deepseek', label: 'DeepSeek', ok: false, checks: [{ name: 'binary', ok: false, detail: 'not found', fix: 'npm i -g @deepseek-ai/dsh' }] },
+    ]
+    render(<App api={f.api} />)
+    const list = await screen.findByRole('list', { name: 'Исполнители' })
+    expect(within(list).getByText('Codex').closest('li')?.textContent).toContain('готов')
+    expect(within(list).getByText('DeepSeek').closest('li')?.textContent).toContain('npm i -g @deepseek-ai/dsh')
   })
 })
 
@@ -282,6 +302,15 @@ describe('actions in the tree', () => {
     await userEvent.click(within(panel).getByRole('button', { name: 'Передать' }))
     await userEvent.click(within(panel).getByRole('button', { name: 'Claude' }))
     await waitFor(() => expect(f.state.requests).toEqual([{ id: 'box', action: 'handoff', provider: 'claude' }]))
+  })
+
+  it('offers every other registered agent to hand work over', async () => {
+    const { panel } = await open(/Модель короба/, { agents: [{ id: 'claude', label: 'Claude' }, { id: 'codex', label: 'Codex' }, { id: 'kimi', label: 'Kimi' }] })
+    await userEvent.click(within(panel).getByRole('button', { name: 'Передать' }))
+    await waitFor(() => {
+      const group = within(panel).getByRole('group', { name: 'Кому передать' })
+      expect(within(group).getAllByRole('button').map((b) => b.textContent)).toEqual(['Claude', 'Kimi'])
+    })
   })
 
   it('shows a waiting request and leaves only discussion', async () => {

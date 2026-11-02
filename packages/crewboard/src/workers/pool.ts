@@ -24,9 +24,11 @@ export function createPool(o: { backendFor: BackendFor; runsDir: string; claudeP
     return file
   }
   return {
-    async launch(input: { agent: string; cwd: string; prompt: string }): Promise<string> {
+    async launch(input: { agent: string; cwd: string; prompt: string; readOnly?: boolean }): Promise<string> {
       const backend = await o.backendFor(input.agent)
-      return backend.launch({ agent: input.agent, cwd: input.cwd, promptFile: await writePrompt(input.prompt) })
+      // A backend that cannot launch read-only (dsh) is still told so in the prompt; asking it would be refused.
+      const readOnly = input.readOnly === true && backend.readOnlyLaunch === true
+      return backend.launch({ agent: input.agent, cwd: input.cwd, promptFile: await writePrompt(input.prompt), ...(readOnly ? { readOnly: true } : {}) })
     },
     async poll(agent: string, runId: string, sinceIndex: number, meta?: { startedAt: string; cwd: string }): Promise<PollResult> {
       const backend = await o.backendFor(agent)
@@ -47,8 +49,14 @@ export function createPool(o: { backendFor: BackendFor; runsDir: string; claudeP
           const cost: RunCost = {
             ...(usage.inputTokens ? { inputTokens: usage.inputTokens } : {}),
             ...(usage.outputTokens ? { outputTokens: usage.outputTokens } : {}),
-            ...(usage.usd !== undefined ? { usd: usage.usd } : {}),
-            ...(usage.apiEquivalentUsd !== undefined ? { apiUsd: usage.apiEquivalentUsd } : {}),
+            // On the user's Claude plan, Claude Code's dollar figure is an estimate at API prices, never a charge.
+            ...(usage.billing === 'subscription'
+              ? { billing: 'subscription' as const, ...(usage.usd !== undefined || usage.apiEquivalentUsd !== undefined ? { apiUsd: usage.apiEquivalentUsd ?? usage.usd } : {}) }
+              : {
+                  ...(usage.billing === 'api' ? { billing: 'api' as const } : {}),
+                  ...(usage.usd !== undefined ? { usd: usage.usd } : {}),
+                  ...(usage.apiEquivalentUsd !== undefined ? { apiUsd: usage.apiEquivalentUsd } : {}),
+                }),
           }
           if (Object.keys(cost).length) result.usage = cost
         }

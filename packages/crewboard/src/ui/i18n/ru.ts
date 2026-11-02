@@ -38,13 +38,14 @@ export const ru = {
       case 'leading': return 'Ведущий ведёт цель'
       case 'failed': return `Запуск упал: ${d.reason ?? 'причина неизвестна'}`
       case 'reported': return 'Доложил итог, ждёт решения'
+      case 'reported_to_parent': return 'Доложено, проверит родитель'
       case 'working': return 'Работает'
       case 'children': return `Ждёт свои поручения: ${d.done} из ${d.total} готовы`
     }
   },
   system: (code: SystemText, detail = ''): string => {
     switch (code) {
-      case 'emergency_stop': return 'аварийная остановка владельцем, ведущий был не на связи'
+      case 'emergency_stop': return 'аварийная остановка владельцем'
       case 'owner_stop': return 'остановлено по просьбе владельца'
       case 'run_failed': return `запуск упал: ${detail || 'причина неизвестна'}`
       case 'parent_cancelled': return `отменена ветка выше: ${detail}`
@@ -56,6 +57,7 @@ export const ru = {
   tabs: { now: 'Сейчас', history: 'История', analytics: 'Аналитика', soon: 'Появится в следующем обновлении' },
   summary: 'Сводка',
   noData: 'нет данных',
+  bySubscription: 'по подписке',
   analyticsHint: 'Для разбора после работы: кто был загружен, что шло параллельно, сколько это стоило.',
   analyticsEmpty: 'Запусков пока не было.',
   costsByProvider: 'Затраты по провайдерам',
@@ -63,7 +65,8 @@ export const ru = {
   costCols: { who: 'Провайдер', what: 'Поручение', runs: 'Запуски', money: 'Деньги', api: 'По ценам API', tokens: 'Токены: вход / выход' },
   you: 'Вы',
   openInHistory: 'Открыть в истории',
-  historyUnavailable: 'Полный разговор недоступен: транскрипт Claude Code не найден.',
+  historyUnavailable: 'Полный разговор недоступен: транскрипт ведущего не найден.',
+  historyFromJournal: 'Разговор ведущего недоступен: показан ход работы из журнала Crewboard.',
   historyTruncated: 'Показана последняя часть длинного разговора.',
   historySession: (when: string) => `Разговор с ведущим · ${when}`,
   actionsCount: (n: number) => `${n} ${plural(n, 'действие', 'действия', 'действий')}`,
@@ -97,12 +100,23 @@ export const ru = {
   workdir: 'Рабочая папка',
   assignedBy: 'Поручил',
   lead: 'Ведущий',
-  emptyTitle: 'Подключите Claude Code',
-  emptyText: 'Целей пока нет. Подключите Crewboard к основному чату Claude Code и попросите его поставить цель.',
+  emptyTitle: 'Подключите ведущего',
+  emptyText: 'Целей пока нет. Подключите Crewboard к своему основному агентному чату — Claude Code, Codex, dsh или любому MCP-клиенту — и попросите его поставить цель.',
+  connectWith: 'Клиент ведущего',
+  workersTitle: 'Исполнители',
+  workerReady: 'готов',
+  workerNotReady: 'не готов:',
+  connectClient: { claude: 'Claude Code', codex: 'Codex', dsh: 'dsh', other: 'Другой клиент' } as Record<'claude' | 'codex' | 'dsh' | 'other', string>,
+  connectHint: {
+    claude: 'Выполните в терминале:',
+    codex: 'Выполните в терминале:',
+    dsh: 'Добавьте в профиль dsh (модуль @deepseek-ai/dsh-mcp-client):',
+    other: 'Адрес MCP-сервера, Streamable HTTP:',
+  } as Record<'claude' | 'codex' | 'dsh' | 'other', string>,
   copy: 'Скопировать',
   copied: 'Скопировано',
   question: { via: 'Ведущий не смог решить сам', own: 'Свой ответ', send: 'Ответить', placeholder: 'Напишите ответ исполнителю', failed: 'Ответ не отправлен. Проверьте связь и попробуйте ещё раз.' },
-  status: { queued: 'В очереди', running: 'Идёт', waiting_answer: 'Ждёт ведущего', waiting_owner: 'Ждёт вас', done: 'Готово', cancelled: 'Отменено', abandoned: 'Брошено', paused: 'На паузе' } satisfies Record<Status, string>,
+  status: { queued: 'В очереди', running: 'Идёт', waiting_answer: 'Ждёт ведущего', waiting_owner: 'Ждёт вас', reported: 'Доложено', done: 'Готово', cancelled: 'Отменено', abandoned: 'Брошено', paused: 'На паузе' } satisfies Record<Status, string>,
   action: {
     clarify: 'Уточнить', stop: 'Остановить', handoff: 'Передать', start_now: 'Начать раньше', cancel: 'Отменить', reopen: 'Переоткрыть', revive: 'Вернуть в работу', discuss: 'Обсудить с ведущим',
   } satisfies Record<RequestAction, string>,
@@ -111,7 +125,8 @@ export const ru = {
   } satisfies Record<RequestAction, string>,
   emergencyStop: 'Аварийная остановка',
   emergencyConfirm: 'Точно остановить сейчас',
-  emergencyHint: 'Ведущий не на связи. Остановка сработает сразу, ведущий узнает о ней позже.',
+  emergencyHint: 'Остановка сработает сразу, в обход ведущего. Ведущий узнает о ней из входящих.',
+  leadAwayHint: 'Ведущий не на связи: ответа на просьбу может не быть, есть аварийная остановка.',
   actions: 'Действия',
   actionText: 'Что передать ведущему',
   actionSend: 'Отправить',

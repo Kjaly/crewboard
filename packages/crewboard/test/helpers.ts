@@ -21,7 +21,7 @@ export async function gitRepo(): Promise<string> {
 export async function startApp(opts: { now?: () => Date } = {}) {
   const fake = createFakeBackend()
   // Never read the developer's real Claude Code transcripts from tests.
-  const env = { ...process.env, CREWBOARD_HOME: await mkdtemp(join(tmpdir(), 'cb-home-')), CREWBOARD_CLAUDE_PROJECTS: await mkdtemp(join(tmpdir(), 'cb-claude-')) }
+  const env = { ...process.env, CREWBOARD_HOME: await mkdtemp(join(tmpdir(), 'cb-home-')), CREWBOARD_CLAUDE_PROJECTS: await mkdtemp(join(tmpdir(), 'cb-claude-')), CREWBOARD_CODEX_SESSIONS: await mkdtemp(join(tmpdir(), 'cb-codex-')), CREWBOARD_DSH_SESSIONS: await mkdtemp(join(tmpdir(), 'cb-dsh-')) }
   const app = createApp({ env, backendFor: () => async () => fake.backend, tickMs: 60_000, ...(opts.now ? { now: opts.now } : {}) })
   const server = await app.listen(0)
   const client = new Client({ name: 'test-lead', version: '1.0.0' })

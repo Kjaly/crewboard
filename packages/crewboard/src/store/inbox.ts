@@ -9,8 +9,10 @@ import { projectDir } from './paths.js'
  * What the lead must hear about: a worker's question or result, a run that failed, and the owner's answer to an
  * escalated question. A completed run is already told by its result or question.
  */
-export function isLeadEvent(e: GoalEvent): boolean {
+export function isLeadEvent(e: GoalEvent, workerParts: ReadonlySet<string> = new Set()): boolean {
   if (e.type === 'question') return true
+  // A split-off part reports to the worker that split it off, not to the lead.
+  if (e.type === 'reported' && workerParts.has(e.assignmentId)) return false
   // A split is not a result to close: the worker continues once its parts finish.
   if (e.type === 'reported') return e.split !== true
   if (e.type === 'run_ended') return e.outcome === 'failed'
@@ -22,7 +24,12 @@ export function isLeadEvent(e: GoalEvent): boolean {
 
 type Delivered = { delivered: Record<string, number> }
 
-/** The lead's inbox across every goal of one repository; delivery is remembered in `.crewboard/inbox.json`. */
+/**
+ * The lead's inbox across every goal of one repository; confirmed delivery is remembered in `.crewboard/inbox.json`.
+ * Delivery is at least once: what a lead session takes stays unconfirmed until the same session takes again, so a
+ * lead that drops out before acting hands its events to the next session. What was handed out lives in memory only:
+ * a restarted server hands every unconfirmed event out again.
+ */
 export function createInbox(store: EventStore) {
   const path = join(projectDir(store.repo), 'inbox.json')
   const load = async (): Promise<Delivered> => {
@@ -33,12 +40,45 @@ export function createInbox(store: EventStore) {
     }
   }
   let chain: Promise<unknown> = Promise.resolve()
+  const offered = new Map<string, Map<string, number>>()
+  const highest = (events: GoalEvent[]) => {
+    const top = new Map<string, number>()
+    for (const e of events) top.set(e.goalId, Math.max(top.get(e.goalId) ?? 0, e.seq))
+    return top
+  }
   return {
     async pending(): Promise<GoalEvent[]> {
       const { delivered } = await load()
       const goals = await store.listGoals()
-      const lists = await Promise.all(goals.map(async (g) => (await store.read(g.goalId)).filter((e) => e.seq > (delivered[g.goalId] ?? 0) && isLeadEvent(e))))
+      const lists = await Promise.all(
+        goals.map(async (g) => {
+          const events = await store.read(g.goalId)
+          const parts = new Set(events.filter((e) => e.type === 'assigned' && e.actor === 'worker').map((e) => e.assignmentId))
+          // A part the lead sent back reports to the lead again: its worker has already moved on.
+          const sentBack = new Map<string, number>()
+          for (const e of events) if (e.type === 'returned' && e.actor === 'lead' && !sentBack.has(e.assignmentId)) sentBack.set(e.assignmentId, e.seq)
+          const afterReturn = (e: GoalEvent): boolean => e.type === 'reported' && e.seq > (sentBack.get(e.assignmentId) ?? Number.POSITIVE_INFINITY)
+          return events.filter((e) => e.seq > (delivered[g.goalId] ?? 0) && (isLeadEvent(e, parts) || afterReturn(e)))
+        }),
+      )
       return lists.flat()
+    },
+    /** Confirms what this session took last time, then hands it every unconfirmed event. */
+    async take(session: string): Promise<GoalEvent[]> {
+      for (const [goalId, seq] of offered.get(session) ?? []) await this.ack(goalId, seq)
+      const events = await this.pending()
+      offered.set(session, highest(events))
+      return events
+    },
+    /** Unconfirmed events no live session holds: what should wake a waiting lead. */
+    async unseen(): Promise<GoalEvent[]> {
+      const held = new Map<string, number>()
+      for (const top of offered.values()) for (const [goalId, seq] of top) held.set(goalId, Math.max(held.get(goalId) ?? 0, seq))
+      return (await this.pending()).filter((e) => e.seq > (held.get(e.goalId) ?? 0))
+    },
+    /** Forgets what a session held without confirming it: the next session gets those events again. */
+    release(session: string): void {
+      offered.delete(session)
     },
     ack(goalId: string, seq: number): Promise<void> {
       const next = chain.then(async () => {

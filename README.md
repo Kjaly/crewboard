@@ -7,7 +7,7 @@
 
 **Lead your coding agents from one chat, and see what they are doing.**
 
-You talk to one lead chat (Claude Code). It hands work to Codex, Claude and DeepSeek through Crewboard, answers their questions, and closes their work against the criteria you agreed on. Crewboard is the local screen beside it: what is happening right now, who does what, the conversation it came from, and what it cost.
+You talk to one lead chat: Claude Code, Codex, dsh or any MCP client. It hands work through Crewboard to Codex, Claude, DeepSeek or any agent you register, Kimi and GLM through dsh included, answers their questions, and closes their work against the criteria you agreed on. Crewboard is the local screen beside it: what is happening right now, who does what, the conversation it came from, and what it cost.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/en/now-dark.png">
@@ -20,7 +20,7 @@ Documentation: **[kjaly.github.io/crewboard](https://kjaly.github.io/crewboard/)
 
 ## How it works
 
-1. **You agree with the lead on what you want.** In Claude Code, describe the goal; the lead asks what it needs and settles the criteria for done with you.
+1. **You agree with the lead on what you want.** In your lead chat, describe the goal; the lead asks what it needs and settles the criteria for done with you.
 2. **The lead hands out the work.** Through Crewboard's MCP tools it starts a goal and assigns pieces to Codex, Claude or DeepSeek. Each assignment remembers who gave it, what it should produce and the message it came from.
 3. **Workers ask the lead first.** A worker's question goes to the lead. Only what the lead cannot decide (taste, scope, money) reaches you, on the screen.
 4. **The lead closes the work.** It checks each result against the criteria and closes it or sends it back. You do not accept work; you can step in at any time.
@@ -28,7 +28,13 @@ Documentation: **[kjaly.github.io/crewboard](https://kjaly.github.io/crewboard/)
 
 ## Install
 
-From a source checkout (Node.js 24+, pnpm 11.5.2, Git):
+Once the `crewboard` package is on npm (Node.js 24+):
+
+```sh
+npx crewboard serve
+```
+
+Until then, from a source checkout (Node.js 24+, pnpm 11.5.2, Git):
 
 ```sh
 git clone https://github.com/Kjaly/crewboard.git
@@ -38,13 +44,16 @@ pnpm build
 node packages/crewboard/dist/main.js serve
 ```
 
-Open http://127.0.0.1:4700/ and connect Claude Code as the lead:
+Open http://127.0.0.1:4700/. The screen shows which workers are ready and how to connect your lead, any MCP client. From the terminal, the same in two commands:
 
 ```sh
-claude mcp add --transport http crewboard http://127.0.0.1:4700/mcp
+crewboard doctor           # which workers can run here, and what to install for the rest
+crewboard connect claude   # or: codex, dsh, other
 ```
 
-Then, in a Claude Code chat inside one of your repositories, describe what you want. The [getting started guide](docs/en/getting-started.md) walks through the first goal.
+From a source checkout, `crewboard` is `node packages/crewboard/dist/main.js`.
+
+Then, in your lead chat inside one of your repositories, describe what you want. The [getting started guide](docs/en/getting-started.md) walks through the first goal.
 
 ## What you need for each worker
 

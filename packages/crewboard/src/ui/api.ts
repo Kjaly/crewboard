@@ -3,12 +3,18 @@ import type { AssignmentView, GoalEvent, ProviderId, RequestAction } from '../mo
 import type { GoalAnalytics } from '../analytics.js'
 import type { GoalHistory } from '../history/sessions.js'
 import type { ProjectSummary } from '../owner.js'
+import type { AgentReadiness } from '../doctor.js'
 
 export type { LiveChange }
+
+/** A registered agent as the screen shows it. */
+export type AgentBadge = { id: string; label: string; color?: string }
 
 /** Everything the screen asks the server; tests pass an in-memory one. */
 export type Api = {
   projects(): Promise<ProjectSummary[]>
+  agents(): Promise<AgentBadge[]>
+  doctor(): Promise<AgentReadiness[]>
   goal(project: string, goalId: string): Promise<AssignmentView>
   events(project: string, goalId: string, assignmentId: string): Promise<GoalEvent[]>
   history(project: string, goalId: string): Promise<GoalHistory>
@@ -40,6 +46,8 @@ export function httpApi(base = ''): Api {
       post(`${base}/api/request`, { project, goalId, assignmentId, action, ...(text ? { text } : {}), ...(provider ? { provider } : {}) }),
     emergencyStop: (project, goalId, assignmentId) => post(`${base}/api/emergency-stop`, { project, goalId, assignmentId }),
     projects: () => getJson(`${base}/api/projects`),
+    agents: () => getJson(`${base}/api/agents`),
+    doctor: () => getJson(`${base}/api/doctor`),
     goal: (project, goalId) => getJson(`${base}/api/goals/${encodeURIComponent(goalId)}?${q({ project })}`),
     history: (project, goalId) => getJson(`${base}/api/goals/${encodeURIComponent(goalId)}/history?${q({ project })}`),
     analytics: (project, goalId) => getJson(`${base}/api/goals/${encodeURIComponent(goalId)}/analytics?${q({ project })}`),

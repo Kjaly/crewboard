@@ -5,7 +5,7 @@ import { T } from '../text.js'
 import { Avatar, StatusBadge } from './badges.js'
 import { requestText } from './request-line.js'
 
-const ORDER: Record<Status, number> = { waiting_owner: 0, waiting_answer: 1, running: 2, paused: 2, queued: 3, done: 4, cancelled: 4, abandoned: 4 }
+const ORDER: Record<Status, number> = { waiting_owner: 0, waiting_answer: 1, running: 2, reported: 2, paused: 2, queued: 3, done: 4, cancelled: 4, abandoned: 4 }
 const FINISHED: ReadonlySet<Status> = new Set(['done', 'cancelled', 'abandoned'])
 
 /** The nodes in the order the tree shows them, skipping folded finished groups: what arrow keys walk. */

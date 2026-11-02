@@ -14,6 +14,8 @@ export type Api = {
   goals: (project: string) => Promise<unknown>
   goal: (project: string, goalId: string) => Promise<unknown>
   projects: () => Promise<unknown>
+  agents: () => Promise<unknown>
+  doctor: () => Promise<unknown>
   events: (project: string, goalId: string, assignmentId: string) => Promise<unknown>
   history: (project: string, goalId: string) => Promise<unknown>
   analytics: (project: string, goalId: string) => Promise<unknown>
@@ -148,6 +150,8 @@ export function createHttpServer(api: Api, opts: { now?: () => number; mcpIdleMs
       return res.writeHead(204).end()
     }
     if (url.pathname === '/api/projects') return json(res, 200, await api.projects())
+    if (url.pathname === '/api/agents') return json(res, 200, await api.agents())
+    if (url.pathname === '/api/doctor') return json(res, 200, await api.doctor())
     if (req.method === 'POST' && (url.pathname === '/api/answer' || url.pathname === '/api/request' || url.pathname === '/api/emergency-stop')) {
       if (refuseForeignPost(req, res)) return
       const body = ((await readBody(req)) ?? {}) as Record<string, unknown>
@@ -183,8 +187,11 @@ export function createHttpServer(api: Api, opts: { now?: () => number; mcpIdleMs
     sweep,
     sessionCount: () => sessions.size,
     listen(port: number): Promise<{ url: string; close(): Promise<void> }> {
-      return new Promise((resolve) => {
+      return new Promise((resolve, reject) => {
+        // A busy port (EADDRINUSE) and the like reject the start instead of crashing the process.
+        server.once('error', reject)
         server.listen(port, '127.0.0.1', () => {
+          server.off('error', reject)
           const address = server.address()
           const actual = typeof address === 'object' && address ? address.port : port
           resolve({

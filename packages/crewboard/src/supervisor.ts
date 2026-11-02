@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import { access } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { buildTree, flatten, isTerminal } from './model/project.js'
+import { buildTree, flatten, isSettled, isTerminal } from './model/project.js'
 import { randomBytes } from 'node:crypto'
 import { MAX_SPLIT, PROGRESS_EVERY_MS } from './model/thresholds.js'
 import type { AssignmentView, EventOf, GoalEvent, NewEvent, ProviderId, ResultKind, SystemText } from './model/types.js'
@@ -10,7 +10,7 @@ import type { EventStore } from './store/event-store.js'
 import { worktreesDir } from './store/paths.js'
 import type { Pool } from './workers/pool.js'
 import { parseOutcome, workerPrompt } from './workers/protocol.js'
-import { agentFor } from './workers/providers.js'
+import { type Agents, AgentsFileError, builtinAgents } from './workers/agents.js'
 
 const run = promisify(execFile)
 
@@ -42,7 +42,9 @@ const openRun = (own: GoalEvent[]): EventOf<'run_started'> | undefined => {
  * One pass over a repository's goals: start queued work whose `after` is done, read every open run and turn what
  * it did into journal events. Run read positions live in memory; after a restart progress is deduplicated by text.
  */
-export function createSupervisor(o: { repo: string; store: EventStore; pool: Pool; now: () => Date; worktree: WorktreeFn }) {
+export function createSupervisor(o: { repo: string; store: EventStore; pool: Pool; now: () => Date; worktree: WorktreeFn; agents?: Agents }) {
+  const agents = o.agents ?? builtinAgents
+  let brokenRegistry: string | undefined
   const cursors = new Map<string, number>()
   const append = (goalId: string, e: NewEvent) => o.store.append(goalId, e)
 
@@ -53,13 +55,27 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
   }
 
   const launch = async (goalId: string, node: AssignmentView, cwdOf: () => Promise<string>, chain: string[], resumeNote?: string) => {
-    const agent = agentFor(node.provider as ProviderId, node.model)
+    // A registry file that cannot be read right now (being edited, a typo) is the owner's to fix, not the work's
+    // fault: nothing starts and nothing is recorded, and the work waits in the queue. Said once in the server log.
+    const registered = await agents.get(node.provider).catch((error: unknown) => error as Error)
+    if (registered instanceof AgentsFileError) {
+      if (brokenRegistry !== registered.message) console.error(`crewboard: ${registered.message}; queued work waits until it is fixed`)
+      brokenRegistry = registered.message
+      return
+    }
+    brokenRegistry = undefined
+    // An agent removed from the registry fails the launch like a refusing backend: recorded once with the reason,
+    // told to the lead, not retried.
+    const agent = registered && !(registered instanceof Error) ? agents.coreId(registered, node.model) : node.provider
     const prompt = workerPrompt({ title: node.title, criteria: node.criteria, resultKind: node.resultKind as ResultKind, chain, ...(resumeNote ? { resumeNote } : {}) })
     let runId: string
     let cwd = o.repo
     try {
+      if (registered instanceof Error) throw registered
+      if (!registered) throw new Error(`agent ${node.provider} is not in the registry`)
       cwd = await cwdOf()
-      runId = await o.pool.launch({ agent, cwd, prompt })
+      // An answer or a decision changes no files: the backend enforces it where it can, the prompt says it everywhere.
+      runId = await o.pool.launch({ agent, cwd, prompt, readOnly: node.resultKind === 'answer' || node.resultKind === 'decision' })
     } catch (error) {
       // A launch the backend refuses (no CLI, no key, policy) is a run that failed at once: recorded, told to the
       // lead through the inbox, and not retried by the next tick. The lead decides: steer to retry, or cancel.
@@ -86,14 +102,17 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
     }
     if (!r.terminal) return
     cursors.delete(started.runId)
-    // Work a worker split off belongs to that worker: its result is closed for it, a failure cancels it with the reason.
+    // Work a worker split off belongs to that worker: its result goes to the worker (the part shows as reported until
+    // the lead closes the parent), a failure cancels it with the reason.
     const workerOwned = own.some((e) => e.type === 'assigned' && e.actor === 'worker')
     if (r.failed) {
       await append(goalId, { type: 'run_ended', goalId, assignmentId: node.id, actor: 'system', runId: started.runId, outcome: 'failed', ...(r.reason ? { reason: r.reason } : {}), ...(r.usage ? { usage: r.usage } : {}) })
       if (workerOwned) await append(goalId, { type: 'cancelled', goalId, assignmentId: node.id, actor: 'system', reason: `Run failed: ${r.reason ?? 'unknown reason'}`, code: 'run_failed', detail: r.reason ?? '' })
       return
     }
-    const outcome = parseOutcome(r.finalText ?? '')
+    // A part may name any registered agent; an unknown name leaves the part with its worker's agent.
+    const known = new Set((await agents.list().catch(() => [])).map((a) => a.id))
+    const outcome = parseOutcome(r.finalText ?? '', known)
     if (outcome.kind === 'question') await append(goalId, { type: 'question', goalId, assignmentId: node.id, actor: 'worker', text: outcome.text, options: outcome.options })
     else await append(goalId, { type: 'reported', goalId, assignmentId: node.id, actor: 'worker', summary: outcome.summary, ...(outcome.kind === 'split' ? { split: true } : {}), ...(outcome.code ? { code: outcome.code } : {}) })
     if (outcome.kind === 'split') {
@@ -105,7 +124,6 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
       }
     }
     await append(goalId, { type: 'run_ended', goalId, assignmentId: node.id, actor: 'system', runId: started.runId, outcome: 'completed', ...(r.usage ? { usage: r.usage } : {}) })
-    if (outcome.kind === 'report' && workerOwned) await append(goalId, { type: 'closed', goalId, assignmentId: node.id, actor: 'system', summary: outcome.summary, ...(outcome.code ? { code: outcome.code } : {}) })
   }
 
   /** A worker whose split-off children have all finished continues with their results. */
@@ -115,11 +133,13 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
     const lastSplit = Math.max(...kids.map((k) => k.seq))
     if (own.some((e) => e.type === 'run_started' && e.seq > lastSplit)) return
     const views = kids.map((k) => byId.get(k.assignmentId)).filter((v): v is AssignmentView => v !== undefined)
-    if (!views.every((v) => isTerminal(v.status))) return
+    if (!views.every((v) => isSettled(v.status))) return
     const results = views.map((v) => {
       const kidEvents = events.filter((e) => e.assignmentId === v.id)
       const closed = kidEvents.findLast((e): e is EventOf<'closed'> => e.type === 'closed')
       const cancelled = kidEvents.findLast((e): e is EventOf<'cancelled'> => e.type === 'cancelled')
+      const reported = kidEvents.findLast((e): e is EventOf<'reported'> => e.type === 'reported')
+      if (v.status === 'reported') return `- ${v.title}: ${reported?.summary ?? 'reported'}`
       return `- ${v.title}: ${v.status === 'done' ? (closed?.summary ?? 'done') : `not done (${cancelled?.reason ?? v.status})`}`
     })
     await this_.deliver(goalId, node.id, `Your assignments have finished:\n${results.join('\n')}\n\nContinue your task with these results in mind.`)
@@ -156,7 +176,10 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
             // Parts of branch work run in the worker's own copy, so the worker builds on them.
             const parent = node.parentId ? byId.get(node.parentId) : undefined
             const inheritCwd = own.some((e) => e.type === 'assigned' && e.actor === 'worker') && parent?.resultKind === 'branch' && parent.cwd
-            await launch(meta.goalId, node, () => (inheritCwd ? Promise.resolve(inheritCwd) : cwdFor(node)), chainOf(byId, node))
+            // Clarifications sent while the work waited in the queue were only journaled: its first run starts with them.
+            const waited = own.some((e) => e.type === 'run_started') ? [] : own.filter((e): e is EventOf<'steered'> => e.type === 'steered').map((e) => `- ${e.text}`)
+            const note = waited.length ? `Clarifications sent while this assignment waited:\n${waited.join('\n')}` : undefined
+            await launch(meta.goalId, node, () => (inheritCwd ? Promise.resolve(inheritCwd) : cwdFor(node)), chainOf(byId, node), note)
           }
         }
         // After this pass's results are in, workers whose split-off parts all finished continue.
@@ -182,7 +205,7 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
       if (node.status === 'queued') return 'recorded'
       // A worker waiting on parts it split off resumes with their results; relaunching now would lose them.
       const splitOff = events.filter((e) => e.type === 'assigned' && e.actor === 'worker' && e.parentId === assignmentId).map((e) => byId.get(e.assignmentId))
-      if (splitOff.some((k) => k && !isTerminal(k.status))) return 'recorded'
+      if (splitOff.some((k) => k && !isSettled(k.status))) return 'recorded'
       let own = events.filter((e) => e.assignmentId === assignmentId)
       const last = lastOf(own, 'run_started')
       const open = openRun(own)

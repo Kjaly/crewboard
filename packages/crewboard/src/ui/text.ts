@@ -1,3 +1,4 @@
+import { agentOf } from './agents.js'
 import { en } from './i18n/en.js'
 import { ru, type Strings } from './i18n/ru.js'
 
@@ -33,4 +34,7 @@ export function initialLang(): Lang {
   return typeof navigator !== 'undefined' && navigator.language.toLowerCase().startsWith('ru') ? 'ru' : 'en'
 }
 
-export const MCP_COMMAND = (origin: string) => `claude mcp add --transport http crewboard ${origin}/mcp`
+/** An agent's name on screen: its registry label, the lead's own name, else the id of an agent no longer registered. */
+export const providerLabel = (id: string): string => agentOf(id)?.label ?? (id === 'lead' ? T.provider.lead : id)
+
+export { CONNECT_COMMANDS, type LeadClientId } from '../connect.js'

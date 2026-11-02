@@ -1,16 +1,19 @@
+import { randomUUID } from 'node:crypto'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import { PROVIDERS, RESULT_KINDS } from '../model/types.js'
+import { RESULT_KINDS } from '../model/types.js'
+import { leadCall } from './call.js'
+import type { LeadClient } from './clients.js'
 import type { LeadCommands } from './commands.js'
 
 /** The package version, injected by the build; tests run from source and see 'dev'. */
 declare const __CREWBOARD_VERSION__: string | undefined
 const VERSION = typeof __CREWBOARD_VERSION__ === 'string' ? __CREWBOARD_VERSION__ : 'dev'
 
-export const LEAD_INSTRUCTIONS = `Crewboard runs work you hand out to other coding agents (Claude, Codex, DeepSeek) and shows the owner a live map of it.
+export const LEAD_INSTRUCTIONS = `Crewboard runs work you hand out to other coding agents and shows the owner a live map of it. crewboard_agents lists who you can hand work to.
 How to lead:
 1. Agree with the owner on what they want and the criteria for done. Then call crewboard_start_goal, and crewboard_assign for each piece of work, passing the owner's message that asked for it in \`quote\`. Pass \`project\` = the absolute path of the repository you are working in.
-2. Keep \`crewboard wait --project <that path>\` running in the background (a background Bash command). When it exits, call crewboard_inbox and act on every event, then start the wait again.
+2. Keep \`crewboard wait --project <that path>\` running in the background (a background Bash command). When it exits, call crewboard_inbox and act on every event, then start the wait again. crewboard_inbox returns every event you have not confirmed; calling it again confirms the previous batch. When you take over after another lead chat, call crewboard_inbox first.
 3. A worker question: answer it yourself with crewboard_answer when you can. When only the owner can decide (taste, scope, money), call crewboard_escalate with \`why\` and tell the owner in chat.
 4. A worker result: check it against the criteria. Close it with crewboard_close, or send it back with crewboard_return and a note. The owner does not accept work; you do.
 5. The owner may ask for something on a node from the screen (clarify, stop, hand off, start now, reopen, discuss): it arrives in your inbox as owner_requested. Decide with crewboard_decide_request; accepting carries it out, declining needs a reason the owner will read.
@@ -32,15 +35,24 @@ const wrap = (fn: () => Promise<unknown>) => async (): Promise<Result> => {
 /** One MCP server per lead session, all calling the same commands. */
 export function createLeadMcp(commands: LeadCommands): McpServer {
   const server = new McpServer({ name: 'crewboard', version: VERSION }, { instructions: LEAD_INSTRUCTIONS })
+  // One server per MCP session (server.ts): its inbox batches are confirmed by its own next call and released when it ends.
+  const session = randomUUID()
+  // Who this session's lead is, as its client named itself at `initialize`; unnamed clients stay anonymous.
+  const clientOf = (): LeadClient | undefined => {
+    const info = server.server.getClientVersion()
+    return info?.name ? { client: info.name, ...(info.version ? { version: info.version } : {}) } : undefined
+  }
+  server.server.onclose = () => commands.releaseSession(session)
   const tool = <S extends z.ZodRawShape>(name: string, description: string, inputSchema: S, fn: (args: z.infer<z.ZodObject<S>>) => Promise<unknown>) =>
-    server.registerTool(name, { description, inputSchema }, ((args: z.infer<z.ZodObject<S>>) => wrap(() => fn(args))()) as never)
+    server.registerTool(name, { description, inputSchema }, ((args: z.infer<z.ZodObject<S>>) => leadCall.run(clientOf(), () => wrap(() => fn(args))())) as never)
 
   tool('crewboard_start_goal', 'Start a goal the owner agreed on. Returns its goalId.', { project: z.string(), title: z.string(), criteria: z.array(z.string()), quote: z.string().optional() }, (a) => commands.startGoal(a))
-  tool('crewboard_assign', 'Hand a piece of work to a worker. parentId defaults to the goal; after lists assignments that must be done first.', {
+  tool('crewboard_agents', 'The agents you can hand work to: id (pass it as provider), label, how it runs, its default model, and whether it can run read-only.', {}, () => commands.agents())
+  tool('crewboard_assign', 'Hand a piece of work to a worker. provider: an agent id from crewboard_agents. parentId defaults to the goal; after lists assignments that must be done first.', {
     project: z.string(), goalId: z.string(), parentId: z.string().optional(), title: z.string(), criteria: z.array(z.string()),
-    resultKind: z.enum(RESULT_KINDS), provider: z.enum(PROVIDERS), model: z.string().optional(), quote: z.string().optional(), after: z.array(z.string()).optional(),
+    resultKind: z.enum(RESULT_KINDS), provider: z.string().min(1), model: z.string().optional(), quote: z.string().optional(), after: z.array(z.string()).optional(),
   }, (a) => commands.assign(a))
-  tool('crewboard_inbox', 'Read and acknowledge everything workers and the owner sent you since the last call.', { project: z.string() }, (a) => commands.inbox(a))
+  tool('crewboard_inbox', 'Everything workers and the owner sent you that you have not confirmed. Calling it again confirms the previous batch: act on every event first.', { project: z.string() }, (a) => commands.inbox(a, session))
   tool('crewboard_answer', "Answer a worker's question; the worker continues with it.", { ...target, text: z.string() }, (a) => commands.answer(a))
   tool('crewboard_escalate', "Raise a worker's question to the owner. why: why you could not decide yourself.", { ...target, why: z.string(), text: z.string().optional(), options: z.array(z.string()).optional() }, (a) => commands.escalate(a))
   tool('crewboard_steer', 'Add a clarification to work in progress.', { ...target, text: z.string() }, (a) => commands.steer(a))

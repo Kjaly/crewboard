@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 
 /** What one fake run does: the events it emits and how it ends. `hold` keeps it running until `finish` is called. */
 export type FakeScript = { events?: string[]; final?: string; fail?: string; hold?: boolean; refuse?: string; deltas?: string[]; brokenFeed?: boolean; usage?: RunUsage }
-type FakeRun = { id: string; agent: string; cwd: string; prompt: string; events: RawEvent[]; state: RunState; steers: string[] }
+type FakeRun = { id: string; agent: string; cwd: string; prompt: string; readOnly?: boolean; events: RawEvent[]; state: RunState; steers: string[] }
 
 const ts = () => new Date().toISOString()
 
@@ -29,6 +29,7 @@ export function createFakeBackend() {
   }
   const backend: RunBackend = {
     id: 'example',
+    readOnlyLaunch: true,
     async launch(input) {
       const script = queue.shift() ?? fallback
       if (script.refuse) throw new Error(script.refuse)
@@ -37,6 +38,7 @@ export function createFakeBackend() {
         agent: input.agent,
         cwd: input.cwd,
         prompt: await readFile(input.promptFile, 'utf8'),
+        ...(input.readOnly ? { readOnly: true } : {}),
         // Each step is a tool start, the way CLI backends report progress; the result closes the run.
         events: (script.events ?? []).map((text) => ({ ts: ts(), type: 'tool_started', data: text })),
         state: { status: 'running', terminal: false, exitCode: null },

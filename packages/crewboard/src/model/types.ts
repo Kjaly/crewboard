@@ -1,11 +1,11 @@
 import { z } from 'zod'
 
-export const PROVIDERS = ['claude', 'codex', 'deepseek'] as const
-export type ProviderId = (typeof PROVIDERS)[number]
+/** An agent's id from the registry (src/workers/agents.ts). Journals keep it in the `provider` field. */
+export type ProviderId = string
 export const RESULT_KINDS = ['local', 'branch', 'answer', 'decision'] as const
 export type ResultKind = (typeof RESULT_KINDS)[number]
 /** Never stored: always derived from the journal (model/project.ts). `paused` belongs to a goal's root alone. */
-export type Status = 'queued' | 'running' | 'waiting_answer' | 'waiting_owner' | 'done' | 'cancelled' | 'abandoned' | 'paused'
+export type Status = 'queued' | 'running' | 'waiting_answer' | 'waiting_owner' | 'reported' | 'done' | 'cancelled' | 'abandoned' | 'paused'
 export type Actor = 'lead' | 'owner' | 'worker' | 'system'
 export const REQUEST_ACTIONS = ['clarify', 'stop', 'handoff', 'start_now', 'cancel', 'reopen', 'revive', 'discuss'] as const
 export type RequestAction = (typeof REQUEST_ACTIONS)[number]
@@ -31,7 +31,7 @@ export const goalEventSchema = z.discriminatedUnion('type', [
     title: text,
     criteria: z.array(text),
     resultKind: z.enum(RESULT_KINDS),
-    provider: z.enum(PROVIDERS),
+    provider: z.string().min(1),
     model: text.optional(),
     quote: text.optional(),
     after: z.array(z.string()),
@@ -50,14 +50,14 @@ export const goalEventSchema = z.discriminatedUnion('type', [
     runId: text,
     outcome: z.enum(['completed', 'failed', 'cancelled']),
     reason: text.optional(),
-    usage: z.object({ inputTokens: z.number().optional(), outputTokens: z.number().optional(), usd: z.number().optional(), apiUsd: z.number().optional() }).optional(),
+    usage: z.object({ inputTokens: z.number().optional(), outputTokens: z.number().optional(), usd: z.number().optional(), apiUsd: z.number().optional(), billing: z.enum(['subscription', 'api']).optional() }).optional(),
   }),
   z.object({ ...base, type: z.literal('closed'), summary: text, code: z.enum(SYSTEM_TEXTS).optional() }),
   z.object({ ...base, type: z.literal('cancelled'), reason: text, code: z.enum(SYSTEM_TEXTS).optional(), detail: text.optional() }),
-  z.object({ ...base, type: z.literal('adopted'), note: text.optional() }),
-  z.object({ ...base, type: z.literal('owner_requested'), requestId: text, action: z.enum(REQUEST_ACTIONS), text: text.optional(), provider: z.enum(PROVIDERS).optional() }),
+  z.object({ ...base, type: z.literal('adopted'), note: text.optional(), client: text.optional() }),
+  z.object({ ...base, type: z.literal('owner_requested'), requestId: text, action: z.enum(REQUEST_ACTIONS), text: text.optional(), provider: z.string().min(1).optional() }),
   z.object({ ...base, type: z.literal('request_decided'), requestId: text, decision: z.enum(['accepted', 'declined']), reason: text.optional() }),
-  z.object({ ...base, type: z.literal('reassigned'), provider: z.enum(PROVIDERS), model: text.optional() }),
+  z.object({ ...base, type: z.literal('reassigned'), provider: z.string().min(1), model: text.optional() }),
   z.object({ ...base, type: z.literal('unblocked') }),
   z.object({ ...base, type: z.literal('reopened'), note: text }),
 ])
@@ -109,5 +109,6 @@ export type Doing =
   | { kind: 'leading' }
   | { kind: 'failed'; reason?: string }
   | { kind: 'reported' }
+  | { kind: 'reported_to_parent' }
   | { kind: 'working' }
   | { kind: 'children'; done: number; total: number }

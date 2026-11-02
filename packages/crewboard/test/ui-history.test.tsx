@@ -45,8 +45,19 @@ describe('history tab', () => {
     const f = fakeApi()
     f.state.history = { available: false, truncated: false, items: [] }
     const { panel } = await openHistory(f)
-    expect(within(panel).getByText('Полный разговор недоступен: транскрипт Claude Code не найден.')).toBeTruthy()
+    expect(within(panel).getByText('Полный разговор недоступен: транскрипт ведущего не найден.')).toBeTruthy()
     expect(within(panel).getByText('Хочу кухню полного цикла')).toBeTruthy()
+  })
+
+  it('shows the course of the work from the journal when no conversation was found', async () => {
+    const f = fakeApi()
+    f.state.history = { available: true, truncated: false, source: 'journal', items: [
+      { kind: 'owner', ts: '2026-11-02T10:01:00Z', text: 'Хочу кухню полного цикла' },
+      { kind: 'assignment', ts: '2026-11-02T10:03:00Z', tool: 'assign', goalId: 'g', assignmentId: 'ux', title: 'Мобильная панель' },
+    ] }
+    const { panel } = await openHistory(f)
+    expect(within(panel).getByText('Разговор ведущего недоступен: показан ход работы из журнала Crewboard.')).toBeTruthy()
+    expect(within(panel).getByRole('button', { name: /Мобильная панель/ })).toBeTruthy()
   })
 
   it('jumps from a node to its place in the history', async () => {
@@ -68,7 +79,7 @@ describe('analytics tab', () => {
         { provider: 'codex', bars: [{ assignmentId: 'box', title: 'Модель короба', start: '2026-11-02T10:02:00Z', end: '2026-11-02T10:10:00Z', outcome: 'completed' }] },
         { provider: 'deepseek', bars: [{ assignmentId: 'pdf', title: 'Сборочная инструкция', start: '2026-11-02T10:04:00Z', end: '2026-11-02T10:09:00Z', outcome: 'completed' }] },
       ],
-      byProvider: { codex: { runs: 1, runsWithoutData: 0, usd: 0.04, apiUsd: 0.06 }, deepseek: { runs: 1, runsWithoutData: 1 } },
+      byProvider: { codex: { runs: 1, runsWithoutData: 0, subscriptionRuns: 0, usd: 0.04, apiUsd: 0.06 }, deepseek: { runs: 1, runsWithoutData: 1, subscriptionRuns: 0 } },
       byAssignment: [],
     })
     render(<App api={f.api} />)

@@ -26,7 +26,8 @@ afterEach(async () => {
 
 async function start() {
   const fake = createFakeBackend()
-  const env = { ...process.env, CREWBOARD_HOME: await mkdtemp(join(tmpdir(), 'cb-home-')) }
+  // Never read the developer's real transcripts from tests.
+  const env = { ...process.env, CREWBOARD_HOME: await mkdtemp(join(tmpdir(), 'cb-home-')), CREWBOARD_CLAUDE_PROJECTS: await mkdtemp(join(tmpdir(), 'cb-claude-')), CREWBOARD_CODEX_SESSIONS: await mkdtemp(join(tmpdir(), 'cb-codex-')), CREWBOARD_DSH_SESSIONS: await mkdtemp(join(tmpdir(), 'cb-dsh-')) }
   const app = createApp({ env, backendFor: () => async () => fake.backend, tickMs: 60_000 })
   const server = await app.listen(0)
   const client = new Client({ name: 'test-lead', version: '1.0.0' })
@@ -41,6 +42,56 @@ async function start() {
 }
 
 describe('lead over MCP', () => {
+  it('remembers which client leads the goal, and a takeover', async () => {
+    const { server, project } = await start()
+    const connect = async (name: string) => {
+      const c = new Client({ name, version: '1.0.0' })
+      await c.connect(new StreamableHTTPClientTransport(new URL(`${server.url}/mcp`)))
+      closers.push(() => c.close())
+      return async (tool: string, args: Record<string, unknown>) => JSON.parse(((await c.callTool({ name: tool, arguments: args })) as { content: Array<{ text: string }> }).content[0]!.text) as Record<string, unknown>
+    }
+    const codex = await connect('codex-mcp-client')
+    const { goalId } = (await codex('crewboard_start_goal', { project, title: 'Кухня', criteria: [] })) as { goalId: string }
+    const leadOf = async () => ((await (await fetch(`${server.url}/api/projects`)).json()) as Array<{ goals: Array<{ goalId: string; lead?: string }> }>)[0]!.goals.find((g) => g.goalId === goalId)?.lead
+    expect(await leadOf()).toBe('Codex')
+    const claude = await connect('claude-code')
+    await claude('crewboard_adopt_goal', { project, goalId })
+    expect(await leadOf()).toBe('Claude Code')
+    const events = (await (await fetch(`${server.url}/api/goals/${goalId}/events?project=${encodeURIComponent(project)}&assignmentId=${goalId}`)).json()) as GoalEvent[]
+    expect(events.find((e) => e.type === 'adopted')).toMatchObject({ client: 'claude-code' })
+    // The old lead's chat may still read the project's inbox; that does not take the goal back.
+    await fetch(`${server.url}/api/request`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ project, goalId, assignmentId: goalId, action: 'discuss' }) })
+    expect(((await codex('crewboard_inbox', { project })) as unknown as GoalEvent[]).length).toBeGreaterThan(0)
+    expect(await leadOf()).toBe('Claude Code')
+  })
+
+  it('lists the registered agents and refuses an unknown one', async () => {
+    const { server, call, project } = await start()
+    const agents = (await call('crewboard_agents', {})).json() as Array<{ id: string; readOnly: boolean }>
+    expect(agents.map((a) => a.id)).toEqual(['claude', 'codex', 'deepseek'])
+    const { goalId } = (await call('crewboard_start_goal', { project, title: 'Кухня', criteria: [] })).json() as { goalId: string }
+    const refused = await call('crewboard_assign', { project, goalId, title: 'Панель', criteria: [], resultKind: 'local', provider: 'nope' })
+    expect(refused.isError).toBe(true)
+    expect(refused.text).toContain('claude')
+    const tree = (await (await fetch(`${server.url}/api/goals/${goalId}?project=${encodeURIComponent(project)}`)).json()) as AssignmentView
+    expect(tree.children).toEqual([])
+  })
+
+  it('hands a dropped lead its unconfirmed events again', async () => {
+    const { app, server, fake, call, project } = await start()
+    fake.script({ final: '<crewboard-question>Шторка или слой?</crewboard-question>' })
+    const { goalId } = (await call('crewboard_start_goal', { project, title: 'Кухня', criteria: [] })).json() as { goalId: string }
+    await call('crewboard_assign', { project, goalId, title: 'Панель', criteria: [], resultKind: 'local', provider: 'codex' })
+    await app.tick()
+    await app.tick()
+    expect(((await call('crewboard_inbox', { project })).json() as GoalEvent[]).map((e) => e.type)).toEqual(['question'])
+    const next = new Client({ name: 'next-lead', version: '1.0.0' })
+    await next.connect(new StreamableHTTPClientTransport(new URL(`${server.url}/mcp`)))
+    closers.push(() => next.close())
+    const r = (await next.callTool({ name: 'crewboard_inbox', arguments: { project } })) as { content: Array<{ text: string }> }
+    expect((JSON.parse(r.content[0]!.text) as GoalEvent[]).map((e) => e.type)).toEqual(['question'])
+  })
+
   it('runs a goal from assignment through a question and an answer to a closed result', async () => {
     const { app, server, fake, call, project } = await start()
     fake.script({ final: '<crewboard-question>Шторка или слой?</crewboard-question>' }, { final: '<crewboard-report>Готово</crewboard-report>' })
@@ -55,6 +106,8 @@ describe('lead over MCP', () => {
     const inbox = (await call('crewboard_inbox', { project })).json() as GoalEvent[]
     expect(inbox.map((e) => e.type)).toEqual(['question'])
     expect((await call('crewboard_inbox', { project })).json()).toEqual([])
+    // What the lead already took does not wake its next wait.
+    expect((await fetch(`${server.url}/api/lead/wait?project=${encodeURIComponent(project)}&timeoutMs=200`)).status).toBe(204)
 
     await call('crewboard_answer', { project, goalId, assignmentId, text: 'Шторка' })
     expect(fake.runs[1]!.prompt).toContain('Шторка')

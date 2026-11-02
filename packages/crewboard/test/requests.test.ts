@@ -95,11 +95,8 @@ describe('owner requests decided by the lead', () => {
     expect((await t.node(later)).runId).toBeTruthy()
   })
 
-  it('stops at once without the lead only while the lead is away', async () => {
-    let clock = Date.now()
-    const t = await setup({ now: () => new Date(clock) })
-    expect((await t.post('/api/emergency-stop', { assignmentId: t.assignmentId })).status).toBe(409)
-    clock += LEAD_OFFLINE_MS + 1000
+  it('stops at once even while the lead is online', async () => {
+    const t = await setup()
     expect((await t.post('/api/emergency-stop', { assignmentId: t.assignmentId })).status).toBe(204)
     expect((await t.node()).status).toBe('cancelled')
     const inbox = await t.call<GoalEvent[]>('crewboard_inbox', { project: t.project })

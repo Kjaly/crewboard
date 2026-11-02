@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { type LaunchInput, type RunBackend, type RunUsage, cliModel } from '../backend/types.js'
 import { readRunEvents } from '../dsh/runner.js'
 import { type RunState, TERMINAL_STATUSES } from '../plan/graph.js'
-import { type CliKind, type CliRunState, type CliRunnerArgs, readCliRunState, writeJsonAtomic } from './cli-runner.js'
+import { type ClaudeAuth, type CliKind, type CliRunState, type CliRunnerArgs, readCliRunState, writeJsonAtomic } from './cli-runner.js'
 import { stateFailure } from './failure.js'
 import { startState } from './start-guard.js'
 import { steerMailName } from './steers.js'
@@ -34,6 +34,8 @@ export type CliBackendOptions = {
    * worktree instead of trusting the flag.
    */
   readOnlyLaunch?: boolean
+  /** How a Claude worker signs in (claude kind only); `native` unless asked otherwise. */
+  claudeAuth?: ClaudeAuth
   /**
    * The registered model and effort of a worker, for a caller that launches with the worker id alone (a draft, dr2):
    * without it such a launch takes the model from the id and runs at the CLI's default effort.
@@ -136,6 +138,8 @@ export function createCliBackend(o: CliBackendOptions): RunBackend {
     } catch {
       // No readable record: unverified, refused for an Anthropic route below.
     }
+    // A native Claude run signs in as the user; only an isolated run carries the API-only guard to verify.
+    if (o.kind === 'claude' && recorded.claudeAuth !== 'isolated') return
     const backend = CLI_BACKEND[o.kind]
     const model = recorded.model ?? ''
     const guarded = recorded.authChannel === 'anthropic-api-key' && recorded.policyRevision === ANTHROPIC_POLICY_REVISION
@@ -163,13 +167,15 @@ export function createCliBackend(o: CliBackendOptions): RunBackend {
       // no process is spawned, and no args file is written, unless the resolved route is the one supported
       // channel. Identity is the resolved backend/model, so an opencode/dsh Anthropic model or an unsafe
       // custom `--cloud`/`--settings` argument is refused too.
-      const route = classifyAnthropicRoute({ backend: CLI_BACKEND[o.kind], model: model ?? '', id: agent }, env, o.commandArgs ?? [])
-      if (route.applies && !route.allowed) throw new AnthropicPolicyError(route.code, route.vars)
+      const claudeAuth: ClaudeAuth | undefined = o.kind === 'claude' ? (o.claudeAuth ?? 'native') : undefined
+      const route = claudeAuth === 'native' ? undefined : classifyAnthropicRoute({ backend: CLI_BACKEND[o.kind], model: model ?? '', id: agent }, env, o.commandArgs ?? [])
+      if (route?.applies && !route.allowed) throw new AnthropicPolicyError(route.code, route.vars)
       // The non-secret channel/revision go into args.json (never a secret), so a later steer can tell this
       // guarded run apart from an old child whose credential cannot be verified.
-      const guard = route.applies && route.allowed ? { authChannel: route.channel, policyRevision: route.policyRevision } : {}
+      const guard = route?.applies && route.allowed ? { authChannel: route.channel, policyRevision: route.policyRevision } : {}
       const args: CliRunnerArgs = {
         kind: o.kind,
+        ...(claudeAuth ? { claudeAuth } : {}),
         runDir,
         cwd,
         promptFile,
@@ -219,6 +225,7 @@ export function createCliBackend(o: CliBackendOptions): RunBackend {
         : { value: u.cacheWriteTokens, state: cacheWriteState, observedAt: s.usageObservedAt ?? s.finishedAt, source: `${o.kind}_cli`, final: s.status !== 'running' }
       return {
         ...(s.sessionId ? { sessionId: s.sessionId } : {}),
+        ...(s.billing ? { billing: s.billing } : {}),
         calls: u.calls,
         inputTokens: u.inputTokens,
         outputTokens: u.outputTokens,

@@ -36,6 +36,7 @@ On a phone the context opens as a sheet from the bottom.
 | Running | a worker is at it |
 | Waiting for the lead | the worker asked, reported, or its run failed: the lead's move |
 | Waiting for you | the lead raised a question to you |
+| Reported | a part a worker split off has handed its result to that worker; it turns Done when the lead closes the parent |
 | Done | the lead closed it against the criteria |
 | Cancelled | stopped, with the reason |
 | Abandoned | its parent finished, or nothing happened for a day after its run ended |
@@ -58,11 +59,11 @@ The actions follow the status:
 | Bring back | it was cancelled or abandoned, and its parent is not finished |
 | Discuss with the lead | always |
 
-Each is a request to the lead. The node shows "Requested: …. The lead is deciding", then the result, or "The lead declined: …" with the reason.
+**Hand over** offers every other agent from the [registry](workers.md#your-agents). Each action is a request to the lead. The node shows "Requested: …. The lead is deciding", then the result, or "The lead declined: …" with the reason.
 
 **Discuss with the lead** copies a ready message about the node to paste into the chat, and lets the lead know.
 
-**Emergency stop** appears only while the lead is away, and asks for a second click.
+**Emergency stop** is there on any running work and asks for a second click. It does not wait for the lead, and the lead hears about it in its inbox. While the lead is offline, the screen notes that a request may get no answer.
 
 ### Keys
 
@@ -75,9 +76,9 @@ With the tree focused: **↑ ↓** move, **U** clarify, **S** stop, **P** hand o
   <img alt="The History tab: the conversation with the lead and the assignments it handed out." src="../assets/en/history-light.png">
 </picture>
 
-The whole conversation with the lead, read from Claude Code's transcripts: your messages, the lead's answers, assignments as cards with their live status (a card opens the node), and the lead's other tool calls folded into a count. Text Claude Code injects itself (skill bodies, notifications, compaction summaries) is left out. Every chat that touched the goal is shown, in order.
+The whole conversation with the lead, read from the lead's own transcripts (Claude Code, Codex or dsh): your messages, the lead's answers, assignments as cards with their live status (a card opens the node), and the lead's other tool calls folded into a count. Text the client injects itself (skill bodies, environment blocks, notifications, compaction summaries) is left out. Every chat that touched the goal is shown, in order, even when a different client took the goal over.
 
-When no transcript is found, the tab says so and lists the messages the assignments came from.
+For a lead whose transcripts Crewboard cannot read, the tab shows the course of the work from Crewboard's own journal instead, and says so: your messages it saw, the lead's assignments and decisions, and each takeover with the new lead's name.
 
 ## Analytics
 

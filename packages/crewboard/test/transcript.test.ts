@@ -51,7 +51,9 @@ async function fixture() {
     result('sess-other', 21, 'o1', '{"goalId":"g2"}'),
   ]))
   await writeFile(join(dir, 'broken.jsonl'), '{"type":"user","message":{"content":"g1 обрыв\n{не json}\n')
-  return { root, repo, dir, history: createHistory({ env: { CREWBOARD_CLAUDE_PROJECTS: root } }) }
+  // Never read the developer's real Codex sessions from tests.
+  const noCodex = await mkdtemp(join(tmpdir(), 'cb-codex-none-'))
+  return { root, repo, dir, history: createHistory({ env: { CREWBOARD_CLAUDE_PROJECTS: root, CREWBOARD_CODEX_SESSIONS: noCodex, CREWBOARD_DSH_SESSIONS: noCodex } }) }
 }
 
 describe('transcripts', () => {
@@ -127,3 +129,117 @@ describe('transcripts', () => {
   })
 })
 
+
+// Codex rollout lines in the shape Codex CLI 0.160–0.166 writes them (checked on real files, 2026-11-02).
+const cx = {
+  meta: (min: number, id: string, cwd: string) => ({ timestamp: at(min), type: 'session_meta', payload: { id, cwd, originator: 'codex_cli_rs', cli_version: '0.160.0' } }),
+  msg: (min: number, role: 'user' | 'assistant', text: string) => ({ timestamp: at(min), type: 'response_item', payload: { type: 'message', role, content: [{ type: role === 'user' ? 'input_text' : 'output_text', text }] } }),
+  call: (min: number, id: string, tool: string, args: unknown) => ({ timestamp: at(min), type: 'response_item', payload: { type: 'function_call', namespace: 'mcp__crewboard', name: `crewboard_${tool}`, arguments: JSON.stringify(args), call_id: id } }),
+  out: (min: number, id: string, text: string) => ({ timestamp: at(min), type: 'response_item', payload: { type: 'function_call_output', call_id: id, output: text } }),
+  // Codex in code mode calls MCP tools from JavaScript inside its `exec` tool (seen with Codex CLI 0.160, 2026-11-02).
+  exec: (min: number, id: string, code: string) => ({ timestamp: at(min), type: 'response_item', payload: { type: 'custom_tool_call', status: 'completed', call_id: id, name: 'exec', input: code } }),
+  execOut: (min: number, id: string, text: string) => ({ timestamp: at(min), type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: id, output: [{ type: 'input_text', text: 'Script completed\nOutput:\n' }, { type: 'input_text', text }] } }),
+}
+
+async function codexFixture(extra?: { claude?: boolean }) {
+  const base = await fixture()
+  const sessions = await mkdtemp(join(tmpdir(), 'cb-codex-'))
+  const day = join(sessions, '2026', '11', '02')
+  await mkdir(day, { recursive: true })
+  const file = join(day, 'rollout-2026-11-02T10-40-00-codex-1.jsonl')
+  await writeFile(file, lines([
+    cx.meta(40, 'codex-1', base.repo),
+    cx.msg(40, 'user', '<environment_context>\n  <cwd>/repo</cwd>\n</environment_context>'),
+    cx.msg(41, 'user', 'Нужен раздел Usage'),
+    cx.msg(42, 'assistant', 'Поручу черновик Codex.'),
+    cx.call(43, 'c1', 'assign', { project: base.repo, goalId: 'g1', title: 'Раздел Usage', criteria: [], resultKind: 'local', provider: 'codex' }),
+    cx.out(43, 'c1', '{"assignmentId":"a-2"}'),
+    { timestamp: at(44), type: 'turn_context', payload: { cwd: base.repo } },
+  ]) + '{не json}\n')
+  await writeFile(join(day, 'rollout-elsewhere.jsonl'), lines([cx.meta(45, 'codex-2', '/somewhere/else'), cx.call(45, 'e1', 'assign', { goalId: 'g1', title: 'Чужое' })]))
+  const read: string[] = []
+  const env = { ...(extra?.claude === false ? {} : { CREWBOARD_CLAUDE_PROJECTS: base.root }), CREWBOARD_CODEX_SESSIONS: sessions, CREWBOARD_DSH_SESSIONS: sessions }
+  return { ...base, file, history: createHistory({ env, onRead: (f) => { read.push(f) } }), reads: () => read.length, readFiles: () => read }
+}
+
+describe('Codex transcripts', () => {
+  it('reads crewboard calls Codex makes from code inside its exec tool', async () => {
+    const { repo, root } = await fixture()
+    const sessions = await mkdtemp(join(tmpdir(), 'cb-codex-exec-'))
+    const day = join(sessions, '2026', '11', '02')
+    await mkdir(day, { recursive: true })
+    await writeFile(join(day, 'rollout-exec.jsonl'), lines([
+      cx.meta(60, 'codex-exec', repo),
+      cx.msg(60, 'user', 'Проверь README'),
+      cx.exec(61, 'x1', `const result = await tools.mcp__crewboard__crewboard_start_goal({project:"${repo}", title:"Readme check", criteria:["One sentence"]});\ntext(result);`),
+      cx.execOut(61, 'x1', '{"content":[{"type":"text","text":"{\\"goalId\\":\\"g9\\"}"}]}'),
+      cx.exec(62, 'x2', `text(await tools.mcp__crewboard__crewboard_assign({project:"${repo}", goalId:"g9", provider:"codex", title:"Summarise the README", criteria:["One sentence"]}));`),
+      cx.execOut(62, 'x2', '{"content":[{"type":"text","text":"{\\"assignmentId\\":\\"a-9\\"}"}]}'),
+    ]))
+    const history = createHistory({ env: { CREWBOARD_CLAUDE_PROJECTS: root, CREWBOARD_CODEX_SESSIONS: sessions, CREWBOARD_DSH_SESSIONS: sessions } })
+    const h = await history.goalHistory(repo, 'g9')
+    expect(h.source).toBe('transcript')
+    expect(h.items.find((i) => i.kind === 'assignment' && i.tool === 'assign')).toMatchObject({ assignmentId: 'a-9', title: 'Summarise the README' })
+    expect(h.items.some((i) => i.kind === 'owner' && i.text === 'Проверь README')).toBe(true)
+  })
+
+  it('reads a Codex conversation into the goal history, without its service messages', async () => {
+    const { history, repo } = await codexFixture()
+    const h = await history.goalHistory(repo, 'g1')
+    const words = h.items.flatMap((i) => (i.kind === 'owner' || i.kind === 'lead' ? [`${i.kind}:${i.text}`] : []))
+    expect(words).toEqual(expect.arrayContaining(['owner:Нужен раздел Usage', 'lead:Поручу черновик Codex.']))
+    expect(words.some((w) => w.includes('environment_context'))).toBe(false)
+    expect(h.items.find((i) => i.kind === 'assignment' && i.title === 'Раздел Usage')).toMatchObject({ assignmentId: 'a-2' })
+    expect(h.items.some((i) => i.kind === 'assignment' && i.title === 'Чужое')).toBe(false)
+  })
+
+  it('merges a Claude Code and a Codex conversation of one goal in time order', async () => {
+    const { history, repo } = await codexFixture()
+    const h = await history.goalHistory(repo, 'g1')
+    expect(h.items.filter((i) => i.kind === 'session').map((i) => (i.kind === 'session' ? i.sessionId : ''))).toEqual(['sess-a', 'sess-b', 'codex-1'])
+  })
+
+  it('does not read a Codex session of another folder in full', async () => {
+    const { history, repo, readFiles } = await codexFixture()
+    await history.goalHistory(repo, 'g1')
+    expect(readFiles().filter((f) => f.includes('rollout-elsewhere'))).toEqual([])
+  })
+
+  it('does not read an unchanged Codex file again', async () => {
+    const { history, repo, reads } = await codexFixture()
+    await history.goalHistory(repo, 'g1')
+    const first = reads()
+    expect(first).toBeGreaterThan(0)
+    await history.goalHistory(repo, 'g1')
+    expect(reads()).toBe(first)
+  })
+})
+
+// dsh session lines in the shape dsh 0.1.5 writes them (session.v3, zstd frames; checked on real sessions, 2026-11-02).
+const ms = (min: number) => Date.UTC(2026, 10, 2, 10, min)
+const dshRows = (repo: string) => [
+  { type: 'session', version: 3, id: 'dsh-1', createdAt: ms(50), cwd: repo },
+  { type: 'user/message', seq: 1, time: ms(50), data: { content: [{ type: 'text', text: 'Сделай changelog' }] } },
+  { type: 'assistant/message', seq: 2, time: ms(51), data: { message: { role: 'assistant', content: [{ type: 'reasoning', text: 'думаю' }, { type: 'text', text: 'Поручу Codex.' }] } } },
+  { type: 'tool/call', seq: 3, time: ms(52), data: { callId: 'd1', name: 'mcp__crewboard__crewboard_assign', arguments: JSON.stringify({ goalId: 'g1', title: 'Changelog', provider: 'codex' }) } },
+  { type: 'tool/result', seq: 4, time: ms(52), data: { message: { source: { kind: 'tool', callId: 'd1' }, content: [{ type: 'tool-result', toolCallId: 'd1', content: [{ type: 'text', text: '{"assignmentId":"a-3"}' }] }] } } },
+]
+
+describe('dsh transcripts', () => {
+  it('reads a dsh conversation, in several zstd frames with a torn tail, into the goal history', async () => {
+    const { repo, root } = await fixture()
+    const sessions = await mkdtemp(join(tmpdir(), 'cb-dsh-'))
+    const dir = join(sessions, '--work-kitchen-app--', 'dsh-1')
+    await mkdir(dir, { recursive: true })
+    const rows = dshRows(repo).map((r) => `${JSON.stringify(r)}\n`)
+    const { zstdCompressSync } = await import('node:zlib')
+    const frames = Buffer.concat([zstdCompressSync(rows.slice(0, 2).join('')), zstdCompressSync(rows.slice(2).join('')), Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x01])])
+    await writeFile(join(dir, 'session.v3.jsonl.zstd'), frames)
+    const history = createHistory({ env: { CREWBOARD_CLAUDE_PROJECTS: root, CREWBOARD_CODEX_SESSIONS: sessions, CREWBOARD_DSH_SESSIONS: sessions } })
+    const h = await history.goalHistory(repo, 'g1')
+    const words = h.items.flatMap((i) => (i.kind === 'owner' || i.kind === 'lead' ? [`${i.kind}:${i.text}`] : []))
+    expect(words).toEqual(expect.arrayContaining(['owner:Сделай changelog', 'lead:Поручу Codex.']))
+    expect(words.some((w) => w.includes('думаю'))).toBe(false)
+    expect(h.items.find((i) => i.kind === 'assignment' && i.title === 'Changelog')).toMatchObject({ assignmentId: 'a-3' })
+  })
+})

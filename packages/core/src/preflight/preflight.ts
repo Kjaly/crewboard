@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { crewboardEnv } from '../env.js'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { Exec } from '../exec.js'
@@ -119,9 +120,11 @@ export async function preflightAgent(profile: AgentProfile, deps: PreflightDeps,
       const v = await sh(bin('claude'), ['--version'])
       const versionText = (v.stdout || v.stderr).trim()
       checks.push({ name: 'binary', ok: v.code === 0, detail: versionText || tx('notFound'), fix: tx('installClaude') })
-      // The API-only route needs `--bare`, so the floor is the model's minimum raised by the policy floor.
+      // The isolated route needs `--bare`, so its floor is the model's minimum raised by the policy floor; the default
+      // route (the user's own sign-in) needs only the model's minimum.
+      const isolated = crewboardEnv(deps.env ?? process.env, 'CREWBOARD_CLAUDE_AUTH') === 'isolated'
       const announced = profile.minCliVersion
-      const minimum = announced && compareSemver(announced, CLAUDE_CODE_BARE_MIN) > 0 ? announced : CLAUDE_CODE_BARE_MIN
+      const minimum = !isolated ? (announced ?? '0.0.0') : announced && compareSemver(announced, CLAUDE_CODE_BARE_MIN) > 0 ? announced : CLAUDE_CODE_BARE_MIN
       const version = /(\d+\.\d+\.\d+)/.exec(versionText)?.[1]
       const ok = version !== undefined && compareSemver(version, minimum) >= 0
       const vars = { version: version ?? '', minimum, model: profile.model }
@@ -131,6 +134,8 @@ export async function preflightAgent(profile: AgentProfile, deps: PreflightDeps,
         detail: tx(version === undefined ? 'versionUnknown' : ok ? 'versionOk' : 'versionOld', vars),
         fix: tx('updateClaude'),
       })
+      // The default runs Claude Code as the user, with their own sign-in: only the isolated route has a channel to check.
+      if (!isolated) break
       // `--bare` never reads OAuth credentials or the OS keychain; an older CLI that lacks it cannot take the
       // API-only route. A live `--help` is a capability check, not a credential read.
       const h = await sh(bin('claude'), ['--help'])

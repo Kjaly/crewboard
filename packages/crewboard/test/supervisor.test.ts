@@ -11,6 +11,7 @@ import { runsDir } from '../src/store/paths.js'
 import { createSupervisor, gitWorktree } from '../src/supervisor.js'
 import { createPool } from '../src/workers/pool.js'
 import { createFakeBackend } from './fake-backend.js'
+import { createAgents } from '../src/workers/agents.js'
 
 async function gitRepo(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'cb-sup-'))
@@ -22,11 +23,11 @@ async function gitRepo(): Promise<string> {
   return dir
 }
 
-async function setup(fake = createFakeBackend(), repo?: string) {
+async function setup(fake = createFakeBackend(), repo?: string, agents?: ReturnType<typeof createAgents>) {
   const root = repo ?? (await gitRepo())
   const store = createEventStore(root)
   const pool = createPool({ backendFor: async () => fake.backend, runsDir: runsDir(root) })
-  const sup = createSupervisor({ repo: root, store, pool, now: () => new Date(), worktree: gitWorktree })
+  const sup = createSupervisor({ repo: root, store, pool, now: () => new Date(), worktree: gitWorktree, ...(agents ? { agents } : {}) })
   return { root, store, pool, sup, fake }
 }
 
@@ -42,6 +43,71 @@ const statusOf = async (store: ReturnType<typeof createEventStore>, id: string) 
 const typesOf = async (store: ReturnType<typeof createEventStore>, id: string) => (await store.read('g')).filter((e) => e.assignmentId === id).map((e) => e.type)
 
 describe('supervisor', () => {
+  it('launches a registered agent through its core id', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'cb-agents-'))
+    await writeFile(join(home, 'agents.json'), JSON.stringify({ agents: { kimi: { label: 'Kimi', run: 'dsh', model: 'moonshot/kimi-k3' } } }))
+    const { store, sup, fake } = await setup(undefined, undefined, createAgents({ CREWBOARD_HOME: home }))
+    fake.setFallback({ hold: true })
+    await goal(store)
+    await store.append('g', assign('a', { provider: 'kimi' }))
+    await sup.tick()
+    expect(fake.runs[0]?.agent).toBe('dsh/moonshot/kimi-k3')
+  })
+
+  it('leaves queued work waiting while the agent registry file is broken, and starts it once fixed', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'cb-agents-'))
+    const file = join(home, 'agents.json')
+    await writeFile(file, '{ "agents": { "kimi": ')
+    const { store, sup, fake } = await setup(undefined, undefined, createAgents({ CREWBOARD_HOME: home }))
+    fake.setFallback({ hold: true })
+    await goal(store)
+    await store.append('g', assign('a'))
+    await sup.tick()
+    expect(fake.runs.length).toBe(0)
+    expect(await typesOf(store, 'a')).toEqual(['assigned'])
+    await writeFile(file, '{ "agents": {} }')
+    await sup.tick()
+    expect(fake.runs.length).toBe(1)
+  })
+
+  it('records a failed run for an agent no longer registered', async () => {
+    const { store, sup, fake } = await setup()
+    await goal(store)
+    await store.append('g', assign('a', { provider: 'gone' }))
+    await sup.tick()
+    expect(fake.runs.length).toBe(0)
+    const ended = (await store.read('g')).find((e) => e.type === 'run_ended')
+    expect(ended).toMatchObject({ outcome: 'failed', reason: expect.stringContaining('gone') })
+  })
+
+  it('gives a queued assignment the clarifications sent while it waited', async () => {
+    const { store, sup, fake } = await setup()
+    fake.setFallback({ hold: true })
+    await goal(store)
+    await store.append('g', assign('a'))
+    await store.append('g', assign('b', { after: ['a'] }))
+    await sup.tick()
+    await store.append('g', { type: 'steered', goalId: 'g', assignmentId: 'b', actor: 'lead', text: 'use metric units' })
+    expect(await sup.deliver('g', 'b', 'Clarification from the lead: use metric units')).toBe('recorded')
+    await store.append('g', { type: 'closed', goalId: 'g', assignmentId: 'a', actor: 'lead', summary: 'ok' })
+    await sup.tick()
+    const run = fake.runs.find((r) => r.prompt.includes('Assignment: b'))
+    expect(run?.prompt).toContain('use metric units')
+  })
+
+  it.each([
+    ['answer', true],
+    ['decision', true],
+    ['local', false],
+  ] as const)('launches %s work read-only: %s', async (resultKind, readOnly) => {
+    const { store, sup, fake } = await setup()
+    fake.setFallback({ hold: true })
+    await goal(store)
+    await store.append('g', assign('a', { resultKind }))
+    await sup.tick()
+    expect(fake.runs[0]?.readOnly ?? false).toBe(readOnly)
+  })
+
   it('starts queued work with the provider agent', async () => {
     const { store, sup, fake } = await setup()
     fake.setFallback({ hold: true })

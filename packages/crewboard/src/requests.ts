@@ -1,14 +1,8 @@
 import { randomBytes } from 'node:crypto'
 import type { ProjectContext } from './app.js'
 import { availableActions, flatten, isTerminal } from './model/project.js'
-import { LEAD_OFFLINE_MS } from './model/thresholds.js'
 import type { AssignmentView, ProviderId, RequestAction } from './model/types.js'
 import { BadRequestError, ConflictError, goalTree } from './owner.js'
-
-const leadOnline = async (ctx: ProjectContext, goalId: string, now: Date) => {
-  const seen = (await ctx.store.readMeta(goalId))?.leadLastSeen
-  return seen !== undefined && now.getTime() - new Date(seen).getTime() <= LEAD_OFFLINE_MS
-}
 
 const findNode = async (ctx: ProjectContext, goalId: string, assignmentId: string, now: Date): Promise<AssignmentView> => {
   const node = flatten(await goalTree(ctx, goalId, now)).find((n) => n.id === assignmentId)
@@ -21,7 +15,7 @@ export function requestAsOwner(ctx: ProjectContext, i: { goalId: string; assignm
   return ctx.exclusive(async (c) => {
     const node = await findNode(c, i.goalId, i.assignmentId, now)
     if (node.request?.state === 'pending' && i.action !== 'discuss') throw new ConflictError('a request for this assignment already waits for the lead')
-    if (!availableActions(node, true).includes(i.action)) throw new ConflictError(`${i.action} is not available while the assignment is ${node.status}`)
+    if (!availableActions(node).includes(i.action)) throw new ConflictError(`${i.action} is not available while the assignment is ${node.status}`)
     if ((i.action === 'clarify' || i.action === 'reopen' || i.action === 'revive') && !i.text?.trim()) throw new BadRequestError('text is required')
     if (i.action === 'handoff' && (!i.provider || i.provider === node.provider)) throw new BadRequestError('handoff needs another provider')
     const requestId = `r-${randomBytes(3).toString('hex')}`
@@ -33,13 +27,12 @@ export function requestAsOwner(ctx: ProjectContext, i: { goalId: string; assignm
   })
 }
 
-/** The one action without the lead's decision: allowed only while the lead is away, recorded and told to the lead. */
+/** The one action without the lead's decision: always allowed on running work, recorded and told to the lead. */
 export function emergencyStop(ctx: ProjectContext, i: { goalId: string; assignmentId: string }, now: Date): Promise<void> {
   return ctx.exclusive(async (c) => {
     const node = await findNode(c, i.goalId, i.assignmentId, now)
-    if (await leadOnline(c, i.goalId, now)) throw new ConflictError('the lead is online; ask it to stop the work')
-    if (!availableActions(node, false).includes('emergency_stop')) throw new ConflictError(`nothing runs on an assignment that is ${node.status}`)
-    await c.supervisor.cancelTree(i.goalId, i.assignmentId, 'Emergency stop by the owner: the lead was offline', 'owner', 'emergency_stop')
+    if (!availableActions(node).includes('emergency_stop')) throw new ConflictError(`nothing runs on an assignment that is ${node.status}`)
+    await c.supervisor.cancelTree(i.goalId, i.assignmentId, 'Emergency stop by the owner', 'owner', 'emergency_stop')
   })
 }
 
@@ -60,7 +53,7 @@ export function decideRequest(ctx: ProjectContext, i: { goalId: string; assignme
       await decided({ reason: i.reason.trim() })
       return
     }
-    if (!availableActions({ ...node, request: undefined }, true).includes(asked.action)) throw new ConflictError(`cannot ${asked.action}: the assignment is ${node.status}`)
+    if (!availableActions({ ...node, request: undefined }).includes(asked.action)) throw new ConflictError(`cannot ${asked.action}: the assignment is ${node.status}`)
     // The decision is recorded before the effect: if the effect fails, the request reads as accepted (the owner can
     // ask again) instead of staying pending with half an effect applied and the node locked.
     await decided()

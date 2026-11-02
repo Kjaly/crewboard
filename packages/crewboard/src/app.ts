@@ -7,7 +7,10 @@ import { goalAnalytics } from './analytics.js'
 import { claudeProjectsRoot } from './history/paths.js'
 import { createHistory } from './history/sessions.js'
 import { createLive } from './live.js'
-import { REQUEST_ACTIONS, PROVIDERS, type ProviderId, type RequestAction } from './model/types.js'
+import { REQUEST_ACTIONS, type ProviderId, type RequestAction } from './model/types.js'
+import { createAgents } from './workers/agents.js'
+import { type AgentReadiness, checkAgents } from './doctor.js'
+import { type Exec, nodeExec } from '@crewboard/core'
 import { BadRequestError, ConflictError, answerAsOwner, goalTree, nodeEvents, summarize } from './owner.js'
 import { emergencyStop, requestAsOwner } from './requests.js'
 import { createHttpServer } from './server.js'
@@ -53,15 +56,22 @@ async function resolveRepo(path: string): Promise<string> {
 async function waitPending(ctx: ProjectContext, timeoutMs: number): Promise<number> {
   const until = Date.now() + timeoutMs
   for (;;) {
-    const pending = (await ctx.inbox.pending()).length
+    const pending = (await ctx.inbox.unseen()).length
     if (pending > 0 || Date.now() >= until) return pending
     await new Promise((r) => setTimeout(r, Math.min(500, Math.max(0, until - Date.now()))))
   }
 }
 
-export function createApp(o: { env: NodeJS.ProcessEnv; backendFor: (repo: string) => BackendFor; now?: () => Date; tickMs?: number; uiDir?: string }) {
+export function createApp(o: { env: NodeJS.ProcessEnv; backendFor: (repo: string) => BackendFor; now?: () => Date; tickMs?: number; uiDir?: string; exec?: Exec }) {
   const now = o.now ?? (() => new Date())
   const registry = createRegistry(o.env)
+  const agents = createAgents(o.env)
+  // Worker readiness runs real CLIs: kept for a minute, so the screen does not start them on every look.
+  let readiness: { at: number; result: Promise<AgentReadiness[]> } | undefined
+  const doctor = (): Promise<AgentReadiness[]> => {
+    if (!readiness || Date.now() - readiness.at > 60_000) readiness = { at: Date.now(), result: checkAgents({ agents, env: o.env, exec: o.exec ?? nodeExec }) }
+    return readiness.result
+  }
   const projects = new Map<string, Promise<ProjectContext>>()
   const live = createLive()
   const history = createHistory({ env: o.env })
@@ -79,7 +89,7 @@ export function createApp(o: { env: NodeJS.ProcessEnv; backendFor: (repo: string
         repo,
         store,
         inbox: createInbox(store),
-        supervisor: createSupervisor({ repo, store, pool, now, worktree: gitWorktree }),
+        supervisor: createSupervisor({ repo, store, pool, now, worktree: gitWorktree, agents }),
         exclusive(fn) {
           const next = chain.then(() => fn(ctx))
           chain = next.catch(() => undefined)
@@ -104,7 +114,7 @@ export function createApp(o: { env: NodeJS.ProcessEnv; backendFor: (repo: string
     if (typeof v !== 'string') throw new BadRequestError(`${name} is required`)
     return v
   }
-  const commands = createLeadCommands(projectOf, now)
+  const commands = createLeadCommands(projectOf, now, agents)
 
   const tick = async () => {
     for (const repo of await registry.list()) {
@@ -143,6 +153,10 @@ export function createApp(o: { env: NodeJS.ProcessEnv; backendFor: (repo: string
       const repos = await registry.list()
       return Promise.all(repos.map(async (repo) => summarize(await open(repo), now())))
     },
+    doctor,
+    async agents() {
+      return (await agents.list()).map((a) => ({ id: a.id, label: a.label, ...(a.color ? { color: a.color } : {}) }))
+    },
     async analytics(project, goalId) {
       const ctx = await projectOf(project)
       await goalTree(ctx, goalId, now())
@@ -151,7 +165,7 @@ export function createApp(o: { env: NodeJS.ProcessEnv; backendFor: (repo: string
     async history(project, goalId) {
       const ctx = await projectOf(project)
       await goalTree(ctx, goalId, now())
-      return history.goalHistory(ctx.repo, goalId)
+      return history.goalHistory(ctx.repo, goalId, (await ctx.store.readMeta(goalId))?.createdAt, await ctx.store.read(goalId))
     },
     async events(project, goalId, assignmentId) {
       return nodeEvents(await projectOf(project), goalId, assignmentId)
@@ -161,7 +175,7 @@ export function createApp(o: { env: NodeJS.ProcessEnv; backendFor: (repo: string
       const action = str(body.action, 'action')
       if (!(REQUEST_ACTIONS as readonly string[]).includes(action)) throw new BadRequestError(`unknown action ${action}`)
       const provider = typeof body.provider === 'string' ? body.provider : undefined
-      if (provider && !(PROVIDERS as readonly string[]).includes(provider)) throw new BadRequestError(`unknown provider ${provider}`)
+      if (provider && !(await agents.get(provider))) throw new BadRequestError(`unknown provider ${provider}`)
       return requestAsOwner(ctx, {
         goalId: str(body.goalId, 'goalId'), assignmentId: str(body.assignmentId, 'assignmentId'), action: action as RequestAction,
         ...(typeof body.text === 'string' ? { text: body.text } : {}), ...(provider ? { provider: provider as ProviderId } : {}),
@@ -180,6 +194,7 @@ export function createApp(o: { env: NodeJS.ProcessEnv; backendFor: (repo: string
 
   return {
     commands,
+    doctor,
     tick,
     sweepSessions: () => http.sweep(),
     mcpSessions: () => http.sessionCount(),

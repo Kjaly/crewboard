@@ -4,7 +4,7 @@ title: Crewboard
 hero:
   name: "Crewboard"
   text: "Lead your coding agents from one chat"
-  tagline: "You talk to Claude Code. It hands work to Codex, Claude and DeepSeek through Crewboard, and the screen shows what is happening right now."
+  tagline: "You talk to your usual agent chat — Claude Code, Codex, dsh. It hands work through Crewboard to Codex, Claude, DeepSeek or any agent you register, and the screen shows what is happening right now."
   actions:
     - theme: brand
       text: "Get started"
@@ -20,7 +20,7 @@ features:
   - title: Steer without taking over
     details: "Clarify, stop, hand over or reopen from the tree. Every action is a request the lead decides, and you argue with it in chat."
   - title: History and costs
-    details: "The whole conversation with the lead from Claude Code's own transcripts, provider lanes over time and what each run cost."
+    details: "The whole conversation with the lead from its own transcripts, provider lanes over time and what each run cost."
 ---
 
 <div class="home-media">

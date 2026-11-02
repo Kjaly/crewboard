@@ -27,6 +27,7 @@ export function Sidebar(props: { projects: ProjectSummary[]; project?: string; g
                     <span className="goal-meta">
                       {g.counts.waiting_owner > 0 && <span className="pill">{g.counts.waiting_owner}</span>}
                       <span>{busy > 0 ? T.inWork(busy) : g.counts.finished > 0 ? T.allFinished : ''}</span>
+                      {g.lead && <span className="lead">{g.lead}</span>}
                       {!g.leadOnline && <span className="away">{T.leadAway}</span>}
                     </span>
                   </button>

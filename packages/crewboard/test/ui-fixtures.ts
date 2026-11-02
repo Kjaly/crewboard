@@ -1,6 +1,6 @@
 import type { AssignmentView, GoalEvent, Status } from '../src/model/types.js'
 import type { ProjectSummary } from '../src/owner.js'
-import type { Api } from '../src/ui/api.js'
+import type { Api, AgentBadge } from '../src/ui/api.js'
 import type { LiveChange } from '../src/live.js'
 import type { GoalHistory } from '../src/history/sessions.js'
 
@@ -17,8 +17,10 @@ export const kitchen = (): AssignmentView =>
   ])
 
 /** An `Api` in memory: tests change `tree`/`projects`, then `emit` a live change or a connection status. */
-export function fakeApi(init: { projects?: ProjectSummary[]; tree?: AssignmentView; events?: Record<string, GoalEvent[]> } = {}) {
+export function fakeApi(init: { projects?: ProjectSummary[]; tree?: AssignmentView; events?: Record<string, GoalEvent[]>; agents?: AgentBadge[] } = {}) {
   const state = {
+    doctor: [] as Array<{ id: string; label: string; ok: boolean; checks: Array<{ name: string; ok: boolean; detail: string; fix?: string }> }>,
+    agents: init.agents ?? [{ id: 'claude', label: 'Claude' }, { id: 'codex', label: 'Codex' }, { id: 'deepseek', label: 'DeepSeek' }],
     tree: init.tree ?? kitchen(),
     projects: init.projects ?? [{ repo: '/repo/cabinet', name: 'cabinet', goals: [{ goalId: 'g', title: 'Кухня полного цикла', createdAt: '2026-11-02T10:00:00Z', status: 'running' as Status, leadOnline: true, counts: { waiting_owner: 1, running: 2, queued: 1, finished: 1 } }] }],
     events: init.events ?? {},
@@ -41,6 +43,12 @@ export function fakeApi(init: { projects?: ProjectSummary[]; tree?: AssignmentVi
   let onChange: ((c: LiveChange) => void) | undefined
   let onStatus: ((online: boolean) => void) | undefined
   const api: Api = {
+    async agents() {
+      return state.agents
+    },
+    async doctor() {
+      return state.doctor
+    },
     async projects() {
       state.calls.projects += 1
       return state.projects

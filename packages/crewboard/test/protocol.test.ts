@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createPool } from '../src/workers/pool.js'
 import { parseOutcome, workerPrompt } from '../src/workers/protocol.js'
-import { agentFor } from '../src/workers/providers.js'
+import { builtinAgents } from '../src/workers/agents.js'
 import { createFakeBackend } from './fake-backend.js'
 
 describe('parseOutcome', () => {
@@ -27,6 +27,11 @@ describe('parseOutcome: split', () => {
     expect(parseOutcome(input)).toEqual(expected)
   })
 
+  it('names a part after a registered agent the worker chose', () => {
+    const out = parseOutcome('<crewboard-split>\n- [kimi] Тесты\n</crewboard-split>', new Set(['claude', 'codex', 'deepseek', 'kimi']))
+    expect(out.kind === 'split' && out.parts).toEqual([{ title: 'Тесты', criteria: [], provider: 'kimi' }])
+  })
+
   it('keeps every listed part; the supervisor caps the count', () => {
     const lines = Array.from({ length: 30 }, (_, i) => `- Часть ${i + 1}`).join('\n')
     const out = parseOutcome(`<crewboard-split>\n${lines}\n</crewboard-split>`)
@@ -46,15 +51,15 @@ describe('workerPrompt', () => {
   })
 })
 
-describe('agentFor', () => {
+describe('built-in agents', () => {
   it.each([
     ['claude', undefined, 'claude/sonnet'],
     ['claude', 'opus', 'claude/opus'],
     ['codex', undefined, 'codex/gpt-6.1-sol'],
     ['deepseek', undefined, 'dsh/deepseek-flash'],
     ['deepseek', 'deepseek-pro', 'dsh/deepseek-pro'],
-  ] as const)('%s %s', (provider, model, expected) => {
-    expect(agentFor(provider, model)).toBe(expected)
+  ] as const)('%s %s', async (provider, model, expected) => {
+    expect(builtinAgents.coreId((await builtinAgents.get(provider))!, model)).toBe(expected)
   })
 })
 

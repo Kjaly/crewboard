@@ -25,6 +25,8 @@ export type CliRunState = {
   startedAt: string
   finishedAt?: string
   sessionId?: string
+  /** How the Claude session pays, as its `init` event says: the user's plan or a key. */
+  billing?: 'subscription' | 'api'
   error?: string
   /**
    * The non-secret auth channel the launch resolved and the policy revision that allowed it: how a new
@@ -56,7 +58,15 @@ export type CliRunState = {
  * `readOnly` (dr2): Claude runs in plan permission mode, Codex in its read-only sandbox — neither can change `cwd`.
  * `effort` (ef1): Claude's `--effort`, Codex's `model_reasoning_effort`; absent — the CLI's default.
  */
-export type CliRunnerArgs = { kind: CliKind; runDir: string; cwd: string; promptFile: string; model?: string; effort?: string; command: string; commandArgs?: string[]; background?: BackgroundTiming; readOnly?: boolean; commitRequired?: boolean; /** Non-secret: the resolved auth channel and policy revision, so a steer can tell a guarded run from an old child. */ authChannel?: string; policyRevision?: string }
+/**
+ * How a Claude worker signs in. `native` (the default): the official Claude Code binary runs as the user, with their
+ * own sign-in (subscription or key) and their settings, CLAUDE.md, skills and MCP servers; Crewboard never touches the
+ * credentials. `isolated`: `--bare` with an explicit ANTHROPIC_API_KEY under the API-only policy, and none of the
+ * user's settings.
+ */
+export type ClaudeAuth = 'native' | 'isolated'
+
+export type CliRunnerArgs = { kind: CliKind; claudeAuth?: ClaudeAuth; runDir: string; cwd: string; promptFile: string; model?: string; effort?: string; command: string; commandArgs?: string[]; background?: BackgroundTiming; readOnly?: boolean; commitRequired?: boolean; /** Non-secret: the resolved auth channel and policy revision, so a steer can tell a guarded run from an old child. */ authChannel?: string; policyRevision?: string }
 /** How long a Claude run stays open for the worker's own background work (bg1); tests shorten it. */
 export type BackgroundTiming = { limitMs?: number; wakeGraceMs?: number; noticeMs?: number }
 
@@ -175,16 +185,17 @@ function exited(child: ChildProcess, stderr: { text: string }): Promise<number> 
  * the session within a grace period after the work ended, the runner sends the outcome as a turn itself.
  */
 async function driveClaude(args: CliRunnerArgs, s: Session, prompt: string, env: NodeJS.ProcessEnv): Promise<number> {
-  // Checked here too, immediately before the worker child exists: a direct `runCliRun` call, a stale args
-  // file or an environment that changed since the launch can never put a Claude model behind an unsupported
-  // channel. `--bare` alone is not the guard; the policy is.
-  assertAnthropicLaunchAllowed(env)
+  // Isolated runs are checked here too, immediately before the worker child exists: a direct `runCliRun` call, a
+  // stale args file or an environment that changed since the launch can never put them behind an unsupported
+  // channel. `--bare` alone is not the guard; the policy is. A native run signs in as the user does.
+  const isolated = args.claudeAuth === 'isolated'
+  if (isolated) assertAnthropicLaunchAllowed(env)
   const child = spawn(
     args.command,
-    // `--bare` (docs/en/headless, 2026-09-28): never reads OAuth credentials or the system keychain, so the
-    // run can only authenticate with the explicit ANTHROPIC_API_KEY the API-only policy configured. It also
-    // keeps host hooks, plugins, MCP servers and CLAUDE.md out of an unattended run.
-    [...(args.commandArgs ?? []), '--bare', '-p', '--output-format', 'stream-json', '--input-format', 'stream-json', '--verbose', '--replay-user-messages', ...(args.readOnly ? ['--permission-mode', 'plan'] : ['--dangerously-skip-permissions']), ...(args.model ? ['--model', args.model] : []), ...(args.effort ? ['--effort', args.effort] : [])],
+    // Isolated only — `--bare` (docs/en/headless, 2026-09-28) never reads OAuth credentials or the system keychain,
+    // so the run can only authenticate with the explicit ANTHROPIC_API_KEY the API-only policy configured, and it
+    // keeps host hooks, plugins, MCP servers and CLAUDE.md out of the run. A native run keeps all of them.
+    [...(args.commandArgs ?? []), ...(isolated ? ['--bare'] : []), '-p', '--output-format', 'stream-json', '--input-format', 'stream-json', '--verbose', '--replay-user-messages', ...(args.readOnly ? ['--permission-mode', 'plan'] : ['--dangerously-skip-permissions']), ...(args.model ? ['--model', args.model] : []), ...(args.effort ? ['--effort', args.effort] : [])],
     { cwd: args.cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: true, env },
   )
   s.worker(child.pid)
@@ -783,8 +794,8 @@ export async function runCliRun(args: CliRunnerArgs, now: () => Date = () => new
   // before any state exists: the resolved route is evaluated here, and a refusal records a typed
   // setup/policy failure (never `auth_expired`, whose advice is a subscription login) without spawning a
   // worker. `driveClaude` checks the environment again immediately before the child exists.
-  const route = classifyAnthropicRoute({ backend: CLI_BACKEND[args.kind], model: args.model ?? '', id: '' }, env, args.commandArgs ?? [])
-  const refusal = route.applies && !route.allowed ? route : undefined
+  const route = args.kind === 'claude' && args.claudeAuth !== 'isolated' ? undefined : classifyAnthropicRoute({ backend: CLI_BACKEND[args.kind], model: args.model ?? '', id: '' }, env, args.commandArgs ?? [])
+  const refusal = route?.applies && !route.allowed ? route : undefined
   const state: CliRunState = {
     status: refusal ? 'failed' : 'running',
     exitCode: refusal ? 1 : null,
@@ -828,6 +839,10 @@ export async function runCliRun(args: CliRunnerArgs, now: () => Date = () => new
       for (const [type, data] of parsed.events) void s.emit(type, data)
       if (parsed.sessionId && state.sessionId !== parsed.sessionId) {
         state.sessionId = parsed.sessionId
+        writes = writes.then(() => writeJsonAtomic(p.state, state))
+      }
+      if (parsed.billing && state.billing !== parsed.billing) {
+        state.billing = parsed.billing
         writes = writes.then(() => writeJsonAtomic(p.state, state))
       }
       if (parsed.turnEnd) {

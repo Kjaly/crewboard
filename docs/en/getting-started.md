@@ -6,7 +6,7 @@ This guide takes you from a fresh checkout to a first goal that a worker finishe
 
 ## 1. Install and start the server
 
-You need Node.js 24 or newer, pnpm 11.5.2 and Git.
+Once the `crewboard` package is on npm, `npx crewboard serve` is all it takes (Node.js 24 or newer). Until then, install from source; you need Node.js 24 or newer, pnpm 11.5.2 and Git.
 
 ```sh
 git clone https://github.com/Kjaly/crewboard.git
@@ -22,7 +22,7 @@ The server prints its address:
 crewboard http://127.0.0.1:4700  mcp: http://127.0.0.1:4700/mcp
 ```
 
-`--port` picks another port. The server listens on 127.0.0.1 only.
+`--port` picks another port. The server listens on 127.0.0.1 only. Once it listens, it also prints which workers are ready, for example `workers ready: Codex, Claude · not ready: DeepSeek (not found)`.
 
 To call it `crewboard` in this shell session, define a function with the checkout's absolute path. The rest of the docs write `crewboard`.
 
@@ -33,23 +33,45 @@ crewboard() { node "$CREWBOARD_MAIN" "$@"; }
 
 ## 2. Open the screen
 
-Open http://127.0.0.1:4700/. With no goals yet, the screen shows the command that connects Claude Code, with a copy button.
+Open http://127.0.0.1:4700/. With no goals yet, the screen shows how to connect a lead, for each known client, with a copy button.
 
-## 3. Connect Claude Code as the lead
+## 3. Connect your lead
+
+The lead is your usual agent chat. Any MCP client can lead; connect the one you use. `crewboard connect claude` or `crewboard connect codex` runs the command below for you; `crewboard connect dsh` and `crewboard connect other` print what to add.
+
+Claude Code:
 
 ```sh
-claude mcp add --transport http crewboard http://127.0.0.1:4700/mcp
+claude mcp add --scope user --transport http crewboard http://127.0.0.1:4700/mcp
 ```
 
-Claude Code now has Crewboard's tools and reads its instructions on how to lead. You do not need to explain the protocol to it.
+Codex:
+
+```sh
+codex mcp add crewboard --url http://127.0.0.1:4700/mcp
+```
+
+dsh: add the server to your dsh profile with the `@deepseek-ai/dsh-mcp-client` module:
+
+```yaml
+- name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    serverName: crewboard
+    transport: streamable-http
+    url: http://127.0.0.1:4700/mcp
+```
+
+Any other MCP client: add a Streamable HTTP server at `http://127.0.0.1:4700/mcp`.
+
+The lead now has Crewboard's tools and reads its instructions on how to lead. You do not need to explain the protocol to it.
 
 ## 4. Set up at least one worker
 
-Codex is the quickest: install the `codex` CLI and run `codex login`. Claude needs `ANTHROPIC_API_KEY`; DeepSeek needs `dsh` with a DeepSeek key. See [workers](workers.md).
+Run `crewboard doctor`: it lists each worker as ready, or says what to install or sign in to. Codex is the quickest: install the `codex` CLI and run `codex login`. Claude is ready once you are signed in to Claude Code; DeepSeek needs `dsh` with a DeepSeek key. See [workers](workers.md).
 
 ## 5. Start your first goal
 
-Open Claude Code inside one of your Git repositories and describe what you want, for example:
+Open your lead chat inside one of your Git repositories and describe what you want, for example:
 
 > Add a Usage section to the README. Ask Codex to draft it.
 

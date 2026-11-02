@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import type { GoalHistory, HistoryItem } from '../../history/sessions.js'
 import { flatten } from '../../model/project.js'
 import type { AssignmentView } from '../../model/types.js'
+import { leadLabel } from '../../lead/clients.js'
 import { T } from '../text.js'
 import { Avatar, StatusBadge } from './badges.js'
 
@@ -47,7 +48,7 @@ export function HistoryView(props: { history: GoalHistory | undefined; tree: Ass
     )
   }
   const row = (item: HistoryItem, i: number) => {
-    if (item.kind === 'session') return <div key={`s${i}`} className="session">{T.historySession(time(item.ts))}</div>
+    if (item.kind === 'session') return <div key={`s${i}`} className="session">{T.historySession(time(item.ts))}{history.source === 'journal' && leadLabel(item.sessionId) !== 'lead' ? ` · ${leadLabel(item.sessionId)}` : ''}</div>
     if (item.kind === 'actions') return <div key={`a${i}`} className="actions-count">{T.actionsCount(item.count)}</div>
     if (item.kind === 'owner' || item.kind === 'lead')
       return (
@@ -94,6 +95,7 @@ export function HistoryView(props: { history: GoalHistory | undefined; tree: Ass
   }
   return (
     <div className="hist" ref={box}>
+      {history.source === 'journal' && <p className="hint">{T.historyFromJournal}</p>}
       {history.truncated && <p className="hint">{T.historyTruncated}</p>}
       {history.items.map(row)}
     </div>

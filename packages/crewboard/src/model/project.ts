@@ -5,6 +5,29 @@ export type StatusContext = { parentStatus: Status | null; isRoot: boolean; now:
 
 const TERMINAL: ReadonlySet<Status> = new Set(['done', 'cancelled', 'abandoned'])
 export const isTerminal = (s: Status): boolean => TERMINAL.has(s)
+/** Finished from the point of view of whoever waits on it: terminal, or a split-off part that reported to its parent. */
+export const isSettled = (s: Status): boolean => TERMINAL.has(s) || s === 'reported'
+
+/** Where a status counts in summaries (the tree's and the sidebar's alike). A reported part is work not yet accepted. */
+export type StatusBucket = 'waiting_owner' | 'waiting_lead' | 'running' | 'queued' | 'finished'
+export function statusBucket(s: Status): StatusBucket | undefined {
+  if (s === 'waiting_owner') return 'waiting_owner'
+  if (s === 'waiting_answer') return 'waiting_lead'
+  if (s === 'running' || s === 'reported') return 'running'
+  if (s === 'queued') return 'queued'
+  if (TERMINAL.has(s)) return 'finished'
+  return undefined
+}
+
+/** A part a worker split off whose latest run ended with its final result (not a further split). */
+const reportedPart = (own: GoalEvent[]): boolean => {
+  if (!own.some((e) => e.type === 'assigned' && e.actor === 'worker')) return false
+  const started = lastOf(own, 'run_started')
+  const reported = lastOf(own, 'reported')
+  const ended = lastOf(own, 'run_ended')
+  if (!started || !reported || reported.split || reported.seq < started.seq) return false
+  return !!ended && ended.seq > started.seq && ended.outcome === 'completed' && seqOf(lastOf(own, 'reopened')) < started.seq
+}
 
 const lastOf = <T extends GoalEvent['type']>(own: GoalEvent[], type: T): EventOf<T> | undefined => {
   return own.findLast((e): e is EventOf<T> => e.type === type)
@@ -20,6 +43,12 @@ export function deriveStatus(own: GoalEvent[], ctx: StatusContext): Status {
   if (finishedAt > seqOf(reopened)) {
     if (cancelled && seqOf(cancelled) >= seqOf(closed)) return 'cancelled'
     return 'done'
+  }
+  // A reported part follows its parent: the lead's close of the parent covers it, a cancelled parent abandons it.
+  if (reportedPart(own)) {
+    if (ctx.parentStatus === 'done') return 'done'
+    if (ctx.parentStatus && TERMINAL.has(ctx.parentStatus)) return 'abandoned'
+    return 'reported'
   }
   if (ctx.parentStatus && TERMINAL.has(ctx.parentStatus)) return 'abandoned'
   if (reopened && !ctx.isRoot) {
@@ -68,6 +97,7 @@ export function doingOf(own: GoalEvent[], status: Status, titles: ReadonlyMap<st
   if (status === 'abandoned') return { kind: 'abandoned' }
   if (status === 'paused') return { kind: 'paused' }
   if (status === 'waiting_owner') return { kind: 'waiting_owner' }
+  if (status === 'reported') return { kind: 'reported_to_parent' }
   const reopenedLast = lastOf(own, 'reopened')
   if (reopenedLast && reopenedLast.seq >= seqOf(lastOf(own, 'run_started'))) return { kind: 'returned', note: reopenedLast.note }
   if (status === 'waiting_answer') {
@@ -118,12 +148,12 @@ function handoffsOf(own: GoalEvent[]): { provider?: ProviderId; model?: string; 
   return { ...(provider ? { provider } : {}), ...(model ? { model } : {}), handoffs }
 }
 
-/** What the owner may ask for on a node; `emergency_stop` only while the lead is away and the node runs. */
-export function availableActions(node: AssignmentView, leadOnline: boolean): Array<RequestAction | 'emergency_stop'> {
+/** What the owner may ask for on a node. `emergency_stop` is offered on every live node: the owner can always stop work. */
+export function availableActions(node: AssignmentView): Array<RequestAction | 'emergency_stop'> {
   if (node.parentId === null) return ['discuss']
   const live = node.status === 'running' || node.status === 'waiting_answer'
   // A waiting request leaves only discussion, but never hides the emergency stop.
-  if (node.request?.state === 'pending') return !leadOnline && live ? ['discuss', 'emergency_stop'] : ['discuss']
+  if (node.request?.state === 'pending') return live ? ['discuss', 'emergency_stop'] : ['discuss']
   const byStatus: Partial<Record<Status, RequestAction[]>> = {
     running: ['clarify', 'stop', 'handoff', 'discuss'],
     waiting_answer: ['clarify', 'stop', 'handoff', 'discuss'],
@@ -135,7 +165,7 @@ export function availableActions(node: AssignmentView, leadOnline: boolean): Arr
   const actions: Array<RequestAction | 'emergency_stop'> = (byStatus[node.status] ?? ['discuss']).filter(
     (a) => !(node.underFinished && (a === 'revive' || a === 'reopen')),
   )
-  if (!leadOnline && live) actions.push('emergency_stop')
+  if (live) actions.push('emergency_stop')
   return actions
 }
 
@@ -188,9 +218,9 @@ export function buildTree(events: GoalEvent[], now: Date, leadLastSeen: Date | u
     view.children = (kids.get(id) ?? []).map((k) => node(k, status, view.underFinished === true))
     // A worker waiting for the parts it split off is still at work, not waiting for the lead.
     const splitOff = view.children.filter((k) => (byId.get(k.id) ?? []).some((e) => e.type === 'assigned' && e.actor === 'worker'))
-    if (splitOff.length && view.status === 'waiting_answer' && splitOff.some((k) => !isTerminal(k.status))) {
+    if (splitOff.length && view.status === 'waiting_answer' && splitOff.some((k) => !isSettled(k.status))) {
       view.status = 'running'
-      view.doing = { kind: 'children', done: splitOff.filter((k) => isTerminal(k.status)).length, total: splitOff.length }
+      view.doing = { kind: 'children', done: splitOff.filter((k) => isSettled(k.status)).length, total: splitOff.length }
     }
     return view
   }

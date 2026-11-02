@@ -75,10 +75,12 @@ describe('owner answer', () => {
     expect(status).toBe(403)
   })
 
-  it('answers history for a goal without a transcript plainly', async () => {
+  it('builds the history from the journal for a goal without a transcript', async () => {
     const t = await escalated()
-    const h = await (await fetch(`${t.server.url}/api/goals/${t.goalId}/history?project=${encodeURIComponent(t.project)}`)).json()
-    expect(h).toEqual({ available: false, truncated: false, items: [] })
+    const h = (await (await fetch(`${t.server.url}/api/goals/${t.goalId}/history?project=${encodeURIComponent(t.project)}`)).json()) as { source: string; items: Array<{ kind: string; tool?: string; assignmentId?: string }> }
+    expect(h.source).toBe('journal')
+    expect(h.items).toContainEqual(expect.objectContaining({ kind: 'assignment', tool: 'assign', assignmentId: t.assignmentId }))
+    expect(h.items).toContainEqual(expect.objectContaining({ kind: 'assignment', tool: 'escalate' }))
   })
 })
 

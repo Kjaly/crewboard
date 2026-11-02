@@ -73,6 +73,8 @@ export function createBackends(o: BackendsOptions): Backends {
   const dshRunner = value('DSH_RUNNER')
   const cliRunner = value('CLI_RUNNER')
   const claudeCommand = value('CLAUDE_COMMAND')
+  // CREWBOARD_CLAUDE_AUTH=isolated: the API-key-only `--bare` route; anything else runs Claude Code as the user.
+  const claudeAuth = value('CLAUDE_AUTH') === 'isolated' ? ('isolated' as const) : ('native' as const)
   const codexCommand = value('CODEX_COMMAND')
   const opencodeCommand = value('OPENCODE_COMMAND')
   const cursorCommand = value('CURSOR_COMMAND')
@@ -92,7 +94,7 @@ export function createBackends(o: BackendsOptions): Backends {
   const inline = cliRunner === 'inline' ? { startRunner: (args: Parameters<typeof runCliRun>[0], env: NodeJS.ProcessEnv) => runCliRun(args, undefined, env) } : {}
   const profileOf = (agent: string) => resolveProfile(o.env, o.home, agent).catch(() => undefined)
   const cli = {
-    claude: createCliBackend({ kind: 'claude', runsRoot, env: o.env, ...(claudeCommand ? { command: claudeCommand } : {}), ...inline, profileOf }),
+    claude: createCliBackend({ kind: 'claude', runsRoot, env: o.env, claudeAuth, ...(claudeCommand ? { command: claudeCommand } : {}), ...inline, profileOf }),
     codex: createCliBackend({ kind: 'codex', runsRoot, env: o.env, ...(codexCommand ? { command: codexCommand } : {}), ...inline, profileOf }),
     opencode: createCliBackend({ kind: 'opencode', runsRoot, env: o.env, ...(opencodeCommand ? { command: opencodeCommand } : {}), ...inline, profileOf }),
     // The binary is `cursor-agent`, not `cursor` — the worker kind and the CLI's own name differ here alone.

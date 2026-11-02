@@ -1,6 +1,6 @@
 // Packs the crewboard package the way npm would publish it and checks what the tarball holds: the server, the
 // worker runners, the screen, the readme and licence, and nothing from the sources or a local .crewboard.
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -26,7 +26,18 @@ try {
   if (manifest.name !== 'crewboard') fail(`package name is ${manifest.name}`)
   if (manifest.bin?.crewboard !== './dist/main.js') fail('bin crewboard must point at ./dist/main.js')
   if (!readFileSync(join(pkgDir, 'dist', 'main.js'), 'utf8').startsWith('#!/usr/bin/env node')) fail('dist/main.js has no shebang')
-  if (!process.exitCode) console.log(`release check: ok (${manifest.name}@${manifest.version}, ${files.length} files)`)
+  // The packed CLI must run on its own, the way npx runs it: from the unpacked tarball, without this repository's
+  // node_modules, against an empty home.
+  const unpacked = join(out, 'unpacked')
+  execFileSync('mkdir', ['-p', unpacked])
+  execFileSync('tar', ['-xzf', join(out, tarball), '-C', unpacked])
+  const main = join(unpacked, 'package', 'dist', 'main.js')
+  const env = { ...process.env, CREWBOARD_HOME: join(out, 'home'), NODE_PATH: '' }
+  const help = spawnSync('node', [main, '--help'], { cwd: out, env, encoding: 'utf8' })
+  if (help.status !== 0 || !help.stdout.includes('crewboard serve')) fail(`packed --help failed: ${help.stderr || help.status}`)
+  const doctor = spawnSync('node', [main, 'doctor'], { cwd: out, env, encoding: 'utf8', timeout: 120_000 })
+  if ((doctor.status !== 0 && doctor.status !== 1) || !/[✓✗]/.test(doctor.stdout) || /\n\s+at /.test(doctor.stderr)) fail(`packed doctor failed: ${doctor.stderr || doctor.status}`)
+  if (!process.exitCode) console.log(`release check: ok (${manifest.name}@${manifest.version}, ${files.length} files; --help and doctor ran from the tarball)`)
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error))
 } finally {

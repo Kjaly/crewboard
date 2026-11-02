@@ -2,7 +2,10 @@ import type { MessageVars } from '../orchestration/messages.js'
 import type { Backend } from '../preflight/preflight.js'
 
 /**
- * Crewboard's product policy for automatic Claude workers (2026-09-28): every launch Crewboard starts goes
+ * The isolated Claude route (`CREWBOARD_CLAUDE_AUTH=isolated`, `ClaudeAuth` in runs/cli-runner.ts). Since 2026-11-02
+ * the default runs Claude Code as the user with their own sign-in; this policy applies only when isolation is asked for.
+ *
+ * Crewboard's product policy for isolated Claude workers (2026-09-28): every launch Crewboard starts goes
  * through its API-key route against the official Anthropic endpoint only. This is a Crewboard product
  * choice, not a claim that subscription CLI automation is universally prohibited: Anthropic's own billing
  * change for `claude -p` / the Agent SDK is paused, and a keyless Console login is commercially valid but
