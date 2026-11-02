@@ -21,20 +21,20 @@ Documentation: **[kjaly.github.io/crewboard](https://kjaly.github.io/crewboard/)
 ## How it works
 
 1. **You agree with the lead on what you want.** In your lead chat, describe the goal; the lead asks what it needs and settles the criteria for done with you.
-2. **The lead hands out the work.** Through Crewboard's MCP tools it starts a goal and assigns pieces to Codex, Claude or DeepSeek. Each assignment remembers who gave it, what it should produce and the message it came from.
+2. **The lead hands out the work.** Through Crewboard's MCP tools it starts a goal and assigns pieces to Codex, Claude, DeepSeek or any agent you registered. Each assignment remembers who gave it, what it should produce and the message it came from.
 3. **Workers ask the lead first.** A worker's question goes to the lead. Only what the lead cannot decide (taste, scope, money) reaches you, on the screen.
 4. **The lead closes the work.** It checks each result against the criteria and closes it or sends it back. You do not accept work; you can step in at any time.
 5. **You steer from the tree.** Ask to clarify, stop, hand over to another provider, start early or reopen. Every action is a request the lead decides; its decision is final, and you argue with it in chat.
 
 ## Install
 
-Once the `crewboard` package is on npm (Node.js 24+):
+With Node.js 24+:
 
 ```sh
 npx crewboard serve
 ```
 
-Until then, from a source checkout (Node.js 24+, pnpm 11.5.2, Git):
+Or install it once with `npm install -g crewboard` and run `crewboard serve`. From a source checkout (Node.js 24+, pnpm 11.5.2, Git):
 
 ```sh
 git clone https://github.com/Kjaly/crewboard.git
@@ -60,8 +60,9 @@ Then, in your lead chat inside one of your repositories, describe what you want.
 | Worker | What it needs |
 | --- | --- |
 | Codex | `codex` CLI, signed in (`codex login`) |
-| Claude | `claude` CLI and `ANTHROPIC_API_KEY` (automated runs use an API key, not a subscription) |
+| Claude | `claude` CLI, signed in the way you use it yourself (a Claude subscription or an API key) |
 | DeepSeek | `dsh` (DeepSeek Harness) with a DeepSeek key in its settings |
+| Any other agent | an entry in `~/.crewboard/agents.json`: OpenCode, Cursor, Gemini, Grok, Devin, or Kimi, GLM and other models through dsh |
 
 See [workers](docs/en/workers.md) for models, defaults and how a worker splits its own work.
 
@@ -77,4 +78,4 @@ See [workers](docs/en/workers.md) for models, defaults and how a worker splits i
 
 ## Status
 
-Version 1.1.0. Used on macOS with Claude Code, Codex CLI and DeepSeek Harness. Linux should work; Windows is untested. The server listens on 127.0.0.1 only and has no login of its own: see [security](SECURITY.md).
+Version 1.1.1. Used on macOS with Claude Code, Codex CLI and DeepSeek Harness. Linux should work; Windows is untested. The server listens on 127.0.0.1 only and has no login of its own: see [security](SECURITY.md).

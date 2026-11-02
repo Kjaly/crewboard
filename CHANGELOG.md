@@ -2,6 +2,13 @@
 
 All notable changes to Crewboard are documented here. This changelog follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-11-03
+
+### Fixed
+
+- **The npm page shows the full README**, the same as GitHub's, with its screenshots and walkthrough: it is written from the repository's README at pack time, links made absolute.
+- The README and the getting started guide install with `npx crewboard serve` now that the package is on npm, and the Claude worker's requirement reads as it works: your own sign-in, subscription or key.
+
 ## [1.1.0] - 2026-11-03
 
 The first release on npm: `npx crewboard serve`.

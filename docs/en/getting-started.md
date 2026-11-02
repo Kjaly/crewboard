@@ -6,7 +6,13 @@ This guide takes you from a fresh checkout to a first goal that a worker finishe
 
 ## 1. Install and start the server
 
-Once the `crewboard` package is on npm, `npx crewboard serve` is all it takes (Node.js 24 or newer). Until then, install from source; you need Node.js 24 or newer, pnpm 11.5.2 and Git.
+You need Node.js 24 or newer.
+
+```sh
+npx crewboard serve
+```
+
+Or install it once with `npm install -g crewboard`, and `crewboard serve` from then on. To run from source instead, you also need pnpm 11.5.2 and Git:
 
 ```sh
 git clone https://github.com/Kjaly/crewboard.git
@@ -24,7 +30,7 @@ crewboard http://127.0.0.1:4700  mcp: http://127.0.0.1:4700/mcp
 
 `--port` picks another port. The server listens on 127.0.0.1 only. Once it listens, it also prints which workers are ready, for example `workers ready: Codex, Claude · not ready: DeepSeek (not found)`.
 
-To call it `crewboard` in this shell session, define a function with the checkout's absolute path. The rest of the docs write `crewboard`.
+From a source checkout, to call it `crewboard` in this shell session, define a function with the checkout's absolute path. The rest of the docs write `crewboard`.
 
 ```sh
 CREWBOARD_MAIN="$PWD/packages/crewboard/dist/main.js"

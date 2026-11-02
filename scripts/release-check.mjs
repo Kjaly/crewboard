@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { packageReadme } from './package-readme.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const pkgDir = join(root, 'packages', 'crewboard')
@@ -38,6 +39,11 @@ try {
   execFileSync('tar', ['-xzf', join(out, tarball), '-C', unpacked])
   const main = join(unpacked, 'package', 'dist', 'main.js')
   const env = { ...process.env, CREWBOARD_HOME: join(out, 'home'), NODE_PATH: '' }
+  // npm shows the package's README: it must be the repository's, with no link that only works on GitHub.
+  const readme = readFileSync(join(unpacked, 'package', 'README.md'), 'utf8')
+  if (readme !== packageReadme(readFileSync(join(root, 'README.md'), 'utf8'))) fail('the packed README is not the repository README')
+  const relative = [...readme.matchAll(/\]\(([^)\s]+)\)|\b(?:src|srcset|href)="([^"]+)"/g)].map((m) => m[1] ?? m[2]).filter((t) => !/^([a-z][a-z0-9+.-]*:|#)/i.test(t))
+  if (relative.length) fail(`the packed README has relative links npm cannot follow: ${relative.join(', ')}`)
   const help = spawnSync('node', [main, '--help'], { cwd: out, env, encoding: 'utf8' })
   if (help.status !== 0 || !help.stdout.includes('crewboard serve')) fail(`packed --help failed: ${help.stderr || help.status}`)
   const doctor = spawnSync('node', [main, 'doctor'], { cwd: out, env, encoding: 'utf8', timeout: 120_000 })

@@ -13,3 +13,6 @@ lib/
 docs/tmp/
 .pnpm-store/
 docs/.vitepress/cache/
+
+# Generated from README.md before every pack (scripts/package-readme.mjs).
+packages/crewboard/README.md
