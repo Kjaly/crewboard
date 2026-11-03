@@ -111,7 +111,7 @@ export function doingOf(own: GoalEvent[], status: Status, titles: ReadonlyMap<st
   }
   const latest = own[own.length - 1]
   if (own.some((e) => e.type === 'goal_started')) return { kind: 'leading' }
-  if (latest?.type === 'run_ended' && latest.outcome === 'failed') return latest.reason ? { kind: 'failed', reason: latest.reason } : { kind: 'failed' }
+  if (latest?.type === 'run_ended' && latest.outcome === 'failed') return latest.reason || latest.text ? { kind: 'failed', reason: [latest.reason, latest.text].filter(Boolean).join(': ') } : { kind: 'failed' }
   const reported = lastOf(own, 'reported')
   if (reported && seqOf(reported) >= seqOf(lastOf(own, 'run_started'))) return { kind: 'reported' }
   const progress = lastOf(own, 'progress')
@@ -161,7 +161,7 @@ export function availableActions(node: AssignmentView): Array<RequestAction | 'e
   const byStatus: Partial<Record<Status, RequestAction[]>> = {
     running: ['clarify', 'stop', 'handoff', 'discuss'],
     waiting_answer: ['clarify', 'stop', 'handoff', 'discuss'],
-    queued: ['start_now', 'cancel', 'discuss'],
+    queued: ['start_now', 'cancel', 'handoff', 'discuss'],
     done: ['reopen', 'discuss'],
     cancelled: ['revive', 'discuss'],
     abandoned: ['revive', 'discuss'],
@@ -217,10 +217,21 @@ export function buildTree(events: GoalEvent[], now: Date, leadLastSeen: Date | u
     const quote = isRoot ? start.quote : a?.quote
     if (quote) view.quote = quote
     const agent = isRoot ? undefined : defaults.get(view.provider)
-    const model = chain.model ?? agent?.model
-    const effort = chain.effort ?? agent?.effort
+    // A model marks a resolved snapshot: an absent effort there means the run used no explicit effort.
+    const snapshot = run?.model !== undefined
+    const nextModel = chain.model ?? agent?.model
+    const nextEffort = chain.effort ?? agent?.effort
+    const model = snapshot ? run.model : nextModel
+    const effort = snapshot ? run.effort : nextEffort
     if (model) view.model = model
     if (effort !== undefined) view.effort = effort
+    if (snapshot) {
+      const origin = own.findLast((e): e is EventOf<'assigned'> | EventOf<'reassigned'> => (e.type === 'assigned' || e.type === 'reassigned') && e.seq < run.seq)
+      if (origin) view.runProvider = origin.provider
+      if (seqOf(lastOf(own, 'reassigned')) > run.seq) {
+        view.pendingRun = { ...(nextModel !== undefined ? { model: nextModel } : {}), ...(nextEffort !== undefined ? { effort: nextEffort } : {}) }
+      }
+    }
     const request = requestOf(own)
     if (request) view.request = request
     if (run) Object.assign(view, { runId: run.runId, agent: run.agent, cwd: run.cwd, runOpen: !own.some((e) => e.type === 'run_ended' && e.runId === run.runId) })

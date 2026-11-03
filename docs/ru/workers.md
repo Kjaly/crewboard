@@ -46,32 +46,163 @@ Claude-исполнитель — это официальный Claude Code, з�
 | `run` | адаптер: `claude`, `codex`, `dsh`, `opencode`, `cursor`, `gemini`, `grok` или `devin` |
 | `model` | модель по умолчанию; для `dsh` вид `<маршрут>/<модель>` выбирает маршрут вашего профиля dsh |
 | `effort` | уровень усилий по умолчанию; поручение или принятая передача работы могут его переопределить. `crewboard_agents` перечисляет допустимые `efforts` (пустой список, если адаптер их не принимает); без поля используется значение CLI |
-| `models` | рекомендуемые модели: массив `{ "id": "…", "label": "…", "note": "…" }`; `label` и `note` необязательны. Другие имена моделей тоже разрешены |
+| `models` | рекомендуемые модели: массив `{ "id": "…", "label": "…", "note": "…" }`; `label` и `note` необязательны. У модели также можно задать `"efforts": ["low", "medium", "high"]`; пустой список запрещает effort. Другие имена моделей тоже разрешены |
 | `label`, `color` | как агент выглядит на экране |
 | `icon` | логотип для аватара: `claude`, `codex`, `deepseek`, `kimi`, `moonshot`, `qwen`, `zhipu`, `gemini`, `grok`, `cursor`, `devin`, `opencode`, `mistral`, `openai`, `xai` или `anthropic`; без него логотип выбирается по `run` и `model` |
 | `enabled` | `false` выключает агента, в том числе встроенного |
 
 Имя агента — латинские буквы, цифры, `.`, `-` или `_` (чтобы исполнитель мог назвать его при разбиении), имя `lead` занято. Запись с именем встроенного агента меняет только те поля, которые в ней указаны. Ведущий видит список через `crewboard_agents` и поручает работу по `id`; исполнитель может разбить работу на любых из них. Цель, где работал агент, которого вы потом убрали, по-прежнему открывается; новая работа для него отклоняется с причиной.
 
-Если файл сломан, при запуске работы об этом сообщается с путём к файлу, и ведущий узнаёт причину.
+Если работа из очереди не может запуститься из-за сломанного файла, ведущий получает одно событие на цель с путём к реестру и текстом ошибки. Работа остаётся в очереди и запускается автоматически после исправления файла.
 
-### Модели по API через dsh
+Проверки при назначении, передаче и запуске используют `efforts` выбранной модели, если список задан; иначе — уровни адаптера. `crewboard_agents` и `/api/agents` возвращают эти списки у моделей. У встроенной `gpt-6.1-sol` исключён `none`. Без effort используется значение агента по умолчанию, а если его нет — значение CLI.
 
-Модели по API (Kimi, GLM, Qwen и другим) нужна обвязка с инструментами; Crewboard использует для этого dsh. Crewboard запускает dsh с профилем `acp`, поэтому маршрут описывается там: настройки `@deepseek-ai/dsh-llm-pi-ai` в профиле принимают словарь `providers` с адресом, протоколом API, переменной окружения с ключом и моделями. Все поля описаны в README этого пакета в вашем профиле dsh. Например, маршрут `moonshot`:
+## Пресеты
+
+Необязательный раздел `presets` в `~/.crewboard/agents.json` задаёт именованные варианты для ведущего. Формат записи: `{ "agent": "…", "model": "…", "effort": "…", "note": "…" }`; обязателен только `agent`. В именах допустимы те же символы, что в id агента. Запись заменяет встроенный пресет с таким именем, а `false` выключает его.
+
+| Встроенный пресет | Агент | Модель | Effort | Когда брать |
+| --- | --- | --- | --- | --- |
+| `cheap` | DeepSeek | умолчание агента (изначально `deepseek-flash`) | умолчание агента/CLI | рутинная работа |
+| `normal` | Codex | `gpt-6.1-sol` | `medium` | обычная разработка |
+| `hard` | Codex | `gpt-6.1-sol` | `high` | сложные рассуждения |
+| `review` | Claude | `opus` | умолчание агента/CLI | независимая проверка |
+
+```json
+{
+  "presets": {
+    "cheap": false,
+    "review": { "agent": "claude", "model": "opus", "note": "Check correctness and edge cases" },
+    "quick": { "agent": "codex", "model": "gpt-6.1-sol", "effort": "low" }
+  }
+}
+```
+
+`crewboard_agents` возвращает `{ agents, presets }`: включённых агентов с возможностями и включённые пресеты по имени. `crewboard_assign` принимает `preset` вместо `provider`; явно переданные `model` и `effort` перекрывают пресет. Отсутствующие поля наследуют умолчания агента. Неизвестный или выключенный пресет, а также пресет выключенного агента назначить нельзя. Настройки не меняют сохранённые снимки модели/effort уже начатых запусков.
+
+Вкладка [«Настройки»](screen.md#настройки) меняет умолчания агентов и пресеты. `GET /api/agents-config` возвращает исходную конфигурацию, её версию, всех агентов с умолчаниями (включая выключенных), пресеты и встроенные умолчания пресетов. `PUT /api/agents-config` принимает `{ config, revision }`, проверяет той же схемой, что чтение с диска, сохраняет `efforts` моделей, пишет атомарно и оставляет точную копию прежнего файла в `agents.json.bak`. Устаревшая версия получает **409**. Экран перечитывает файл и предлагает внести правки заново. PUT требует JSON с того же origin, как POST-действия экрана.
+
+## Каталог моделей
+
+Выбор модели при передаче объединяет подсказки `models` с каталогом оболочки исполнителя. Найденные модели идут первыми; рядом показаны источник и, для OpenRouter, цены в долларах за миллион входных/выходных токенов. Если моделей больше восьми, появляется поиск; ручной ввод доступен всегда. Наличие в каталоге не гарантирует доступ аккаунта или пригодность модели для работы с кодом.
+
+| Исполнитель | Источник каталога |
+| --- | --- |
+| Codex | `codex debug models`, если команда поддерживается и возвращает JSON-массив либо массив `models`/`data` с идентификаторами или объектами моделей (`id`, `slug` или `model`) |
+| OpenCode | `opencode models`, обычно по одному `provider/model` на строку; JSON-массивы тоже принимаются |
+| dsh с моделью по умолчанию `openrouter/…` | Публичный `GET https://openrouter.ai/api/v1/models`; идентификаторы сохраняют префикс маршрута `openrouter/` |
+| Claude | Встроенные алиасы: `sonnet`, `opus`, `fable`, `haiku` |
+| Другие маршруты и оболочки | Только подсказки реестра |
+
+Каталог учитывает переопределения команд CLI и прекращает ожидание через 10 секунд. Для OpenRouter лимит — 5 секунд, включая чтение тела ответа. Первый запрос к публичному списку идёт без ключа; только ответ 401/403 может вызвать повтор с `OPENROUTER_API_KEY` из окружения запуска. Каталог не читает сохранённые учётные данные и не пишет ключи или ошибки источников в лог. Недоступный или нечитаемый источник оставляет подсказки рабочими и не мешает остальным агентам.
+
+Каталог кэшируется на 10 минут отдельно для каждого агента. **Обновить** в выборе модели или `GET /api/models?agent=<id>&refresh=1` запрашивает обновление; `GET /api/models?agent=<id>` возвращает полный объединённый список. `/api/agents` и `crewboard_agents` включают короткое поле `catalog`: до 30 моделей на агента, найденные первыми. Правки реестра объединяются сразу, в том числе во время действия кэша.
+
+У каждой модели есть `id`, `label`, `source` (`suggested` или `discovered`) и `discoveredAt` (дата ISO или `null` для подсказки). Подсказки, отсутствующие в успешно прочитанном каталоге, получают `status: "not_listed"`; это справочная отметка, она не запрещает ручной выбор. Сбой или отсутствие источника не добавляют такой статус. Записи OpenRouter также включают `pricing.prompt`/`pricing.completion` в долларах за миллион токенов и `tools`, если эти сведения есть в ответе ([справочник API](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties)).
+
+Установите `CREWBOARD_NO_CATALOG=1` в окружении запуска Crewboard, чтобы отключить все внешние команды каталога и сетевые вызовы. Подсказки реестра и встроенные алиасы Claude останутся доступны.
+
+## Подключить OpenRouter или свой API
+
+Настройте адрес и аутентификацию в CLI исполнителя, затем зарегистрируйте модель в `agents.json`. Рецепты сверены с указанными первоисточниками конфигурации и адаптерами Crewboard; живые запросы к API не выполнялись. Везде замените `MODEL_ID` полным ID модели вашего провайдера, включая префикс автора, если он есть (например, `author/model`). Базовый адрес OpenRouter — `https://openrouter.ai/api/v1` ([quickstart](https://openrouter.ai/docs/quickstart)).
+
+Перед подключением учтите два ограничения:
+
+- Crewboard отклоняет распознанные модели Anthropic/Claude через сторонние маршруты, включая dsh и OpenCode. Это текущая [политика маршрутизации Crewboard](https://github.com/Kjaly/crewboard/blob/main/packages/core/src/routing/anthropic-policy.ts), а не ограничение API OpenRouter. Для таких моделей используйте исполнителя Claude.
+- Каталог OpenRouter может включать модели без поддержки инструментов. Выберите модель с поддержкой `tools` в [отфильтрованном каталоге](https://openrouter.ai/models?supported_parameters=tools) и проверьте вызовы инструментов через свой CLI: одного наличия в списке недостаточно для работы исполнителя ([руководство по tool calling](https://openrouter.ai/docs/guides/features/tool-calling)).
+
+### Через dsh
+
+Crewboard запускает `dsh --profile acp`. В конфигурации `@deepseek-ai/dsh-llm-pi-ai` этого профиля добавьте провайдера в `providers` (обычно файл `$DSH_HOME/profiles/acp/cordis.patch.yml`; домашний каталог по умолчанию — `~/.dsh`):
 
 ```yaml
 - name: '@deepseek-ai/dsh-llm-pi-ai'
   config:
     providers:
-      moonshot:
-        apiKeyEnv: MOONSHOT_API_KEY
+      openrouter:
+        apiKeyEnv: OPENROUTER_API_KEY
         api: openai-completions
-        baseURL: https://api.moonshot.ai/v1
+        baseURL: https://openrouter.ai/api/v1
         models:
-          - id: kimi-k3
+          - id: MODEL_ID
 ```
 
-Адрес и имя модели возьмите из документации провайдера. После этого запись `"model": "moonshot/kimi-k3"` в `agents.json` ведёт к ней. Ключ остаётся в вашем окружении: ни настройки dsh, ни Crewboard его не хранят.
+Передайте `OPENROUTER_API_KEY` через окружение процесса, запускающего Crewboard. Затем добавьте запись в `~/.crewboard/agents.json` (или `$CREWBOARD_HOME/agents.json`):
+
+```json
+{
+  "agents": {
+    "router": { "label": "OpenRouter", "run": "dsh", "model": "openrouter/MODEL_ID" }
+  }
+}
+```
+
+Для своего API замените имя маршрута `openrouter`, `baseURL`, переменную ключа и ID модели в обоих файлах. `openai-completions` выбирает Chat Completions; для Responses нужен `openai-responses`. Список `models` заменяет каталог маршрута. Crewboard делит строку модели по первому `/`, поэтому `openrouter/author/model` выбирает маршрут `openrouter` и модель `author/model`. См. [справочник провайдера dsh](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/llm/llm-pi-ai/README.md) и [руководство по настройке](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/guide/providers.md).
+
+### Через OpenCode
+
+Установите OpenCode и добавьте настройки в его глобальный `~/.config/opencode/opencode.json` ([справочник конфигурации](https://docs.opencode.ai/docs/config/)). `openrouter` встроен; `gateway` показывает свой Chat Completions API:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "openrouter": {
+      "options": { "apiKey": "{env:OPENROUTER_API_KEY}" },
+      "models": { "MODEL_ID": {} }
+    },
+    "gateway": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "https://gateway.example/v1",
+        "apiKey": "{env:GATEWAY_API_KEY}"
+      },
+      "models": { "MODEL_ID": { "name": "My model" } }
+    }
+  }
+}
+```
+
+Оставьте нужного провайдера, замените шаблонные значения и передайте его ключ в окружение запуска Crewboard. Для своего Responses API используйте `@ai-sdk/openai`. Другой вариант: выполните `/connect` в OpenCode, выберите OpenRouter и введите ключ; при использовании сохранённого ключа уберите `options.apiKey` ([провайдеры](https://docs.opencode.ai/docs/providers/)).
+
+Зарегистрируйте исполнителя OpenCode в `agents.json` Crewboard:
+
+```json
+{
+  "agents": {
+    "router-opencode": { "run": "opencode", "model": "openrouter/MODEL_ID" },
+    "gateway": { "run": "opencode", "model": "gateway/MODEL_ID" }
+  }
+}
+```
+
+`opencode models openrouter` выводит настроенные модели. Для живой проверки выполните `opencode run -m openrouter/MODEL_ID "Read the README and summarize this project"` в тестовом репозитории; для платной модели это платный запрос ([справочник CLI](https://docs.opencode.ai/docs/cli/)).
+
+### Codex: нужен Responses API
+
+Пользовательские провайдеры Codex задаются в пользовательском `~/.codex/config.toml`:
+
+```toml
+model_provider = "gateway"
+
+[model_providers.gateway]
+name = "My API"
+base_url = "https://gateway.example/v1"
+env_key = "GATEWAY_API_KEY"
+wire_api = "responses"
+```
+
+Передайте ключ через окружение запуска и зарегистрируйте `"run": "codex", "model": "MODEL_ID"` в `agents.json`. Crewboard передаёт Codex модель; провайдер выбирается конфигурацией Codex, а не префиксом провайдера в строке модели. Текущая конфигурация Codex поддерживает только `wire_api = "responses"`: сервера только с Chat Completions недостаточно. Проверьте streaming, вызовы инструментов и продолжение сессии со своим шлюзом ([расширенная конфигурация](https://learn.chatgpt.com/docs/config-file/config-advanced), [справочник конфигурации](https://learn.chatgpt.com/docs/config-file/config-reference)).
+
+### Где хранится ключ
+
+| Вариант | Где находится секрет |
+| --- | --- |
+| dsh с `apiKeyEnv` | В примере профиль содержит ссылку, а секрет берётся из окружения запуска. dsh также умеет читать сохранённые учётные данные; ключи, сохранённые через его страницу Models, записываются в `$DSH_HOME/.credentials.yaml` ([руководство dsh](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/guide/providers.md)). |
+| OpenCode с `{env:…}` | В примере секрет читается из окружения запуска, а конфигурация содержит ссылку на переменную. `/connect` и `opencode auth login` сохраняют учётные данные в `~/.local/share/opencode/auth.json` ([провайдеры](https://docs.opencode.ai/docs/providers/), [CLI](https://docs.opencode.ai/docs/cli/)). |
+| Codex с `env_key` | В примере читается указанная переменная окружения, а TOML содержит её имя. У других способов аутентификации свои хранилища учётных данных ([аутентификация](https://learn.chatgpt.com/docs/auth?surface=cli)). |
+
+Если вы записали ключ в файл запуска shell или `.env`, он хранится и в этом файле. Дочерние процессы наследуют переменные окружения; это не гарантирует, что секрет нигде не сохраняется и не раскрывается. Не помещайте сами ключи в `agents.json`, задания и систему контроля версий.
 
 ## Виды результата
 
@@ -81,6 +212,18 @@ Claude-исполнитель — это официальный Claude Code, з�
 | `branch` | работать в своей рабочей копии Git в `.crewboard/worktrees/` и коммитить там |
 | `answer` | ничего не менять и ответить в итоге |
 | `decision` | ничего не менять и дать решение с обоснованием |
+
+### Ответы dsh не защищены от записи
+
+Для исполнителей через dsh виды `answer` и `decision` остаются инструкциями в промпте, **а не техническим запретом записи**. `crewboard_agents` возвращает `readOnly: false` и `readOnlyReason: "dsh_unprotected"` как для встроенных, так и для зарегистрированных исполнителей dsh. Если поручение не должно менять файлы, выбирайте исполнителя с заявленной поддержкой read-only. Текущее поведение запуска dsh сохранено.
+
+Следующие механизмы проверены по ACP-клиенту core, установленному CLI dsh `0.1.5-rc.1` с пакетами base/workflow `0.1.5-rc.2` и документации разработчиков на 2026-11-03:
+
+- [Запросы разрешений ACP](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/acp/acp/README.md): Crewboard отклоняет каждый `session/request_permission`, включая запись и команды, которые запрашивают разрешение. Обычные разрешённые операции могут не обращаться к клиенту. ACP не предоставляет ни режимов сессии, ни настройки песочницы.
+- [Политика песочницы read-only](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/bundle/base/cordis.patch.yml): `DSH_PERMISSION_MODE=read-only` задаёт исходный режим для файлового провайдера и shell. [Сохранённые пресеты разрешений](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/interaction/permission-presets/README.md) могут заменить его при создании сессии. Одна переменная окружения не гарантирует фактический режим.
+- [Прежний движок workflow](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.1.5-rc.1/packages/workflow/workflow-worker-thread/README.md): поставляемый движок на worker threads не является границей безопасности; скрипты модели могут обращаться к файловым API Node вне песочницы shell. Это воспроизведено локально с read-only в окружении. Более новый [workflow-ptc](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/workflow/workflow-ptc/README.md) описывает процессы с песочницей, но Crewboard пока не закрепляет и не проверяет этот состав профиля.
+
+Overlay конфигурации мог бы закрепить исходный режим и отключить известные опасные инструменты в одной версии. Crewboard не заявляет это как защиту для всех поддерживаемых установок. Для включения read-only адаптеру нужны проверенные минимальная версия и состав профиля, обязательная политика сессии, которую не могут расширить сохранённые настройки, и изоляция всех путей исполнения под управлением модели, включая workflow и потомков. От dsh также нужен доступный клиенту автоматизации фактический режим и признак обеспеченной изоляции либо равноценный проверяемый контракт запуска. Регрессионные проверки должны охватывать прямую запись файлов, команды shell и скриптовые инструменты с отказом при недоступной обязательной изоляции.
 
 ## Как исполнитель сдаёт работу
 

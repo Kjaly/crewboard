@@ -1,7 +1,7 @@
 import { type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import { availableActions } from '../../model/project.js'
 import type { AssignmentView, ProviderId, RequestAction } from '../../model/types.js'
-import type { HandoffPick } from '../api.js'
+import type { Api, HandoffPick } from '../api.js'
 import { ArrowClockwise, ArrowsLeftRight, ArrowUUpLeft, CaretRight, ChatsCircle, Copy, HourglassMedium, Info, NotePencil, Octagon, Play, Stop, XCircle } from '../icons.js'
 import { T } from '../text.js'
 import { Handoff } from './handoff.js'
@@ -16,6 +16,7 @@ const COPIED_MS = 1600
 
 /** The requests the owner may send on a node; each goes to the lead, which decides. */
 export function Actions(props: {
+  loadModels?: Api['models']
   node: AssignmentView
   leadOnline: boolean
   mode: ActionMode
@@ -36,6 +37,7 @@ export function Actions(props: {
   const asks = ORDER.filter((a) => actions.includes(a))
   const canStopNow = actions.includes('emergency_stop')
   const pending = node.request?.state === 'pending' ? node.request : undefined
+  const handoff = node.pendingRun ?? node
 
   useEffect(() => () => clearTimeout(timer.current), [])
   useEffect(() => {
@@ -138,7 +140,7 @@ export function Actions(props: {
                     </span>
                     {expandable ? <CaretRight size={13} className="na-chev" aria-hidden="true" /> : a === 'discuss' ? <Copy size={13} className="na-chev flat" aria-hidden="true" /> : <span />}
                   </button>
-                  {open && <Body>{a === 'handoff' ? <Handoff from={node.provider} {...(node.model ? { fromModel: node.model } : {})} {...(node.effort ? { fromEffort: node.effort } : {})} sending={sending} onSend={(provider, pick) => void run(() => props.onRequest('handoff', undefined, provider, pick))} /> : (
+                  {open && <Body>{a === 'handoff' ? <Handoff loadModels={props.loadModels} from={node.provider} {...(handoff.model ? { fromModel: handoff.model } : {})} {...(handoff.effort ? { fromEffort: handoff.effort } : {})} sending={sending} onSend={(provider, pick) => void run(() => props.onRequest('handoff', undefined, provider, pick))} /> : (
                     <>
                       <textarea ref={field} className="na-ta" aria-label={T.actionText} placeholder={a === 'clarify' ? T.actionPlaceholder : undefined} value={text} disabled={sending} onChange={(e) => setText(e.target.value)} onKeyDown={fieldKeys} />
                       <div className="na-foot">

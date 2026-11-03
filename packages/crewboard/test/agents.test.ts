@@ -2,7 +2,8 @@ import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { AgentsFileError, type AgentIcon, type AgentRun, BUILTIN_AGENTS, createAgents, resolveAgentIcon } from '../src/workers/agents.js'
+import { AgentsFileError, type AgentIcon, type AgentRun, BUILTIN_AGENTS, createAgents, resolveAgentIcon, validateEffort } from '../src/workers/agents.js'
+import { choicesOf, setAgents } from '../src/ui/agents.js'
 import { leadLabel } from '../src/lead/clients.js'
 
 const withFile = async (file?: unknown) => {
@@ -60,6 +61,24 @@ describe('agent icons', () => {
 
 describe('agent registry', () => {
   it.each([
+    ['gpt-6.1-sol', 'none', false],
+    ['gpt-6.1-sol', 'high', true],
+    ['custom', 'none', true],
+    ['limited', 'high', false],
+    ['limited', 'low', true],
+    ['no-effort', 'low', false],
+  ])('checks %s effort %s using model levels with an adapter fallback', async (model, effort, allowed) => {
+    const { agents } = await withFile({ agents: { codex: { models: [
+      ...BUILTIN_AGENTS.find((a) => a.id === 'codex')!.models,
+      { id: 'limited', efforts: ['low'] }, { id: 'no-effort', efforts: [] },
+    ] } } })
+    const agent = (await agents.get('codex'))!
+    const check = () => validateEffort(agent, effort, model)
+    if (allowed) expect(check).not.toThrow()
+    else expect(check).toThrow()
+  })
+
+  it.each([
     ['claude', 'high', undefined],
     ['codex', 'ultra', undefined],
     ['claude', 'ultra', 'allowed levels: low, medium, high, xhigh, max'],
@@ -100,5 +119,16 @@ describe('agent registry', () => {
     const { home, agents } = await withFile({ agents: entries })
     await expect(agents.list()).rejects.toBeInstanceOf(AgentsFileError)
     await expect(agents.list()).rejects.toMatchObject({ path: join(home, 'agents.json') })
+  })
+})
+
+describe('model choices', () => {
+  it.each([
+    ['limited', ['low']],
+    ['no-effort', []],
+    ['unlisted', ['none', 'low', 'high']],
+  ])('offers the selected model efforts for %s with an adapter fallback', (model, expected) => {
+    setAgents([{ id: 'custom', label: 'Custom', model: 'limited', models: [{ id: 'limited', efforts: ['low'] }, { id: 'no-effort', efforts: [] }], efforts: ['none', 'low', 'high'] }])
+    expect(choicesOf('custom', model).efforts).toEqual(expected)
   })
 })

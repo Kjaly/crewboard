@@ -41,3 +41,30 @@ describe('the server port', () => {
     await expect(second.listen(port)).rejects.toMatchObject({ code: 'EADDRINUSE' })
   })
 })
+
+
+describe('agent settings HTTP writes', () => {
+  it('saves a validated configuration and returns 409 for an outdated revision', async () => {
+    const t = await startApp()
+    running.push(t)
+    const url = `${t.server.url}/api/agents-config`
+    const before = await (await fetch(url)).json() as { revision: string; config: unknown }
+    const put = (body: unknown) => fetch(url, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    const saved = await put({ revision: before.revision, config: { agents: { codex: { effort: 'medium' } }, presets: { cheap: false } } })
+    expect(saved.status).toBe(200)
+    expect(await saved.json()).toMatchObject({ config: { agents: { codex: { effort: 'medium' } }, presets: { cheap: false } } })
+    expect((await put({ revision: before.revision, config: before.config })).status).toBe(409)
+    const current = await (await fetch(url)).json() as { revision: string }
+    expect((await put({ revision: current.revision, config: { agents: { codex: { effort: 'invalid' } } } })).status).toBe(400)
+  })
+
+  it.each([
+    [{ origin: 'https://foreign.example', 'content-type': 'application/json' }, 403],
+    [{ 'content-type': 'text/plain' }, 415],
+  ])('refuses an unsafe settings write with headers %j', async (headers, status) => {
+    const t = await startApp()
+    running.push(t)
+    const response = await fetch(`${t.server.url}/api/agents-config`, { method: 'PUT', headers, body: '{}' })
+    expect(response.status).toBe(status)
+  })
+})

@@ -9,7 +9,8 @@ import { createFakeBackend } from './fake-backend.js'
 
 describe('parseOutcome', () => {
   it.each([
-    ['report tag', 'Сделал.\n<crewboard-report>Короб готов</crewboard-report>', { kind: 'report', summary: 'Короб готов' }],
+    ['report tag', 'Сделал.\n<crewboard-report>Короб готов</crewboard-report>', { kind: 'report', summary: 'Короб готов', detail: 'Сделал.' }],
+    ['text before and after the report', 'Answer before.\n<crewboard-report>Summary</crewboard-report>\nAnswer after.', { kind: 'report', summary: 'Summary', detail: 'Answer before.\n\nAnswer after.' }],
     ['question with options', '<crewboard-question>Шторка или слой?\n\n- Шторка\n- Слой</crewboard-question>', { kind: 'question', text: 'Шторка или слой?', options: ['Шторка', 'Слой'] }],
     ['no tag: the whole answer is the result', 'Всё готово, тесты зелёные', { kind: 'report', summary: 'Всё готово, тесты зелёные' }],
     ['empty answer', '   ', { kind: 'report', summary: 'The worker finished without a report', code: 'no_report' }],

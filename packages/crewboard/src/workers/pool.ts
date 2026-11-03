@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { type LaunchInput, type NormEvent, type RawEvent, type Run, type RunBackend, cliModel, normalize, publicText, usageForRun } from '@crewboard/core'
+import { failureText } from './failure.js'
 import type { RunCost } from '../model/types.js'
 
 /** dsh streams its last answer as `answer_delta` chunks and sends no `result`: the last turn's chunks, joined. */
@@ -12,7 +13,7 @@ function streamedAnswer(raw: RawEvent[]): string | undefined {
 }
 
 export type BackendFor = (agent: string) => Promise<RunBackend>
-export type PollResult = { events: NormEvent[]; nextIndex: number; terminal: boolean; failed: boolean; narration?: string; reason?: string; finalText?: string; usage?: RunCost }
+export type PollResult = { events: NormEvent[]; nextIndex: number; terminal: boolean; failed: boolean; narration?: string; reason?: string; text?: string; finalText?: string; usage?: RunCost }
 export type Pool = ReturnType<typeof createPool>
 
 /** Launch, read, steer and stop worker runs through core's `RunBackend`, whichever CLI is behind it. */
@@ -26,7 +27,7 @@ export function createPool(o: { backendFor: BackendFor; runsDir: string; repo?: 
   return {
     async launch(input: Omit<LaunchInput, 'promptFile'> & { prompt: string }): Promise<string> {
       const backend = await o.backendFor(input.agent)
-      // A backend that cannot launch read-only (dsh) is still told so in the prompt; asking it would be refused.
+      // A backend that cannot launch read-only is still told so in the prompt.
       const readOnly = input.readOnly === true && backend.readOnlyLaunch === true
       return backend.launch({ agent: input.agent, cwd: input.cwd, promptFile: await writePrompt(input.prompt), ...(input.model !== undefined ? { model: input.model } : {}), ...(input.effort !== undefined ? { effort: input.effort } : {}), ...(readOnly ? { readOnly: true } : {}) })
     },
@@ -37,7 +38,10 @@ export function createPool(o: { backendFor: BackendFor; runsDir: string; repo?: 
       // Read narration from the whole feed: later commands and merged streaming chunks must not lose its intent.
       const narration = events.findLast((e) => e.kind === 'message' || e.kind === 'thought')?.text
       const result: PollResult = { events: events.slice(sinceIndex), nextIndex: events.length, terminal: state.terminal, failed: state.terminal && state.status !== 'completed', ...(narration ? { narration } : {}) }
-      if (result.failed) result.reason = state.failure?.reason ?? state.status
+      if (result.failed) {
+        result.reason = state.failure?.reason ?? state.status
+        if (state.failure?.text) result.text = failureText(state.failure.text)
+      }
       if (state.terminal) {
         // CLI backends close a turn with `result`; dsh and older runners with `final`.
         const final = raw.findLast((e) => e.type === 'result' || e.type === 'final')

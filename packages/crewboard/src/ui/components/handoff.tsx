@@ -1,18 +1,18 @@
 import { type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ProviderId } from '../../model/types.js'
-import { AGENTS, choicesOf } from '../agents.js'
-import type { HandoffPick } from '../api.js'
+import { AGENTS, choicesOf, type ModelChoice } from '../agents.js'
+import type { Api, HandoffPick } from '../api.js'
 import { ArrowCounterClockwise, CaretDown, Plus } from '../icons.js'
 import { T, providerLabel } from '../text.js'
 import { Avatar } from './badges.js'
 
-type Value = { model?: string; effort?: string }
+type Value = HandoffPick
 
 const effortName = (effort: string): string => T.effort[effort] ?? effort
 const lower = (text: string): string => text.toLocaleLowerCase(T.locale)
 
 /** The handover: one row per agent with a chip for its model and effort; the chip opens the popover that sets both. */
-export function Handoff(props: { from: ProviderId; fromModel?: string; fromEffort?: string; sending: boolean; onSend: (provider: ProviderId, pick: HandoffPick) => void }) {
+export function Handoff(props: { loadModels?: Api['models']; from: ProviderId; fromModel?: string; fromEffort?: string; sending: boolean; onSend: (provider: ProviderId, pick: HandoffPick) => void }) {
   const [selected, setSelected] = useState<string>()
   const [edited, setEdited] = useState<Record<string, Value>>({})
   const [popFor, setPopFor] = useState<string>()
@@ -24,7 +24,8 @@ export function Handoff(props: { from: ProviderId; fromModel?: string; fromEffor
   const start = (id: string): Value => {
     const d = choicesOf(id)
     const model = id === props.from ? (props.fromModel ?? d.defaultModel) : d.defaultModel
-    const effort = id === props.from ? (props.fromEffort ?? d.defaultEffort) : d.defaultEffort
+    // A supplied model carries the run's choices, including an effort deliberately left unset.
+    const effort = id === props.from ? (props.fromModel !== undefined ? props.fromEffort : (props.fromEffort ?? d.defaultEffort)) : d.defaultEffort
     return { ...(model ? { model } : {}), ...(effort ? { effort } : {}) }
   }
   const current = (id: string): Value => edited[id] ?? start(id)
@@ -125,12 +126,13 @@ export function Handoff(props: { from: ProviderId; fromModel?: string; fromEffor
           </button>
         </div>
       )}
-      {popFor && <Popover id={popFor} value={current(popFor)} pos={pos} modelName={modelName} onChange={(patch) => change(popFor, patch)} onReset={() => reset(popFor)} onClose={closePop} />}
+      {popFor && <Popover key={popFor} loadModels={props.loadModels} id={popFor} value={current(popFor)} pos={pos} modelName={modelName} onChange={(patch) => change(popFor, patch)} onReset={() => reset(popFor)} onClose={closePop} />}
     </div>
   )
 }
 
 function Popover(props: {
+  loadModels?: Api['models']
   id: string
   value: Value
   pos: { top: number; right: number }
@@ -140,10 +142,37 @@ function Popover(props: {
   onClose: (focusChip: boolean) => void
 }) {
   const { id, value } = props
-  const choices = choicesOf(id)
+  const choices = choicesOf(id, value.model)
   const root = useRef<HTMLDivElement>(null)
   const custom = useRef<HTMLInputElement>(null)
-  const models = value.model && !choices.models.some((m) => m.id === value.model) ? [...choices.models, { id: value.model, label: value.model }] : choices.models
+  const [catalog, setCatalog] = useState<ModelChoice[]>()
+  const [search, setSearch] = useState('')
+  const [refresh, setRefresh] = useState(0)
+  const [loading, setLoading] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const available = catalog ?? choices.models
+  const models = value.model && !available.some((m) => m.id === value.model) ? [...available, { id: value.model, label: value.model }] : available
+  const visible = models.filter((m) => lower(`${m.id} ${m.label}`).includes(lower(search.trim())))
+
+  useEffect(() => {
+    if (!props.loadModels) return
+    let active = true
+    setLoading(true)
+    setFailed(false)
+    props.loadModels(id, refresh > 0).then((models) => {
+      if (active) setCatalog(models)
+    }, () => {
+      // Keep the registry choices available and offer an explicit retry.
+      if (active) setFailed(true)
+    }).finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [id, props.loadModels, refresh])
+
+  const pricing = (m: ModelChoice): string | undefined => {
+    if (!m.pricing) return undefined
+    const format = (n?: number) => n === undefined ? '—' : new Intl.NumberFormat(T.locale, { maximumFractionDigits: 6 }).format(n)
+    return `$${format(m.pricing.prompt)} / $${format(m.pricing.completion)} ${T.catalogPriceUnit}`
+  }
 
   useEffect(() => {
     const el = root.current
@@ -165,7 +194,7 @@ function Popover(props: {
       return props.onClose(true)
     }
     if (e.target instanceof HTMLInputElement || e.metaKey || e.ctrlKey || e.altKey) return
-    const pick = models[Number(e.key) - 1]
+    const pick = visible[Number(e.key) - 1]
     if (pick && /^[1-9]$/.test(e.key)) props.onChange({ model: pick.id })
   }
   // Focus moving to something outside the popover (not its own chip, which toggles it) closes it.
@@ -180,7 +209,9 @@ function Popover(props: {
     custom.current.value = ''
   }
 
-  const { efforts } = choices
+  // A model's own levels from the catalog (Codex reports them) narrow the agent's.
+  const listed = catalog?.find((m) => m.id === value.model)?.efforts
+  const efforts = listed ?? choices.efforts
   const index = value.effort ? efforts.indexOf(value.effort) : -1
   const setEffort = (i: number) => {
     const next = efforts[Math.max(0, Math.min(efforts.length - 1, i))]
@@ -211,15 +242,23 @@ function Popover(props: {
           <ArrowCounterClockwise size={12} aria-hidden="true" /> {T.resetDefaults}
         </button>
       </div>
-      <div className="na-sec">{T.modelLabel}</div>
+      <div className="na-sec na-catalog-head">
+        <span>{T.modelLabel}</span>
+        {props.loadModels && <button type="button" disabled={loading} onClick={() => setRefresh((n) => n + 1)}>{loading ? T.catalogLoading : T.catalogRefresh}</button>}
+      </div>
+      {failed && <div className="na-catalog-status" role="status">{T.catalogFailed}</div>}
+      {(models.length > 8 || search) && <input type="search" className="na-catalog-search" aria-label={T.catalogSearch} placeholder={T.catalogSearch} value={search} onChange={(e) => setSearch(e.target.value)} />}
+      {visible.length === 0 && <div className="na-catalog-status" role="status">{T.catalogEmpty}</div>}
       {/* biome-ignore lint/a11y/useSemanticElements: a listbox of radio-like rows; the native select cannot hold notes and keys. */}
-      <div role="listbox" aria-label={T.modelLabel}>
-        {models.map((m, k) => (
+      <div className="na-catalog-list" role="listbox" aria-label={T.modelLabel}>
+        {visible.map((m, k) => (
           <button type="button" key={m.id} role="option" aria-selected={m.id === value.model} className="na-mi" onClick={() => props.onChange({ model: m.id })}>
             <span className="na-dot" aria-hidden="true" />
             <span>
               {m.label}
               {m.id === choices.defaultModel ? <span className="s">{T.defaultTag}</span> : m.note ? <span className="s">{m.note}</span> : null}
+              {m.source && <span className="na-model-meta">{m.source === 'discovered' ? T.catalogDiscovered : T.catalogSuggested}{m.status === 'not_listed' ? ` · ${T.catalogNotListed}` : ''}</span>}
+              {m.pricing && <span className="na-model-meta" title={T.catalogPriceHint}>{pricing(m)}</span>}
             </span>
             <span className="k" aria-hidden="true">{k < 9 ? k + 1 : ''}</span>
           </button>
@@ -241,6 +280,7 @@ function Popover(props: {
         />
       </div>
       <div className="na-psep" />
+      <button type="button" className="na-reset" aria-pressed={value.effort === null} onClick={() => props.onChange({ effort: null })}>{T.effortDefault}</button>
       {efforts.length > 0 ? (
         <>
           <div className="na-sec na-eff-head">

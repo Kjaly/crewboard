@@ -5,7 +5,7 @@ import type { ProviderId, ResultKind, SystemText } from '../model/types.js'
 
 export type SplitPart = { title: string; criteria: string[]; provider?: ProviderId }
 export type WorkerOutcome =
-  | { kind: 'report'; summary: string; code?: SystemText }
+  | { kind: 'report'; summary: string; detail?: string; code?: SystemText }
   | { kind: 'question'; text: string; options: string[] }
   | { kind: 'split'; summary: string; parts: SplitPart[]; code?: SystemText }
 
@@ -74,7 +74,10 @@ export function parseOutcome(finalText: string, known: ReadonlySet<string> = BUI
     const summary = finalText.slice(0, last.index).replace(TAG, '').trim()
     return summary ? { kind: 'split', summary, parts } : { kind: 'split', summary: 'The work is split into parts', parts, code: 'split' }
   }
-  if (last[1] === 'report') return body ? { kind: 'report', summary: body } : NO_REPORT
+  if (last[1] === 'report') {
+    const detail = finalText.replace(TAG, '').trim().slice(0, 30_000)
+    return { ...(body ? { kind: 'report' as const, summary: body } : NO_REPORT), ...(detail ? { detail } : {}) }
+  }
   const [head = '', ...rest] = body.split(/\n\s*\n/)
   const options = rest.join('\n').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('- ')).map((l) => l.slice(2).trim()).filter(Boolean)
   return { kind: 'question', text: head.trim(), options }

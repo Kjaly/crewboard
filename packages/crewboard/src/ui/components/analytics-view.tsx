@@ -99,6 +99,19 @@ export function AnalyticsView(props: { analytics: GoalAnalytics | undefined }) {
         </thead>
         <tbody>{Object.entries(a.byProvider).map(([p, cell]) => costRow(providerLabel(p) ?? p, cell, p as ProviderId))}</tbody>
       </table>
+      <table className="costs">
+        <caption>{T.costsByModel}</caption>
+        <thead>
+          <tr>
+            <th scope="col">{T.costCols.model}</th>
+            <th scope="col">{T.costCols.runs}</th>
+            <th scope="col">{T.costCols.money}</th>
+            <th scope="col">{T.costCols.api}</th>
+            <th scope="col">{T.costCols.tokens}</th>
+          </tr>
+        </thead>
+        <tbody>{Object.entries(a.byModel).map(([model, cell]) => costRow(model || T.noData, cell))}</tbody>
+      </table>
       {a.byAssignment.length > 0 && (
         <table className="costs">
           <caption>{T.costsByAssignment}</caption>

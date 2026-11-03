@@ -2,7 +2,7 @@ import type { EventOf, GoalEvent, ProviderId, RunCost } from './model/types.js'
 
 export type Lane = { provider: ProviderId; bars: Array<{ assignmentId: string; title: string; start: string; end?: string; outcome?: 'completed' | 'failed' | 'cancelled' }> }
 export type CostCell = { usd?: number; apiUsd?: number; inputTokens?: number; outputTokens?: number; runs: number; runsWithoutData: number; subscriptionRuns: number }
-export type GoalAnalytics = { from: string; to: string; lanes: Lane[]; byProvider: Record<string, CostCell>; byAssignment: Array<{ assignmentId: string; title: string; provider: ProviderId } & CostCell> }
+export type GoalAnalytics = { from: string; to: string; lanes: Lane[]; byProvider: Record<string, CostCell>; byModel: Record<string, CostCell>; byAssignment: Array<{ assignmentId: string; title: string; provider: ProviderId } & CostCell> }
 
 
 
@@ -28,6 +28,7 @@ export function goalAnalytics(events: GoalEvent[], now: Date): GoalAnalytics {
   for (const e of events) if (e.type === 'run_ended') ends.set(e.runId, e)
   const lanes = new Map<ProviderId, Lane>()
   const byProvider: Record<string, CostCell> = {}
+  const byModel: Record<string, CostCell> = Object.create(null)
   const byAssignment = new Map<string, { assignmentId: string; title: string; provider: ProviderId } & CostCell>()
   // The agent of a run is the one its assignment had when the run started: assigned, then any handover before it.
   const current = new Map<string, ProviderId>()
@@ -42,6 +43,11 @@ export function goalAnalytics(events: GoalEvent[], now: Date): GoalAnalytics {
     lanes.set(provider, lane)
     byProvider[provider] ??= { runs: 0, runsWithoutData: 0, subscriptionRuns: 0 }
     add(byProvider[provider], end?.usage)
+    // Legacy journals still have the resolved model in `<adapter>/<model>`; keep nested model ids intact.
+    // An empty key means the model is unknown, shown as «no data» on the screen.
+    const model = e.model ?? (e.agent.includes('/') ? e.agent.slice(e.agent.indexOf('/') + 1) : '')
+    byModel[model] ??= { runs: 0, runsWithoutData: 0, subscriptionRuns: 0 }
+    add(byModel[model], end?.usage)
     const row = byAssignment.get(e.assignmentId) ?? { assignmentId: e.assignmentId, title: titles.get(e.assignmentId) ?? e.assignmentId, provider, runs: 0, runsWithoutData: 0, subscriptionRuns: 0 }
     add(row, end?.usage)
     // Work handed over is booked to the agent that ran it last.
@@ -54,5 +60,5 @@ export function goalAnalytics(events: GoalEvent[], now: Date): GoalAnalytics {
   const finishes = bars.map((b) => b.end ?? '').filter(Boolean).sort()
   const from = starts[0] ?? events[0]?.ts ?? now.toISOString()
   const to = open || !finishes.length ? now.toISOString() : (finishes.at(-1) as string)
-  return { from, to, lanes: [...lanes.values()], byProvider, byAssignment: [...byAssignment.values()] }
+  return { from, to, lanes: [...lanes.values()], byProvider, byModel, byAssignment: [...byAssignment.values()] }
 }

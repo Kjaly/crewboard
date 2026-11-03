@@ -10,6 +10,7 @@ import type { EventStore } from './store/event-store.js'
 import { worktreesDir } from './store/paths.js'
 import type { Pool } from './workers/pool.js'
 import { parseOutcome, workerPrompt } from './workers/protocol.js'
+import { failureText } from './workers/failure.js'
 import { readable } from './workers/steps.js'
 import { type Agents, AgentsFileError, builtinAgents, validateEffort } from './workers/agents.js'
 
@@ -45,7 +46,6 @@ const openRun = (own: GoalEvent[]): EventOf<'run_started'> | undefined => {
  */
 export function createSupervisor(o: { repo: string; store: EventStore; pool: Pool; now: () => Date; worktree: WorktreeFn; agents?: Agents }) {
   const agents = o.agents ?? builtinAgents
-  let brokenRegistry: string | undefined
   const cursors = new Map<string, number>()
   const append = (goalId: string, e: NewEvent) => o.store.append(goalId, e)
 
@@ -55,28 +55,33 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
     return chain
   }
 
-  const launch = async (goalId: string, node: AssignmentView, cwdOf: () => Promise<string>, chain: string[], resumeNote?: string) => {
-    // A registry file that cannot be read right now (being edited, a typo) is the owner's to fix, not the work's
-    // fault: nothing starts and nothing is recorded, and the work waits in the queue. Said once in the server log.
+  const launch = async (goalId: string, node: AssignmentView, own: GoalEvent[], cwdOf: () => Promise<string>, chain: string[], resumeNote?: string) => {
+    // Keep the work queued and tell the lead once per goal, including across server restarts.
     const registered = await agents.get(node.provider).catch((error: unknown) => error as Error)
     if (registered instanceof AgentsFileError) {
-      if (brokenRegistry !== registered.message) console.error(`crewboard: ${registered.message}; queued work waits until it is fixed`)
-      brokenRegistry = registered.message
+      const events = await o.store.read(goalId)
+      if (!events.some((e) => e.type === 'progress' && e.code === 'launch_registry')) {
+        const detail = failureText(registered.message)
+        await append(goalId, { type: 'progress', goalId, assignmentId: goalId, actor: 'system', text: `Queued work waits for the agent registry to be fixed: ${detail}`, code: 'launch_registry', detail })
+      }
       return
     }
-    brokenRegistry = undefined
     // An agent removed from the registry fails the launch like a refusing backend: recorded once with the reason,
     // told to the lead, not retried.
-    const agent = registered && !(registered instanceof Error) ? agents.coreId(registered, node.model) : node.provider
+    // The view shows the last run; the next run resolves the assignment's latest overrides afresh.
+    const choices = own.findLast((e): e is EventOf<'assigned'> | EventOf<'reassigned'> => e.type === 'assigned' || e.type === 'reassigned')
+    const entry = registered && !(registered instanceof Error) ? registered : undefined
+    const model = choices?.model ?? entry?.model
+    const effort = choices?.effort ?? entry?.effort
+    const snapshot = { ...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}) }
+    const agent = entry ? agents.coreId(entry, model) : node.provider
     const prompt = workerPrompt({ title: node.title, criteria: node.criteria, resultKind: node.resultKind as ResultKind, chain, ...(resumeNote ? { resumeNote } : {}) })
     let runId: string
     let cwd = o.repo
     try {
       if (registered instanceof Error) throw registered
       if (!registered) throw new Error(`agent ${node.provider} is not in the registry`)
-      const model = node.model ?? registered.model
-      const effort = node.effort ?? registered.effort
-      validateEffort(registered, effort)
+      validateEffort(registered, effort, model)
       cwd = await cwdOf()
       // An answer or a decision changes no files: the backend enforces it where it can, the prompt says it everywhere.
       runId = await o.pool.launch({ agent, cwd, prompt, model, ...(effort !== undefined ? { effort } : {}), readOnly: node.resultKind === 'answer' || node.resultKind === 'decision' })
@@ -84,12 +89,12 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
       // A launch the backend refuses (no CLI, no key, policy) is a run that failed at once: recorded, told to the
       // lead through the inbox, and not retried by the next tick. The lead decides: steer to retry, or cancel.
       const failed = `not-started-${Date.now().toString(36)}`
-      const reason = error instanceof Error ? error.message : String(error)
-      await append(goalId, { type: 'run_started', goalId, assignmentId: node.id, actor: 'system', runId: failed, agent, cwd })
+      const reason = failureText(error instanceof Error ? error.message : String(error))
+      await append(goalId, { type: 'run_started', goalId, assignmentId: node.id, actor: 'system', runId: failed, agent, cwd, ...snapshot })
       await append(goalId, { type: 'run_ended', goalId, assignmentId: node.id, actor: 'system', runId: failed, outcome: 'failed', reason })
       return
     }
-    await append(goalId, { type: 'run_started', goalId, assignmentId: node.id, actor: 'system', runId, agent, cwd })
+    await append(goalId, { type: 'run_started', goalId, assignmentId: node.id, actor: 'system', runId, agent, cwd, ...snapshot })
   }
 
   const readRun = async ({ goalId, node, own }: Live, started: EventOf<'run_started'>) => {
@@ -110,8 +115,8 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
     // the lead closes the parent), a failure cancels it with the reason.
     const workerOwned = own.some((e) => e.type === 'assigned' && e.actor === 'worker')
     if (r.failed) {
-      await append(goalId, { type: 'run_ended', goalId, assignmentId: node.id, actor: 'system', runId: started.runId, outcome: 'failed', ...(r.reason ? { reason: r.reason } : {}), ...(r.usage ? { usage: r.usage } : {}) })
-      if (workerOwned) await append(goalId, { type: 'cancelled', goalId, assignmentId: node.id, actor: 'system', reason: `Run failed: ${r.reason ?? 'unknown reason'}`, code: 'run_failed', detail: r.reason ?? '' })
+      await append(goalId, { type: 'run_ended', goalId, assignmentId: node.id, actor: 'system', runId: started.runId, outcome: 'failed', ...(r.reason ? { reason: r.reason } : {}), ...(r.text ? { text: r.text } : {}), ...(r.usage ? { usage: r.usage } : {}) })
+      if (workerOwned) await append(goalId, { type: 'cancelled', goalId, assignmentId: node.id, actor: 'system', reason: `Run failed: ${r.reason ?? 'unknown reason'}${r.text ? `: ${r.text}` : ''}`, code: 'run_failed', detail: r.text ?? r.reason ?? '' })
       return
     }
     // A part may name any registered agent; an unknown name leaves the part with its worker's agent.
@@ -126,7 +131,7 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
     )
     const outcome = parseOutcome(r.finalText ?? '', known)
     if (outcome.kind === 'question') await append(goalId, { type: 'question', goalId, assignmentId: node.id, actor: 'worker', text: outcome.text, options: outcome.options })
-    else await append(goalId, { type: 'reported', goalId, assignmentId: node.id, actor: 'worker', summary: outcome.summary, ...(outcome.kind === 'split' ? { split: true } : {}), ...(outcome.code ? { code: outcome.code } : {}) })
+    else await append(goalId, { type: 'reported', goalId, assignmentId: node.id, actor: 'worker', summary: outcome.summary, ...(outcome.kind === 'report' && (node.resultKind === 'answer' || node.resultKind === 'decision') && outcome.detail ? { detail: outcome.detail } : {}), ...(outcome.kind === 'split' ? { split: true } : {}), ...(outcome.code ? { code: outcome.code } : {}) })
     if (outcome.kind === 'split') {
       // What the split could not honour is said in the journal, not dropped silently.
       const dropped = outcome.parts.length - MAX_SPLIT
@@ -155,7 +160,7 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
       const closed = kidEvents.findLast((e): e is EventOf<'closed'> => e.type === 'closed')
       const cancelled = kidEvents.findLast((e): e is EventOf<'cancelled'> => e.type === 'cancelled')
       const reported = kidEvents.findLast((e): e is EventOf<'reported'> => e.type === 'reported')
-      if (v.status === 'reported') return `- ${v.title}: ${reported?.summary ?? 'reported'}`
+      if (v.status === 'reported') return `- ${v.title}: ${reported ? [reported.summary, reported.detail].filter(Boolean).join('\n\n') : 'reported'}`
       return `- ${v.title}: ${v.status === 'done' ? (closed?.summary ?? 'done') : `not done (${cancelled?.reason ?? v.status})`}`
     })
     await this_.deliver(goalId, node.id, `Your assignments have finished:\n${results.join('\n')}\n\nContinue your task with these results in mind.`)
@@ -182,7 +187,7 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
           // A run that cannot be read (its record is gone, the backend throws) ends as failed; the other nodes
           // of the project keep moving and the lead hears about it through the inbox.
           await readRun({ goalId: meta.goalId, node, own }, live).catch((error: unknown) =>
-            append(meta.goalId, { type: 'run_ended', goalId: meta.goalId, assignmentId: node.id, actor: 'system', runId: live.runId, outcome: 'failed', reason: error instanceof Error ? error.message : String(error) }),
+            append(meta.goalId, { type: 'run_ended', goalId: meta.goalId, assignmentId: node.id, actor: 'system', runId: live.runId, outcome: 'failed', reason: failureText(error instanceof Error ? error.message : String(error)) }),
           )
           continue
         }
@@ -194,7 +199,7 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
           // Clarifications sent while the work waited in the queue were only journaled: its first run starts with them.
           const waited = own.some((e) => e.type === 'run_started') ? [] : own.filter((e): e is EventOf<'steered'> => e.type === 'steered').map((e) => `- ${e.text}`)
           const note = waited.length ? `Clarifications sent while this assignment waited:\n${waited.join('\n')}` : undefined
-          await launch(meta.goalId, node, () => (inheritCwd ? Promise.resolve(inheritCwd) : cwdFor(node)), chainOf(byId, node), note)
+          await launch(meta.goalId, node, own, () => (inheritCwd ? Promise.resolve(inheritCwd) : cwdFor(node)), chainOf(byId, node), note)
         }
       }
       // After this pass's results are in, workers whose split-off parts all finished continue.
@@ -247,7 +252,7 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
       const report = lastOf(own, 'reported')
       const before = question && question.seq > (report?.seq ?? 0) ? `You asked: ${question.text}` : report ? `Your previous report: ${report.summary}` : ''
       const note = [before, text].filter(Boolean).join('\n\n')
-      await launch(goalId, node, () => (last?.cwd ? Promise.resolve(last.cwd) : cwdFor(node)), chainOf(byId, node), note)
+      await launch(goalId, node, own, () => (last?.cwd ? Promise.resolve(last.cwd) : cwdFor(node)), chainOf(byId, node), note)
       return 'relaunched'
     },
 
@@ -258,7 +263,7 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
       if (!node) throw new Error(`no assignment ${assignmentId} in goal ${goalId}`)
       const agent = await agents.get(provider)
       if (!agent) throw new Error(`agent ${provider} is not in the registry`)
-      validateEffort(agent, effort ?? agent.effort)
+      validateEffort(agent, effort ?? agent.effort, model)
       const own = events.filter((e) => e.assignmentId === assignmentId)
       const live = openRun(own)
       if (live) {

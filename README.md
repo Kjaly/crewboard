@@ -79,6 +79,8 @@ Then, in your lead chat inside one of your repositories, describe what you want.
 | DeepSeek | `dsh` (DeepSeek Harness) with a DeepSeek key in its settings |
 | Any other agent | an entry in `~/.crewboard/agents.json`: OpenCode, Cursor, Gemini, Grok, Devin, or Kimi, GLM and other models through dsh |
 
+[Connect OpenRouter or your own API](docs/en/workers.md#connect-openrouter-or-your-own-api) through dsh, OpenCode or Codex.
+
 See [workers](docs/en/workers.md) for models, defaults and how a worker splits its own work. The foot of the sidebar shows how much of each subscription limit is used and the money left on DeepSeek and Kimi; see [providers](docs/en/screen.md#providers) for what each one needs.
 
 ## Documentation
@@ -93,4 +95,4 @@ See [workers](docs/en/workers.md) for models, defaults and how a worker splits i
 
 ## Status
 
-Version 1.2.0. Used on macOS with Claude Code, Codex CLI and DeepSeek Harness. Linux should work; Windows is untested. The server listens on 127.0.0.1 only and has no login of its own: see [security](SECURITY.md).
+Version 1.3.0. Used on macOS with Claude Code, Codex CLI and DeepSeek Harness. Linux should work; Windows is untested. The server listens on 127.0.0.1 only and has no login of its own: see [security](SECURITY.md).

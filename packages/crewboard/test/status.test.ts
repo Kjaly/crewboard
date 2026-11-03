@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { availableActions, buildTree, deriveStatus, doingOf, statusBucket } from '../src/model/project.js'
 import { LEAD_SILENT_PAUSE_MS, STALE_ABANDON_MS } from '../src/model/thresholds.js'
-import type { Doing, GoalEvent, NewEvent, Status } from '../src/model/types.js'
+import { type Doing, type GoalEvent, type NewEvent, type Status, goalEventSchema } from '../src/model/types.js'
 
 const NOW = new Date('2026-11-02T12:00:00Z')
 const ago = (ms: number) => new Date(NOW.getTime() - ms).toISOString()
@@ -58,6 +58,30 @@ describe('statusBucket', () => {
 })
 
 describe('buildTree', () => {
+  it('keeps a deferred handoff separate from the previous run snapshot', () => {
+    const events = [
+      ev({ type: 'goal_started', assignmentId: 'g', title: 'Goal', criteria: [] }), assigned(),
+      ev({ type: 'run_started', runId: 'r1', agent: 'codex/old', cwd: '/repo', model: 'old', effort: 'low' }),
+      ev({ type: 'run_ended', runId: 'r1', outcome: 'completed' }),
+      ev({ type: 'reassigned', provider: 'claude', model: 'chosen' }),
+    ]
+    const node = buildTree(events, NOW, NOW, [{ id: 'claude', model: 'default', effort: 'high' }]).children[0]!
+    expect(node).toMatchObject({ provider: 'claude', runProvider: 'codex', model: 'old', effort: 'low', pendingRun: { model: 'chosen', effort: 'high' } })
+  })
+
+  it.each([
+    ['queued defaults', [], {}, { model: 'current', effort: 'high' }],
+    ['queued overrides', [], { model: 'chosen', effort: 'low' }, { model: 'chosen', effort: 'low' }],
+    ['legacy run', [{ type: 'run_started', runId: 'r1', agent: 'codex/old', cwd: '/repo' }], {}, { model: 'current', effort: 'high' }],
+    ['running snapshot', [{ type: 'run_started', runId: 'r1', agent: 'codex/old', cwd: '/repo', model: 'old', effort: 'medium' }], {}, { model: 'old', effort: 'medium' }],
+    ['ended snapshot', [{ type: 'run_started', runId: 'r1', agent: 'codex/old', cwd: '/repo', model: 'old', effort: 'low' }, { type: 'run_ended', runId: 'r1', outcome: 'completed' }], {}, { model: 'old', effort: 'low' }],
+    ['latest snapshot without effort', [{ type: 'run_started', runId: 'r1', agent: 'codex/old', cwd: '/repo', model: 'old', effort: 'low' }, { type: 'run_started', runId: 'r2', agent: 'codex/latest', cwd: '/repo', model: 'latest' }], { model: 'chosen', effort: 'medium' }, { model: 'latest', effort: undefined }],
+  ] as const)('shows %s independently of later registry defaults', (_name, runs, overrides, expected) => {
+    const events = [ev({ type: 'goal_started', assignmentId: 'g', title: 'Goal', criteria: [] }), { ...assigned(), ...overrides }, ...runs.map((r) => goalEventSchema.parse(ev(r)))]
+    const node = buildTree(events, NOW, NOW, [{ id: 'codex', model: 'current', effort: 'high' }]).children[0]!
+    expect({ model: node.model, effort: node.effort }).toEqual(expected)
+  })
+
   it('nests children by parent and abandons work under a cancelled node', () => {
     const events: GoalEvent[] = [
       ev({ type: 'goal_started', assignmentId: 'g', title: 'Кухня', criteria: [] }),
@@ -111,7 +135,7 @@ describe('requests, handoffs and actions in the tree', () => {
   it.each([
     ['running', 'running', ['clarify', 'stop', 'handoff', 'discuss', 'emergency_stop']],
     ['waiting for the lead', 'waiting_answer', ['clarify', 'stop', 'handoff', 'discuss', 'emergency_stop']],
-    ['queued', 'queued', ['start_now', 'cancel', 'discuss']],
+    ['queued', 'queued', ['start_now', 'cancel', 'handoff', 'discuss']],
     ['done', 'done', ['reopen', 'discuss']],
     ['cancelled', 'cancelled', ['revive', 'discuss']],
     ['abandoned', 'abandoned', ['revive', 'discuss']],

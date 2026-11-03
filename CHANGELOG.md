@@ -2,6 +2,31 @@
 
 All notable changes to Crewboard are documented here. This changelog follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-11-03
+
+Researched and built through Crewboard: Codex researchers compared the code, the provider APIs and eleven other tools; Codex workers built it in their branches; Claude Code led, reviewed and merged.
+
+### Added
+
+- **A settings tab** for agents and presets: each agent's default model and effort, picked from its live catalog, on or off, and the presets. Saving writes `~/.crewboard/agents.json` atomically, keeps the previous file as `agents.json.bak`, writes only what you changed and refuses with a conflict when the file changed on disk.
+- **Presets**: `cheap` (DeepSeek), `normal` (Codex, medium), `hard` (Codex, high) and `review` (Claude Opus), overridable or switched off in `agents.json` under `presets`. The lead assigns by `preset`; explicit `model` and `effort` still win.
+- **A model catalog per agent**, discovered from the agent's own CLI or API: `codex debug models` with the effort levels each model takes, `opencode models`, OpenRouter's model list with prices and tool support. Cached for ten minutes, refreshable, merged with the suggestions; a suggestion the catalog does not list is marked. The handover popover and settings pick from it, with search; typing any model id still works. `GET /api/models`, and `catalog` in `crewboard_agents`. `CREWBOARD_NO_CATALOG=1` turns it off.
+- **Every run records the model and effort it actually ran with**; the screen shows those, not today's defaults, and Analytics adds **Costs by model**.
+- **Effort per model**: a model in `agents.json` takes its own `efforts`, checked on assign, handover and launch. The built-in Codex models carry the levels Codex reports for them.
+- **A handover for queued work** and an effort that can go back to the agent's or the CLI's default.
+- **Connect OpenRouter or any OpenAI-compatible API**: recipes for dsh, OpenCode and Codex in the workers guide, with where each keeps the key.
+
+### Changed
+
+- `crewboard_agents` returns `{ agents, presets }` instead of a bare list.
+- The lead hears that dsh answers and decisions are not technically read-only (`readOnlyReason: dsh_unprotected`): its permission denials do not cover every tool.
+
+### Fixed
+
+- A worker that fails tells the lead why: the error text reaches the journal and the inbox, with keys and tokens removed. A broken `agents.json` is reported to the lead once per goal instead of only in the server log, and queued work starts when it is fixed.
+- An answer or decision reaches the lead whole: the text outside the report block arrives in `detail`.
+- The Codex default no longer offers the `none` effort, which GPT-6.1 Sol does not take; the cost guide matches the price table.
+
 ## [1.2.0] - 2026-11-03
 
 Built through Crewboard itself: Claude Code led, Codex, DeepSeek and Claude did the work, and the lead reviewed and merged it.

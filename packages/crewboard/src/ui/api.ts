@@ -1,3 +1,4 @@
+import type { AgentsConfig, AgentsConfigView } from '../workers/agents.js'
 import type { LiveChange } from '../live.js'
 import type { AssignmentView, GoalEvent, ProviderId, RequestAction } from '../model/types.js'
 import type { GoalAnalytics } from '../analytics.js'
@@ -5,6 +6,7 @@ import type { GoalHistory } from '../history/sessions.js'
 import type { ProjectSummary } from '../owner.js'
 import type { AgentReadiness } from '../doctor.js'
 import type { ProviderUsage } from '../usage.js'
+import type { CatalogModel } from '../workers/catalog.js'
 import type { RunSteps } from '../workers/steps.js'
 
 export type { LiveChange }
@@ -17,18 +19,22 @@ export type AgentBadge = {
   icon?: string
   /** The default model, the suggested models, the accepted effort levels and the default one. All may be absent: older servers send none. */
   model?: string
-  models?: Array<{ id: string; label?: string; note?: string } | string>
+  models?: Array<{ id: string; label?: string; note?: string; efforts?: string[] } | string>
+  catalog?: CatalogModel[]
   efforts?: string[]
   defaultEffort?: string | null
 }
 
 /** What a handoff request asks of the new worker besides the provider. */
-export type HandoffPick = { model?: string; effort?: string }
+export type HandoffPick = { model?: string; effort?: string | null }
 
 /** Everything the screen asks the server; tests pass an in-memory one. */
 export type Api = {
   projects(): Promise<ProjectSummary[]>
   agents(): Promise<AgentBadge[]>
+  agentsConfig(): Promise<AgentsConfigView>
+  saveAgentsConfig(config: AgentsConfig, revision: string): Promise<AgentsConfigView | 'conflict'>
+  models(agent: string, refresh?: boolean): Promise<CatalogModel[]>
   doctor(): Promise<AgentReadiness[]>
   usage(): Promise<ProviderUsage[]>
   goal(project: string, goalId: string): Promise<AssignmentView>
@@ -68,11 +74,19 @@ export function httpApi(base = ''): Api {
       post(`${base}/api/request`, {
         project, goalId, assignmentId, action,
         ...(text ? { text } : {}), ...(provider ? { provider } : {}),
-        ...(pick?.model ? { model: pick.model } : {}), ...(pick?.effort ? { effort: pick.effort } : {}),
+        ...(pick?.model ? { model: pick.model } : {}), ...(pick?.effort !== undefined ? { effort: pick.effort } : {}),
       }),
     emergencyStop: (project, goalId, assignmentId) => post(`${base}/api/emergency-stop`, { project, goalId, assignmentId }),
+    agentsConfig: () => getJson(`${base}/api/agents-config`),
+    async saveAgentsConfig(config, revision) {
+      const res = await fetch(`${base}/api/agents-config`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config, revision }) })
+      if (res.status === 409) return 'conflict'
+      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`)
+      return await res.json() as AgentsConfigView
+    },
     projects: () => getJson(`${base}/api/projects`),
     agents: () => getJson(`${base}/api/agents`),
+    models: (agent, refresh = false) => getJson(`${base}/api/models?${q({ agent, ...(refresh ? { refresh: '1' } : {}) })}`),
     doctor: () => getJson(`${base}/api/doctor`),
     usage: () => getJson(`${base}/api/usage`),
     goal: (project, goalId) => getJson(`${base}/api/goals/${encodeURIComponent(goalId)}?${q({ project })}`),

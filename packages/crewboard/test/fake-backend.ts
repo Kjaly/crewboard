@@ -2,7 +2,7 @@ import type { LaunchInput, RawEvent, RunBackend, RunState, RunUsage } from '@cre
 import { readFile } from 'node:fs/promises'
 
 /** What one fake run does: the events it emits and how it ends. `hold` keeps it running until `finish` is called. */
-export type FakeScript = { events?: string[]; final?: string; fail?: string; hold?: boolean; refuse?: string; deltas?: string[]; brokenFeed?: boolean; usage?: RunUsage }
+export type FakeScript = { events?: string[]; final?: string; fail?: string; failureText?: string; hold?: boolean; refuse?: string; deltas?: string[]; brokenFeed?: boolean; usage?: RunUsage }
 type FakeRun = { id: string; agent: string; cwd: string; prompt: string; readOnly?: boolean; events: RawEvent[]; state: RunState; steers: string[] }
 
 const ts = () => new Date().toISOString()
@@ -21,7 +21,7 @@ export function createFakeBackend() {
   const end = (run: FakeRun, script: FakeScript) => {
     if (script.fail) {
       run.events.push({ ts: ts(), type: 'error', data: script.fail })
-      run.state = { status: 'failed', terminal: true, exitCode: 1, failure: { reason: script.fail as never } }
+      run.state = { status: 'failed', terminal: true, exitCode: 1, failure: { reason: script.fail as never, ...(script.failureText ? { text: script.failureText } : {}) } }
       return
     }
     if (script.deltas) for (const d of script.deltas) run.events.push({ ts: ts(), type: 'answer_delta', data: d })

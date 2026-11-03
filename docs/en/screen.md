@@ -64,15 +64,16 @@ Under **Ask the lead**, each action is a row with what it does. They are request
 
 | On screen | Offered when |
 | --- | --- |
-| Clarify the task, Stop, Hand over to another agent | the work runs or waits for the lead |
+| Clarify the task, Stop | the work runs or waits for the lead |
 | Start sooner, Cancel | it is queued |
+| Hand over to another agent | it runs, waits for the lead or is queued |
 | Reopen | it is done |
 | Bring back | it was cancelled or abandoned, and its parent is not finished |
 | Discuss in the lead's chat | always |
 
 **Clarify the task**, **Reopen** and **Bring back** open a text field in place: **⌘/Ctrl Enter** sends, **Esc** closes.
 
-**Hand over to another agent** lists the agent doing the work first, marked **now**, to move it to another model or effort, then every other agent from the [registry](workers.md#your-agents), each with its logo and a chip showing the model and effort it will get. The chip opens a card next to it: the agent's models (the default marked, keys **1–9**, or any other model by name) and its effort levels as a stepped meter, or a note when the agent takes no effort. **Reset** restores the defaults.
+**Hand over to another agent** lists the agent doing the work first, marked **now**, to move it to another model or effort, then every other agent from the [registry](workers.md#your-agents), each with its logo and a chip showing the model and effort it will get. The chip opens a card next to it: the agent's models (the default marked, keys **1–9**, or any other model by name) and its effort levels as a stepped meter, or a note when the agent takes no effort. **Reset** restores the initial picker values. **Default** in the effort section removes the assignment override and uses the agent default, or the CLI default when the agent has none. This works for the same agent too. An accepted handoff of queued work changes the assignment without launching it; dependencies stay in place.
 
 **Discuss in the lead's chat** copies a ready message about the node to paste into the chat, and lets the lead know.
 
@@ -100,4 +101,12 @@ For a lead whose transcripts Crewboard cannot read, the tab shows the course of 
   <img alt="The Analytics tab: provider lanes over time and costs." src="../assets/en/analytics-light.png">
 </picture>
 
-For looking back: one lane per provider with each run over time, and costs by provider and by assignment. See [costs](costs.md).
+For looking back: one lane per provider with each run over time, and costs by provider, model and assignment. The model table groups each run by its saved launch model, including runs across different providers. Older journals use the model from the run's agent id; if it is unavailable, the row says “no data”. Money, API-price estimates, subscription runs and missing data follow the same rules in both tables. See [costs](costs.md).
+
+## Settings
+
+The **Settings** tab next to Now, History and Analytics works even before you create a goal. Each agent has its logo, default model and effort, and an enabled switch. Choose a model from the same catalog as the handoff picker; effort choices follow that model's declared levels (including Codex's own levels). **Default** removes the configured effort so the CLI decides. Refresh requests an updated catalog; a failed request leaves registry suggestions usable and offers a retry.
+
+The preset rows let you change the agent, model, effort and note, add a named preset, or disable one. **Agent default** leaves the preset's model unset; **Default** effort inherits the agent/CLI default. An explicit model/effort in an assignment can override the preset. The built-in presets and file format are described under [workers](workers.md#presets).
+
+Press **Save changes** to apply all edits. Changes affect future runs; existing run snapshots keep their model and effort. Crewboard saves the old file as `agents.json.bak`. If another editor changed the file since you opened settings, saving returns **409** and the screen reloads the latest settings; reapply your edits. **Reload** also discards unsaved edits and reads the file again. Settings follow the current theme and fit narrow screens.

@@ -18,7 +18,7 @@ const EVENT_TEXT: Partial<Record<GoalEvent['type'], (e: GoalEvent) => string>> =
   steered: (e) => (e.type === 'steered' ? T.event.steered(e.text) : ''),
   reported: (e) => (e.type === 'reported' ? T.event.reported(e.code ? T.system(e.code) : e.summary) : ''),
   returned: (e) => (e.type === 'returned' ? T.event.returned(e.note) : ''),
-  run_ended: (e) => (e.type === 'run_ended' && e.outcome === 'failed' ? T.event.failed(e.reason ?? '') : ''),
+  run_ended: (e) => (e.type === 'run_ended' && e.outcome === 'failed' ? T.event.failed([e.reason, e.text].filter(Boolean).join(': ')) : ''),
   closed: (e) => (e.type === 'closed' ? T.event.closed(e.code ? T.system(e.code) : e.summary) : ''),
   cancelled: (e) => (e.type === 'cancelled' ? T.event.cancelled(e.code ? T.system(e.code, e.detail) : e.reason) : ''),
   adopted: () => T.event.adopted,
@@ -39,6 +39,7 @@ export function ContextPanel(props: {
   lead?: string
 }) {
   const { node, chain, events, onSelect } = props
+  const provider = node.runProvider ?? node.provider
   const giver = chain.at(-1)
   const aside = useRef<HTMLElement>(null)
   const hidden = props.sheet && !props.open
@@ -65,7 +66,8 @@ export function ContextPanel(props: {
         <div className="meta">
           <StatusBadge status={node.status} />
           <span>
-            <Avatar provider={node.provider} leadClient={props.lead} /> <b>{providerLabel(node.provider)}</b> {node.parentId === null ? (props.lead ?? '') : (node.model ?? '')}
+            <Avatar provider={provider} leadClient={props.lead} /> <b>{providerLabel(provider)}</b> {node.parentId === null ? (props.lead ?? '') : (node.model ?? '')}
+            {node.parentId !== null && node.effort && `, ${T.effort[node.effort] ?? node.effort}`}
           </span>
         </div>
         {chain.length > 0 && (

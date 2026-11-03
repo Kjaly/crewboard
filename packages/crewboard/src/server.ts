@@ -19,6 +19,9 @@ export type Api = {
   goal: (project: string, goalId: string) => Promise<unknown>
   projects: () => Promise<unknown>
   agents: () => Promise<unknown>
+  agentsConfig: () => Promise<unknown>
+  saveAgentsConfig: (body: Record<string, unknown>) => Promise<unknown>
+  models: (agent: string, refresh: boolean) => Promise<unknown>
   doctor: () => Promise<unknown>
   usage: () => Promise<unknown>
   events: (project: string, goalId: string, assignmentId: string) => Promise<unknown>
@@ -160,6 +163,15 @@ export function createHttpServer(api: Api, opts: { now?: () => number; mcpIdleMs
       return res.writeHead(204).end()
     }
     if (url.pathname === '/api/projects') return json(res, 200, await api.projects())
+    if (req.method === 'GET' && url.pathname === '/api/models') return json(res, 200, await api.models(url.searchParams.get('agent') ?? '', url.searchParams.get('refresh') === '1'))
+    if (url.pathname === '/api/agents-config') {
+      if (req.method === 'GET') return json(res, 200, await api.agentsConfig())
+      if (req.method === 'PUT') {
+        if (refuseForeignPost(req, res)) return
+        return json(res, 200, await api.saveAgentsConfig(((await readBody(req)) ?? {}) as Record<string, unknown>))
+      }
+      return json(res, 405, { error: 'method not allowed' })
+    }
     if (url.pathname === '/api/agents') return json(res, 200, await api.agents())
     if (url.pathname === '/api/doctor') return json(res, 200, await api.doctor())
     if (url.pathname === '/api/usage') return json(res, 200, await api.usage())

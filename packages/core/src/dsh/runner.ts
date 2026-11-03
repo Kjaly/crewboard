@@ -120,7 +120,7 @@ export async function runDshRun(args: RunnerArgs, now: () => Date = () => new Da
   }
   conn.onRequest = async (method, params) => {
     if (method !== 'session/request_permission') throw new Error(`unsupported client method: ${method}`)
-    // Under workspace-write every in-workspace action is already allowed: a permission request means escaping the sandbox.
+    // This denies requested escalations only. Ordinary workspace writes and unconfined tools can bypass it.
     await emit('permission_denied', JSON.stringify(params.toolCall ?? {}))
     return { outcome: { outcome: 'selected', optionId: 'reject-once' } }
   }

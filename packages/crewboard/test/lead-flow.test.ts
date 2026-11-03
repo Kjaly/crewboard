@@ -67,7 +67,7 @@ describe('lead over MCP', () => {
 
   it('lists the registered agents and refuses an unknown one', async () => {
     const { server, call, project } = await start()
-    const agents = (await call('crewboard_agents', {})).json() as Array<{ id: string; readOnly: boolean }>
+    const { agents } = (await call('crewboard_agents', {})).json() as { agents: Array<{ id: string; readOnly: boolean }> }
     expect(agents.map((a) => a.id)).toEqual(['claude', 'codex', 'deepseek'])
     const { goalId } = (await call('crewboard_start_goal', { project, title: 'Кухня', criteria: [] })).json() as { goalId: string }
     const refused = await call('crewboard_assign', { project, goalId, title: 'Панель', criteria: [], resultKind: 'local', provider: 'nope' })

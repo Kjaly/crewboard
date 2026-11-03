@@ -332,6 +332,17 @@ describe('actions in the tree', () => {
     await waitFor(() => expect(f.state.requests).toEqual([{ id: 'box', action: 'handoff', provider: 'claude', model: 'opus', effort: 'high' }]))
   })
 
+  it('changes a deferred handoff without copying the previous provider model', async () => {
+    const { f, panel } = await open(/Модель короба/, { agents, tree: withBox({ provider: 'claude', runProvider: 'codex', model: 'gpt-6.1-sol', effort: 'low', pendingRun: { model: 'sonnet', effort: 'medium' } }) })
+    await userEvent.click(within(panel).getByRole('button', { name: /Передать другому агенту/ }))
+    await userEvent.click(within(panel).getAllByRole('radio')[0] as HTMLElement)
+    await userEvent.click(within(panel).getByRole('button', { name: /Sonnet 5\.5/ }))
+    within(within(panel).getByRole('dialog')).getByRole('slider').focus()
+    await userEvent.keyboard('{ArrowRight}')
+    await userEvent.click(within(panel).getByRole('button', { name: 'Попросить передать' }))
+    await waitFor(() => expect(f.state.requests).toEqual([{ id: 'box', action: 'handoff', provider: 'claude', model: 'sonnet', effort: 'high' }]))
+  })
+
   it('offers the current agent first for another model or effort, and nothing to send while nothing changes', async () => {
     const { f, panel } = await open(/Модель короба/, { agents, tree: withBox({ model: 'gpt-6.1-terra', effort: 'low' }) })
     await userEvent.click(within(panel).getByRole('button', { name: /Передать другому агенту/ }))

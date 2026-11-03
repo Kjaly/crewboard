@@ -79,6 +79,8 @@ claude plugin install crewboard@crewboard
 | DeepSeek | `dsh` (DeepSeek Harness) с ключом DeepSeek в его настройках |
 | Любой другой агент | запись в `~/.crewboard/agents.json`: OpenCode, Cursor, Gemini, Grok, Devin или Kimi, GLM и другие модели через dsh |
 
+[Подключить OpenRouter или свой API](docs/ru/workers.md#подключить-openrouter-или-свой-api) через dsh, OpenCode или Codex.
+
 Модели, значения по умолчанию и то, как исполнитель сам делит работу, описаны в [руководстве по исполнителям](docs/ru/workers.md). Внизу боковой панели видно, сколько израсходовано из лимитов подписок и сколько денег осталось на DeepSeek и Kimi; что для этого нужно каждому — в разделе [«Провайдеры»](docs/ru/screen.md#провайдеры).
 
 ## Документация
@@ -93,4 +95,4 @@ claude plugin install crewboard@crewboard
 
 ## Состояние
 
-Версия 1.2.0. Используется на macOS с Claude Code, Codex CLI и DeepSeek Harness. На Linux должно работать, на Windows не проверялось. Сервер слушает только 127.0.0.1 и своей авторизации не имеет, подробнее в разделе о [безопасности](SECURITY.md).
+Версия 1.3.0. Используется на macOS с Claude Code, Codex CLI и DeepSeek Harness. На Linux должно работать, на Windows не проверялось. Сервер слушает только 127.0.0.1 и своей авторизации не имеет, подробнее в разделе о [безопасности](SECURITY.md).

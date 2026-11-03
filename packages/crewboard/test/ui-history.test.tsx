@@ -80,6 +80,7 @@ describe('analytics tab', () => {
         { provider: 'deepseek', bars: [{ assignmentId: 'pdf', title: 'Сборочная инструкция', start: '2026-11-02T10:04:00Z', end: '2026-11-02T10:09:00Z', outcome: 'completed' }] },
       ],
       byProvider: { codex: { runs: 1, runsWithoutData: 0, subscriptionRuns: 0, usd: 0.04, apiUsd: 0.06 }, deepseek: { runs: 1, runsWithoutData: 1, subscriptionRuns: 0 } },
+      byModel: {},
       byAssignment: [],
     })
     render(<App api={f.api} />)
@@ -88,7 +89,7 @@ describe('analytics tab', () => {
     const panel = await screen.findByRole('tabpanel', { name: 'Аналитика' })
     expect(within(panel).getByRole('region', { name: 'Codex' })).toBeTruthy()
     expect(within(panel).getByRole('region', { name: 'DeepSeek' })).toBeTruthy()
-    const costs = within(panel).getByRole('table', { name: 'Затраты по провайдерам' })
+    const costs = within(panel).getByRole('table', { name: 'Расходы по провайдерам' })
     expect(within(costs).getByText('$0.04')).toBeTruthy()
     expect(within(costs).getByText('$0.06')).toBeTruthy()
     expect(within(costs).getAllByText('нет данных').length).toBeGreaterThan(0)

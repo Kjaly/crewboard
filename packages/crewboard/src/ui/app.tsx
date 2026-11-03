@@ -14,6 +14,7 @@ import { AnalyticsView } from './components/analytics-view.js'
 import { HistoryView } from './components/history-view.js'
 import type { GoalAnalytics } from '../analytics.js'
 import { UsagePanel } from './components/usage-panel.js'
+import { SettingsView } from './components/settings-view.js'
 import { Sidebar } from './components/sidebar.js'
 import type { GoalHistory } from '../history/sessions.js'
 import { Summary, countTree } from './components/summary.js'
@@ -91,7 +92,7 @@ export function App(props: { api: Api }) {
   const [sheetOpen, setSheetOpen] = useState(false)
   const [mode, setMode] = useState<ActionMode>('idle')
   const [navOpen, setNavOpen] = useState(false)
-  const [view, setView] = useState<'now' | 'history' | 'analytics'>(() => store.get<'now' | 'history' | 'analytics'>('crewboard.view') ?? 'now')
+  const [view, setView] = useState<'now' | 'history' | 'analytics' | 'settings'>(() => store.get<'now' | 'history' | 'analytics' | 'settings'>('crewboard.view') ?? 'now')
   const [history, setHistory] = useState<GoalHistory | undefined>()
   const [analytics, setAnalytics] = useState<GoalAnalytics | undefined>()
   const [focusAssignment, setFocusAssignment] = useState<string | undefined>()
@@ -360,6 +361,9 @@ export function App(props: { api: Api }) {
           <button type="button" role="tab" aria-selected={view === 'analytics'} className="press" onClick={() => setView('analytics')}>
             {T.tabs.analytics}
           </button>
+          <button type="button" role="tab" aria-selected={view === 'settings'} className="press" onClick={() => setView('settings')}>
+            {T.tabs.settings}
+          </button>
         </div>
         <button type="button" className="ask-btn press" data-has={waitingAll > 0} disabled={waitingAll === 0} onClick={showWaiting}>
           <HandWaving size={16} aria-hidden="true" />
@@ -375,7 +379,8 @@ export function App(props: { api: Api }) {
       </header>
       {!online && <OfflineBanner />}
       {projects === undefined && <p className="hint">{T.loading}</p>}
-      {projects !== undefined && !target && <EmptyState api={api} />}
+      {projects !== undefined && !target && view !== 'settings' && <EmptyState api={api} />}
+      {view === 'settings' && <SettingsView api={api} onSaved={() => { void loadAgents(); void loadTree(target) }} />}
       {tree && view === 'history' && (
         <section role="tabpanel" aria-label={T.tabs.history} className="panel-history">
           <HistoryView
@@ -407,7 +412,7 @@ export function App(props: { api: Api }) {
               setFocusAssignment(selected.id)
               setView('history')
             }}
-            actions={<Actions key={selected.id} node={selected} leadOnline={leadOnline} mode={mode} onMode={setMode} onRequest={request} onEmergencyStop={stopNow} onDiscuss={discuss} />}
+            actions={<Actions loadModels={props.api.models} key={selected.id} node={selected} leadOnline={leadOnline} mode={mode} onMode={setMode} onRequest={request} onEmergencyStop={stopNow} onDiscuss={discuss} />}
             question={escalation?.type === 'escalated' ? <QuestionBox question={escalation.text} why={escalation.why} options={escalation.options} onAnswer={answer} /> : undefined}
             node={selected} chain={chainOf(tree, selected.id)} events={events} onSelect={select} sheet={sheet} open={sheetOpen} onClose={() => setSheetOpen(false)} />
           {sheet && <div className={`scrim ${sheetOpen ? 'on' : ''}`} onClick={() => setSheetOpen(false)} aria-hidden="true" />}

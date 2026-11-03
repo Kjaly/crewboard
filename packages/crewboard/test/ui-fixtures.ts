@@ -1,6 +1,7 @@
 import type { ProviderUsage } from '../src/usage.js'
 import type { AssignmentView, GoalEvent, Status } from '../src/model/types.js'
 import type { ProjectSummary } from '../src/owner.js'
+import { choicesOf } from '../src/ui/agents.js'
 import type { Api, AgentBadge } from '../src/ui/api.js'
 import type { LiveChange } from '../src/live.js'
 import type { RunSteps } from '../src/workers/steps.js'
@@ -28,7 +29,7 @@ export function fakeApi(init: { projects?: ProjectSummary[]; tree?: AssignmentVi
     projects: init.projects ?? [{ repo: '/repo/cabinet', name: 'cabinet', goals: [{ goalId: 'g', title: 'Кухня полного цикла', createdAt: '2026-11-02T10:00:00Z', status: 'running' as Status, leadOnline: true, counts: { waiting_lead: 0, waiting_owner: 1, running: 2, queued: 1, finished: 1 } }] }],
     events: init.events ?? {},
     answers: [] as string[],
-    requests: [] as Array<{ id: string; action: string; text?: string; provider?: string; model?: string; effort?: string }>,
+    requests: [] as Array<{ id: string; action: string; text?: string; provider?: string; model?: string; effort?: string | null }>,
     stops: [] as string[],
     runSteps: {} as Record<string, RunSteps>,
     answerResult: 'ok' as 'ok' | 'conflict' | 'fail',
@@ -47,8 +48,13 @@ export function fakeApi(init: { projects?: ProjectSummary[]; tree?: AssignmentVi
   let onChange: ((c: LiveChange) => void) | undefined
   let onStatus: ((online: boolean) => void) | undefined
   const api: Api = {
+    async agentsConfig() { return { revision: 'missing', config: { agents: {} }, agents: [], presets: {}, builtinPresets: {} } },
+    async saveAgentsConfig() { return 'conflict' },
     async agents() {
       return state.agents
+    },
+    async models(agent) {
+      return state.agents.find((a) => a.id === agent)?.catalog ?? choicesOf(agent).models.map((m) => ({ ...m, source: 'suggested' as const, discoveredAt: null }))
     },
     async usage() {
       return state.usage
@@ -77,7 +83,7 @@ export function fakeApi(init: { projects?: ProjectSummary[]; tree?: AssignmentVi
       return state.answerResult
     },
     async request(_p, _g, id, action, text, provider, pick) {
-      state.requests.push({ id, action, ...(text ? { text } : {}), ...(provider ? { provider } : {}), ...(pick?.model ? { model: pick.model } : {}), ...(pick?.effort ? { effort: pick.effort } : {}) })
+      state.requests.push({ id, action, ...(text ? { text } : {}), ...(provider ? { provider } : {}), ...(pick?.model ? { model: pick.model } : {}), ...(pick?.effort !== undefined ? { effort: pick.effort } : {}) })
       await new Promise((r) => setTimeout(r, 20))
       return 'ok'
     },
@@ -90,7 +96,7 @@ export function fakeApi(init: { projects?: ProjectSummary[]; tree?: AssignmentVi
       return state.history
     },
     async analytics() {
-      return { from: '2026-11-02T10:00:00Z', to: '2026-11-02T11:00:00Z', lanes: [], byProvider: {}, byAssignment: [] }
+      return { from: '2026-11-02T10:00:00Z', to: '2026-11-02T11:00:00Z', lanes: [], byProvider: {}, byModel: {}, byAssignment: [] }
     },
     async steps(_p, runId, since) {
       const run = state.runSteps[runId] ?? { steps: [], next: 0, done: false }

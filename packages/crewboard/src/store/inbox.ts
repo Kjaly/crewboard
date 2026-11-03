@@ -10,6 +10,7 @@ import { projectDir } from './paths.js'
  * escalated question. A completed run is already told by its result or question.
  */
 export function isLeadEvent(e: GoalEvent, workerParts: ReadonlySet<string> = new Set()): boolean {
+  if (e.type === 'progress' && e.code === 'launch_registry') return true
   if (e.type === 'question') return true
   // A split-off part reports to the worker that split it off, not to the lead.
   if (e.type === 'reported' && workerParts.has(e.assignmentId)) return false

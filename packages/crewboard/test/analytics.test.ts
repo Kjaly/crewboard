@@ -12,6 +12,26 @@ const ended = (min: number, id: string, runId: string, usage?: { usd?: number; i
   ev(min, { type: 'run_ended', goalId: 'g', assignmentId: id, actor: 'system', runId, outcome: 'completed', ...(usage ? { usage } : {}) })
 
 describe('goal analytics', () => {
+  it('groups costs by the run snapshot across providers, preserving legacy models and missing data', () => {
+    const events = [
+      assigned(1, 'a', 'codex', 'Tests'),
+      ev(2, { type: 'run_started', goalId: 'g', assignmentId: 'a', actor: 'system', runId: 'r1', agent: 'codex/alias', cwd: '/r', model: 'shared' }),
+      ended(3, 'a', 'r1', { usd: 0, inputTokens: 100 }),
+      ev(4, { type: 'reassigned', goalId: 'g', assignmentId: 'a', actor: 'lead', provider: 'custom' }),
+      ev(5, { type: 'run_started', goalId: 'g', assignmentId: 'a', actor: 'system', runId: 'r2', agent: 'claude/alias', cwd: '/r', model: 'shared' }),
+      ev(6, { type: 'run_ended', goalId: 'g', assignmentId: 'a', actor: 'system', runId: 'r2', outcome: 'completed', usage: { billing: 'subscription', apiUsd: 0.3, outputTokens: 50 } }),
+      started(7, 'a', 'r3', 'dsh/moonshot/kimi-k3'),
+      ended(8, 'a', 'r3'),
+      started(9, 'a', 'r4', 'legacy'),
+      started(10, 'a', 'not-started-1', 'codex/refused'),
+    ]
+    expect(goalAnalytics(events, new Date(at(30))).byModel).toEqual({
+      shared: { runs: 2, runsWithoutData: 0, subscriptionRuns: 1, usd: 0, apiUsd: 0.3, inputTokens: 100, outputTokens: 50 },
+      'moonshot/kimi-k3': { runs: 1, runsWithoutData: 1, subscriptionRuns: 0 },
+      '': { runs: 1, runsWithoutData: 1, subscriptionRuns: 0 },
+    })
+  })
+
   it('books an assignment handed over to the agent of its latest run', () => {
     const events = [assigned(1, 'a', 'codex', 'Тесты'), started(2, 'a', 'c1', 'codex/gpt-6.1-sol'), ended(3, 'a', 'c1'), ev(4, { type: 'reassigned', goalId: 'g', assignmentId: 'a', actor: 'lead', provider: 'claude' }), started(5, 'a', 'c2', 'claude/sonnet')]
     expect(goalAnalytics(events, new Date(at(30))).byAssignment).toEqual([expect.objectContaining({ assignmentId: 'a', provider: 'claude', runs: 2 })])
@@ -73,4 +93,3 @@ describe('goal analytics', () => {
     expect(a.to).toBe(at(12))
   })
 })
-

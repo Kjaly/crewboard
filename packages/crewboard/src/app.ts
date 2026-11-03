@@ -9,6 +9,7 @@ import { createHistory } from './history/sessions.js'
 import { createLive } from './live.js'
 import { REQUEST_ACTIONS, type ProviderId, type RequestAction } from './model/types.js'
 import { type Agents, agentChoices, createAgents } from './workers/agents.js'
+import { createModelCatalog } from './workers/catalog.js'
 import { type AgentReadiness, checkAgents } from './doctor.js'
 import { type ProviderUsage, readUsage } from './usage.js'
 import { type Exec, nodeExec } from '@crewboard/core'
@@ -71,6 +72,7 @@ export function createApp(o: { env: NodeJS.ProcessEnv; backendFor: (repo: string
   const clock = () => now().getTime()
   const registry = createRegistry(o.env)
   const agents = createAgents(o.env)
+  const catalog = createModelCatalog({ env: o.env, exec: o.exec ?? nodeExec, now })
   // Worker readiness runs real CLIs: kept for a minute, so the screen does not start them on every look.
   let readiness: { at: number; result: Promise<AgentReadiness[]> } | undefined
   const doctor = (): Promise<AgentReadiness[]> => {
@@ -140,7 +142,7 @@ export function createApp(o: { env: NodeJS.ProcessEnv; backendFor: (repo: string
     if (typeof v !== 'string') throw new BadRequestError(`${name} is required`)
     return v
   }
-  const commands = createLeadCommands(projectOf, now, agents)
+  const commands = createLeadCommands(projectOf, now, agents, catalog)
 
   const tick = async () => {
     for (const repo of await registry.list()) {
@@ -183,7 +185,15 @@ export function createApp(o: { env: NodeJS.ProcessEnv; backendFor: (repo: string
     doctor,
     usage,
     async agents() {
-      return (await agents.list()).map((a) => ({ id: a.id, label: a.label, model: a.model, ...agentChoices(a), ...(a.color ? { color: a.color } : {}), ...(a.icon ? { icon: a.icon } : {}) }))
+      return Promise.all((await agents.list()).map(async (a) => ({ id: a.id, label: a.label, model: a.model, ...agentChoices(a), catalog: (await catalog.get(a)).slice(0, 30), ...(a.color ? { color: a.color } : {}), ...(a.icon ? { icon: a.icon } : {}) })))
+    },
+    agentsConfig: () => agents.config(),
+    saveAgentsConfig: (body) => agents.save(body.config, str(body.revision, 'revision')),
+    async models(id, refresh) {
+      if (!id) throw new BadRequestError('agent is required')
+      const agent = (await agents.all()).find((a) => a.id === id)
+      if (!agent) throw new BadRequestError(`unknown agent ${id}`)
+      return catalog.get(agent, refresh)
     },
     async analytics(project, goalId) {
       const ctx = await projectOf(project)
@@ -211,7 +221,7 @@ export function createApp(o: { env: NodeJS.ProcessEnv; backendFor: (repo: string
         goalId: str(body.goalId, 'goalId'), assignmentId: str(body.assignmentId, 'assignmentId'), action: action as RequestAction,
         ...(typeof body.text === 'string' ? { text: body.text } : {}), ...(provider ? { provider: provider as ProviderId } : {}),
         ...(body.model !== undefined ? { model: str(body.model, 'model') } : {}),
-        ...(body.effort !== undefined ? { effort: str(body.effort, 'effort') } : {}),
+        ...(body.effort !== undefined ? { effort: body.effort === null ? null : str(body.effort, 'effort') } : {}),
       }, now())
     },
     async emergencyStop(body) {

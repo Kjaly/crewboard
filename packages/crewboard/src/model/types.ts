@@ -10,7 +10,7 @@ export type Actor = 'lead' | 'owner' | 'worker' | 'system'
 export const REQUEST_ACTIONS = ['clarify', 'stop', 'handoff', 'start_now', 'cancel', 'reopen', 'revive', 'discuss'] as const
 export type RequestAction = (typeof REQUEST_ACTIONS)[number]
 /** Texts Crewboard itself writes into a journal. Stored as a code, so the screen words them in the owner's language. */
-export const SYSTEM_TEXTS = ['emergency_stop', 'owner_stop', 'run_failed', 'parent_cancelled', 'no_report', 'split', 'split_truncated', 'split_registry'] as const
+export const SYSTEM_TEXTS = ['emergency_stop', 'owner_stop', 'run_failed', 'parent_cancelled', 'no_report', 'split', 'split_truncated', 'split_registry', 'launch_registry'] as const
 export type SystemText = (typeof SYSTEM_TEXTS)[number]
 
 const base = {
@@ -37,13 +37,13 @@ export const goalEventSchema = z.discriminatedUnion('type', [
     quote: text.optional(),
     after: z.array(z.string()),
   }),
-  z.object({ ...base, type: z.literal('run_started'), runId: text, agent: text, cwd: text }),
+  z.object({ ...base, type: z.literal('run_started'), runId: text, agent: text, cwd: text, model: text.optional(), effort: text.optional() }),
   z.object({ ...base, type: z.literal('progress'), text, code: z.enum(SYSTEM_TEXTS).optional(), detail: text.optional() }),
   z.object({ ...base, type: z.literal('question'), text, options: z.array(text) }),
   z.object({ ...base, type: z.literal('escalated'), text, options: z.array(text), why: text }),
   z.object({ ...base, type: z.literal('answered'), text }),
   z.object({ ...base, type: z.literal('steered'), text }),
-  z.object({ ...base, type: z.literal('reported'), summary: text, split: z.boolean().optional(), code: z.enum(SYSTEM_TEXTS).optional() }),
+  z.object({ ...base, type: z.literal('reported'), summary: text, detail: text.max(30_000).optional(), split: z.boolean().optional(), code: z.enum(SYSTEM_TEXTS).optional() }),
   z.object({ ...base, type: z.literal('returned'), note: text }),
   z.object({
     ...base,
@@ -51,12 +51,13 @@ export const goalEventSchema = z.discriminatedUnion('type', [
     runId: text,
     outcome: z.enum(['completed', 'failed', 'cancelled']),
     reason: text.optional(),
+    text: text.max(500).optional(),
     usage: z.object({ inputTokens: z.number().optional(), outputTokens: z.number().optional(), usd: z.number().optional(), apiUsd: z.number().optional(), billing: z.enum(['subscription', 'api']).optional() }).optional(),
   }),
   z.object({ ...base, type: z.literal('closed'), summary: text, code: z.enum(SYSTEM_TEXTS).optional() }),
   z.object({ ...base, type: z.literal('cancelled'), reason: text, code: z.enum(SYSTEM_TEXTS).optional(), detail: text.optional() }),
   z.object({ ...base, type: z.literal('adopted'), note: text.optional(), client: text.optional() }),
-  z.object({ ...base, type: z.literal('owner_requested'), requestId: text, action: z.enum(REQUEST_ACTIONS), text: text.optional(), provider: z.string().min(1).optional(), model: text.optional(), effort: text.optional() }),
+  z.object({ ...base, type: z.literal('owner_requested'), requestId: text, action: z.enum(REQUEST_ACTIONS), text: text.optional(), provider: z.string().min(1).optional(), model: text.optional(), effort: text.nullable().optional() }),
   z.object({ ...base, type: z.literal('request_decided'), requestId: text, decision: z.enum(['accepted', 'declined']), reason: text.optional() }),
   z.object({ ...base, type: z.literal('reassigned'), provider: z.string().min(1), model: text.optional(), effort: text.optional() }),
   z.object({ ...base, type: z.literal('unblocked') }),
@@ -77,9 +78,13 @@ export type AssignmentView = {
   criteria: string[]
   resultKind: ResultKind | 'goal'
   provider: ProviderId | 'lead'
-  /** Next run's choices: the latest assignment or handoff overrides, else the current registry defaults. */
+  /** Current or last run's snapshot; before a run (and for legacy journals), assignment overrides or registry defaults. */
   model?: string
   effort?: string
+  /** The last run's provider, which can differ from the assignment while a handoff waits for split-off parts. */
+  runProvider?: ProviderId
+  /** A handoff awaiting its first run; keep its choices separate from the previous run's snapshot. */
+  pendingRun?: { model?: string; effort?: string }
   quote?: string
   after: string[]
   status: Status
@@ -90,7 +95,7 @@ export type AssignmentView = {
   agent?: string
   cwd?: string
   /** The owner's latest request while it waits for the lead, or after the lead declined it. */
-  request?: { id: string; action: RequestAction; text?: string; provider?: ProviderId; model?: string; effort?: string; state: 'pending' | 'declined'; reason?: string }
+  request?: { id: string; action: RequestAction; text?: string; provider?: ProviderId; model?: string; effort?: string | null; state: 'pending' | 'declined'; reason?: string }
   /** Every change of worker, oldest first: the work's continuity across providers. */
   handoffs: Array<{ from: ProviderId; to: ProviderId }>
   /** An ancestor is finished (done, cancelled, abandoned): the work cannot be brought back from here. */

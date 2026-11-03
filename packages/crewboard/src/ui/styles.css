@@ -356,6 +356,13 @@ fieldset.handoff{border:0;margin:0;padding:0;min-width:0}
 .na-reset{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--text-3);padding:3px 6px;border-radius:6px;transition:color 140ms,background-color 140ms}
 .na-sec{font-size:11px;color:var(--text-3);padding:6px 8px 4px}
 .na-mi{display:grid;grid-template-columns:14px 1fr auto;gap:8px;align-items:center;width:100%;padding:6px 8px;border-radius:7px;font-size:13px}
+.na-catalog-head{display:flex;align-items:center;justify-content:space-between}
+.na-catalog-head button{font-size:11px;color:var(--text-3);text-transform:none;letter-spacing:normal}
+.na-catalog-search{width:calc(100% - 16px);margin:2px 8px 6px;padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:var(--surface);color:var(--text);font:inherit;font-size:12px}
+.na-catalog-list{max-height:240px;overflow-y:auto;overscroll-behavior:contain}
+.na-catalog-list .na-mi>span:nth-child(2){min-width:0;overflow-wrap:anywhere;text-align:left}
+.na-model-meta{display:block;font-size:10.5px;color:var(--text-3);margin-top:2px}
+.na-catalog-status{padding:4px 8px;font-size:11px;color:var(--text-3)}
 .na-mi .s{font-size:11.5px;color:var(--text-3);margin-left:6px}
 .na-mi .k{font-family:"Geist Mono",ui-monospace,monospace;font-size:11px;color:var(--text-3)}
 .na-dot{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--line-strong);display:grid;place-items:center}
@@ -455,3 +462,47 @@ button.feed-line:hover{background:var(--surface-2)}
 .us-note{margin:3px 0 0 22px;font-size:11px;line-height:1.35;color:var(--text-3)}
 .us-row.no_key .us-name,.us-row.no_data .us-name,.us-row.error .us-name{color:var(--text-2)}
 @media (prefers-reduced-motion:reduce){.us-bar i{transition:none}}
+
+/* Global worker settings share the screen's quiet rows and native, keyboard-friendly controls. */
+.settings{max-width:1100px;margin:0 auto;padding:24px clamp(16px,3vw,40px) 48px}
+.settings-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:24px}
+.settings h2{font-size:17px;margin:0 0 6px;font-weight:600}
+.settings-head p,.settings-hint{font-size:13px;color:var(--text-2);margin:0;max-width:65ch}
+.settings-buttons{display:flex;gap:8px;flex:none}
+.settings button{padding:6px 10px;border:1px solid var(--line);border-radius:var(--r-sm);font-size:12px;background:var(--surface)}
+.settings button:hover{border-color:var(--line-strong)}
+.settings button:disabled{opacity:.5;cursor:default}
+.settings .settings-save{background:var(--text);color:var(--bg);border-color:var(--text)}
+.settings fieldset{border:0;margin:0 0 28px;padding:0;min-width:0}
+.settings legend{font-size:14px;font-weight:600;margin-bottom:10px;padding:0}
+.settings-rows{margin-top:10px;border-top:1px solid var(--line)}
+.settings-row{display:grid;grid-template-columns:minmax(115px,1fr) minmax(150px,2fr) minmax(105px,1fr) auto auto;align-items:end;gap:12px;padding:14px 0;border-bottom:1px solid var(--line)}
+.settings-identity{display:flex;align-items:center;gap:9px;align-self:center;min-width:0}
+.settings-identity b{font-size:13px;font-weight:500;overflow-wrap:anywhere}
+.settings-identity small{display:block;color:var(--text-3);font-size:11px}
+.settings label{display:flex;flex-direction:column;gap:5px;min-width:0;font-size:11px;color:var(--text-2)}
+.settings select,.settings input:not([type=checkbox]){width:100%;min-width:0;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);color:var(--text);font:inherit;font-size:13px;padding:6px 8px}
+.settings select{height:33px}
+.settings .settings-toggle{flex-direction:row;align-items:center;align-self:center;gap:6px;font-size:12px;white-space:nowrap}
+.settings input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px}
+.settings .settings-refresh{font-size:11px;color:var(--text-2);max-width:110px;min-height:33px}
+.settings-preset{grid-template-columns:minmax(75px,.7fr) minmax(100px,1fr) minmax(130px,1.7fr) minmax(100px,1fr) auto auto}
+.settings-note{grid-column:2/-1}
+.settings-add{display:flex;align-items:end;gap:10px;margin-top:14px}
+.settings-add label{width:200px}
+.settings-notice{color:var(--accent-text);font-size:13px}
+.settings-error{color:var(--danger);font-size:13px;overflow-wrap:anywhere}
+@media(max-width:1100px){
+  .settings-row,.settings-preset{grid-template-columns:minmax(100px,1fr) minmax(140px,1.5fr) minmax(110px,1fr)}
+  .settings-toggle{grid-column:1}
+  .settings-note{grid-column:2/-1}
+}
+@media(max-width:640px){
+  .settings-head{flex-direction:column;gap:12px}
+  .settings-row,.settings-preset{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .settings-identity{grid-column:1/-1}
+  .settings-note{grid-column:1/-1}
+  .settings-row .settings-toggle{grid-column:auto}
+  .settings-refresh{justify-self:start}
+  .settings-add{flex-wrap:wrap}
+}

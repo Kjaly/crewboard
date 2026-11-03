@@ -9,8 +9,8 @@ The lead is the chat you talk to, connected to Crewboard over MCP: Claude Code, 
 | Tool | What it does |
 | --- | --- |
 | `crewboard_start_goal` | Starts a goal the owner agreed on. Returns `goalId`. |
-| `crewboard_agents` | Lists the agents work can go to, with what each can do. |
-| `crewboard_assign` | Hands a piece of work to a worker: title, criteria, result kind (`local`, `branch`, `answer`, `decision`), provider (an agent id from `crewboard_agents`), optional model and `effort` (one of the agent's `efforts`; omit when empty), parent and `after` dependencies, and the owner's message it came from in `quote`. |
+| `crewboard_agents` | Returns `{ agents, presets }`: available agents with their capabilities and enabled presets. |
+| `crewboard_assign` | Hands a piece of work to a worker: title, criteria, result kind (`local`, `branch`, `answer`, `decision`), `preset` or provider (an agent id from `crewboard_agents`), optional model and `effort` (one of the agent's `efforts`; omit when empty), parent and `after` dependencies, and the owner's message it came from in `quote`. |
 | `crewboard_inbox` | Returns everything workers and the owner sent that the lead has not confirmed. Calling it again confirms the previous batch. |
 | `crewboard_answer` | Answers a worker's question; the worker continues. |
 | `crewboard_escalate` | Raises a worker's question to the owner, with `why`. |
@@ -23,6 +23,10 @@ The lead is the chat you talk to, connected to Crewboard over MCP: Claude Code, 
 | `crewboard_adopt_goal` | Takes over a goal another chat started. |
 
 Every call names `project`: the absolute path of the repository the lead works in. Crewboard uses the top of that Git repository.
+
+## Choosing a preset
+
+Read `crewboard_agents` before assigning: user settings may replace or disable any [preset](workers.md#presets). The built-in choices are `cheap` (DeepSeek) for routine work, `normal` (Codex `gpt-6.1-sol`, medium) for everyday coding, `hard` (the same model, high) for difficult reasoning, and `review` (Claude opus) for an independent review. Pass `preset` instead of `provider` to `crewboard_assign`; explicit `model`/`effort` take priority. `note`, when present, gives the lead guidance.
 
 ## Waking up for news
 
@@ -45,6 +49,8 @@ A worker ends with a result. Crewboard shows the node as **Waiting for the lead*
 ## Requests from the owner
 
 On the screen you can ask for something on a node: clarify, stop, hand over to another provider, start now, reopen, or discuss. Each arrives in the lead's inbox as `owner_requested`. The lead decides with `crewboard_decide_request`. Accepting carries the action out; declining needs a reason, which the screen shows on the node. The lead's decision is final; if you disagree, say so in chat.
+
+A handoff request is also available for queued work. Accepting changes its agent/model/effort while keeping it queued with the same dependencies; it does not launch a run. On a handoff, `effort: null` removes the assignment's effort override, including for the same agent: the next run uses the agent default, or its CLI default. Omitting `effort` keeps the current choice when staying with the same agent. Previous run snapshots and any pending next-run choices remain separate.
 
 One action does not wait for the lead: **Emergency stop** on any running work. It stops the work and everything under it at once, and the lead learns about it from its inbox.
 

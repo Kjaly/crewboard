@@ -1,4 +1,4 @@
-type Price = { input: number; output: number; cacheRead: number }
+type Price = { input: number; output: number; cacheRead: number; rateDate?: string }
 
 /**
  * USD per 1M tokens, converted from Codex credits at 1 credit = $0.04 (both the credit table and the
@@ -8,7 +8,7 @@ type Price = { input: number; output: number; cacheRead: number }
  */
 const PRICES: Record<string, Price> = {
   // Crewboard's default Codex model: $2 / $10, cached input $0.10 (OpenAI API pricing, checked 2026-11-03).
-  'gpt-6.1-sol': { input: 2, output: 10, cacheRead: 0.1 },
+  'gpt-6.1-sol': { input: 2, output: 10, cacheRead: 0.1, rateDate: '2026-11-03' },
   'gpt-6-astra': { input: 10, output: 50, cacheRead: 1 },
   'gpt-6-sol': { input: 2, output: 10, cacheRead: 0.2 },
   'gpt-6-luna': { input: 0.1, output: 0.5, cacheRead: 0.01 },
@@ -17,6 +17,7 @@ const PRICES: Record<string, Price> = {
   'gpt-5.6-luna': { input: 0.2, output: 1.2, cacheRead: 0.02 },
 }
 
+// Older entries keep their original check date; a model added later carries its own date.
 const RATE_DATE = '2026-09-25'
 
 export type CodexTokenUsage = { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens?: number }
@@ -26,5 +27,6 @@ export function codexApiEquivalentUsd(model: string | undefined, usage: CodexTok
   const price = model ? PRICES[model] : undefined
   if (!price || usage.cacheWriteTokens) return undefined
   const micros = usage.inputTokens * price.input + usage.outputTokens * price.output + usage.cacheReadTokens * price.cacheRead
-  return { usd: Math.round(micros) / 1e6, rateDate: RATE_DATE, priceVersion: `${model}/${RATE_DATE}` }
+  const rateDate = price.rateDate ?? RATE_DATE
+  return { usd: Math.round(micros) / 1e6, rateDate, priceVersion: `${model}/${rateDate}` }
 }

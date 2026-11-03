@@ -11,6 +11,10 @@ import { runsDir } from '../src/store/paths.js'
 import { createSupervisor, gitWorktree } from '../src/supervisor.js'
 import { createPool } from '../src/workers/pool.js'
 import { createFakeBackend } from './fake-backend.js'
+import type { ProjectContext } from '../src/app.js'
+import { createLeadCommands } from '../src/lead/commands.js'
+import { requestAsOwner, decideRequest } from '../src/requests.js'
+import { createStepsReader } from '../src/workers/steps.js'
 import { createAgents } from '../src/workers/agents.js'
 
 async function gitRepo(): Promise<string> {
@@ -43,6 +47,136 @@ const statusOf = async (store: ReturnType<typeof createEventStore>, id: string) 
 const typesOf = async (store: ReturnType<typeof createEventStore>, id: string) => (await store.read('g')).filter((e) => e.assignmentId === id).map((e) => e.type)
 
 describe('supervisor', () => {
+  it.each([
+    ['normal', {}, 'gpt-6.1-sol', 'medium'],
+    ['hard', { model: 'custom', effort: 'low' }, 'custom', 'low'],
+    ['review', {}, 'opus', undefined],
+  ] as const)('assigns the %s preset with explicit overrides taking priority', async (preset, overrides, model, effort) => {
+    const home = await mkdtemp(join(tmpdir(), 'cb-presets-'))
+    const agents = createAgents({ CREWBOARD_HOME: home })
+    const { store, sup, fake, root } = await setup(undefined, undefined, agents)
+    fake.setFallback({ hold: true })
+    await goal(store)
+    const ctx: ProjectContext = {
+      repo: root, store, agents, supervisor: sup, inbox: createInbox(store), steps: createStepsReader(store, async () => fake.backend),
+      exclusive: (fn) => fn(ctx), register: async () => {}, tickOnce: () => sup.tick(),
+    }
+    const commands = createLeadCommands(async () => ctx, () => new Date(), agents)
+    expect((await commands.agents()).presets[preset]).toBeDefined()
+    await commands.assign({ project: root, goalId: 'g', title: 'a', criteria: [], resultKind: 'local', preset, ...overrides })
+    expect(fake.launches.at(-1)?.model).toBe(model)
+    expect(fake.launches.at(-1)?.effort).toBe(effort)
+    await writeFile(join(home, 'agents.json'), JSON.stringify({ presets: { [preset]: false } }))
+    await expect(commands.assign({ project: root, goalId: 'g', title: 'b', criteria: [], resultKind: 'local', preset })).rejects.toThrow(/disabled/)
+  })
+
+  it.each([undefined, 'medium'])('resets the same agent effort to %s and leaves accepted queued work unstarted', async (defaultEffort) => {
+    const home = await mkdtemp(join(tmpdir(), 'cb-handoff-'))
+    const agents = createAgents({ CREWBOARD_HOME: home })
+    await writeFile(join(home, 'agents.json'), JSON.stringify({ agents: { codex: { effort: defaultEffort } } }))
+    const { store, sup, fake, root } = await setup(undefined, undefined, agents)
+    fake.setFallback({ hold: true })
+    await goal(store)
+    await store.append('g', assign('a', { provider: 'codex', effort: 'high', after: ['blocker'] }))
+    const ctx: ProjectContext = {
+      repo: root, store, agents, supervisor: sup, inbox: createInbox(store), steps: createStepsReader(store, async () => fake.backend),
+      exclusive: (fn) => fn(ctx), register: async () => {}, tickOnce: () => sup.tick(),
+    }
+    const request = async (provider: string, effort?: string | null) => {
+      const { requestId } = await requestAsOwner(ctx, { goalId: 'g', assignmentId: 'a', action: 'handoff', provider, ...(effort !== undefined ? { effort } : {}) }, new Date())
+      await decideRequest(ctx, { goalId: 'g', assignmentId: 'a', requestId, decision: 'accepted' }, new Date())
+    }
+    await request('claude')
+    expect(fake.launches).toHaveLength(0)
+    expect((await store.read('g')).at(-1)).toMatchObject({ type: 'reassigned', provider: 'claude' })
+    await request('codex', 'high')
+    await request('codex', null)
+    expect((await store.read('g')).at(-1)).not.toHaveProperty('effort')
+    expect(fake.launches).toHaveLength(0)
+    await store.append('g', { type: 'unblocked', goalId: 'g', assignmentId: 'a', actor: 'lead' })
+    await sup.tick()
+    expect(fake.launches.at(-1)?.model).toBe('gpt-6.1-sol')
+    expect(fake.launches.at(-1)?.effort).toBe(defaultEffort)
+    // Reset also works after a run starts; the old snapshot stays in its original run_started event.
+    await request('codex', 'high')
+    await request('codex', null)
+    expect(fake.launches.at(-1)?.effort).toBe(defaultEffort)
+    const starts = (await store.read('g')).filter((e) => e.type === 'run_started')
+    expect(starts.at(-2)).toMatchObject({ effort: 'high' })
+    expect(starts.at(-1)?.effort).toBe(defaultEffort)
+  })
+
+  it.each(['assign', 'launch', 'handoff', 'owner', 'accept'] as const)('validates selected and inherited model efforts before %s', async (action) => {
+    const home = await mkdtemp(join(tmpdir(), 'cb-agents-'))
+    const file = join(home, 'agents.json')
+    await writeFile(file, JSON.stringify({ agents: { codex: { models: [{ id: 'fast', efforts: ['low'] }] } } }))
+    const agents = createAgents({ CREWBOARD_HOME: home })
+    const { store, sup, fake, root } = await setup(undefined, undefined, agents)
+    fake.setFallback({ hold: true })
+    await goal(store)
+    const ctx: ProjectContext = {
+      repo: root, store, agents, supervisor: sup, inbox: createInbox(store), steps: createStepsReader(store, async () => fake.backend),
+      exclusive: (fn) => fn(ctx), register: async () => {}, tickOnce: () => sup.tick(),
+    }
+    const commands = createLeadCommands(async () => ctx, () => new Date(), agents)
+    if (action === 'assign') {
+      await expect(commands.assign({ project: root, goalId: 'g', title: 'a', criteria: [], resultKind: 'local', provider: 'codex', model: 'fast', effort: 'high' })).rejects.toThrow()
+      expect((await store.read('g')).some((e) => e.type === 'assigned')).toBe(false)
+    } else if (action === 'launch') {
+      await store.append('g', assign('a', { provider: 'codex', model: 'fast', effort: 'high' }))
+      await sup.tick()
+      expect(fake.runs).toHaveLength(0)
+      expect((await createInbox(store).pending()).find((e) => e.type === 'run_ended')).toMatchObject({ outcome: 'failed' })
+    } else {
+      await store.append('g', assign('a', { provider: 'codex', model: 'fast', effort: 'low' }))
+      await sup.tick()
+      if (action === 'handoff') await expect(sup.reassign('g', 'a', 'codex', 'fast', 'high')).rejects.toThrow()
+      if (action === 'owner') await expect(requestAsOwner(ctx, { goalId: 'g', assignmentId: 'a', action: 'handoff', provider: 'codex', effort: 'high' }, new Date())).rejects.toThrow()
+      if (action === 'accept') {
+        const { requestId } = await requestAsOwner(ctx, { goalId: 'g', assignmentId: 'a', action: 'handoff', provider: 'codex', model: 'gpt-6.1-sol', effort: 'high' }, new Date())
+        await writeFile(file, JSON.stringify({ agents: { codex: { models: [{ id: 'gpt-6.1-sol', efforts: ['low'] }] } } }))
+        await expect(decideRequest(ctx, { goalId: 'g', assignmentId: 'a', requestId, decision: 'accepted' }, new Date())).rejects.toThrow()
+        expect((await store.read('g')).some((e) => e.type === 'request_decided')).toBe(false)
+      }
+      expect(fake.cancelled).toHaveLength(0)
+      expect((await store.read('g')).some((e) => e.type === 'reassigned')).toBe(false)
+    }
+    const { agents: choices } = await commands.agents()
+    expect(choices.find((a) => a.id === 'codex')?.models[0]?.efforts).toEqual(['low'])
+  })
+
+  it.each([
+    [{ model: 'first', effort: 'medium' }, {}, { model: 'first', effort: 'medium' }, { model: 'second', effort: 'high' }],
+    [{ model: 'first', effort: 'medium' }, { model: 'chosen', effort: 'low' }, { model: 'chosen', effort: 'low' }, { model: 'chosen', effort: 'low' }],
+    [{ model: 'first' }, {}, { model: 'first', effort: undefined }, { model: 'second', effort: 'high' }],
+  ])('snapshots launch choices from %j without reusing them as overrides', async (defaults, overrides, first, next) => {
+    const home = await mkdtemp(join(tmpdir(), 'cb-agents-'))
+    const file = join(home, 'agents.json')
+    await writeFile(file, JSON.stringify({ agents: { codex: defaults } }))
+    const { store, sup, fake } = await setup(undefined, undefined, createAgents({ CREWBOARD_HOME: home }))
+    fake.setFallback({ hold: true })
+    await goal(store)
+    await store.append('g', assign('a', { provider: 'codex', ...overrides }))
+    await sup.tick()
+    const snapshot = async () => {
+      const started = (await store.read('g')).findLast((e) => e.type === 'run_started')
+      return { model: started?.model, effort: started?.effort }
+    }
+    expect(await snapshot()).toEqual(first)
+    expect({ model: fake.launches[0]?.model, effort: fake.launches[0]?.effort }).toEqual(first)
+
+    fake.finish(fake.runs[0]!.id, { final: '<crewboard-report>done</crewboard-report>' })
+    await sup.tick()
+    await writeFile(file, JSON.stringify({ agents: { codex: { model: 'second', effort: 'high' }, claude: { model: 'handoff', effort: 'max' } } }))
+    await sup.deliver('g', 'a', 'Continue')
+    expect(await snapshot()).toMatchObject(next)
+    expect(fake.launches[1]).toMatchObject(next)
+
+    await sup.reassign('g', 'a', 'claude')
+    expect(await snapshot()).toMatchObject({ model: 'handoff', effort: 'max' })
+    expect(fake.launches[2]).toMatchObject({ agent: 'claude/handoff', model: 'handoff', effort: 'max' })
+  })
+
   it.each(['message', 'thought', 'command'] as const)('uses readable %s progress, preferring narration to later commands', async (kind) => {
     const { store, sup, fake, root } = await setup()
     fake.setFallback({ hold: true })
@@ -77,16 +211,25 @@ describe('supervisor', () => {
     const home = await mkdtemp(join(tmpdir(), 'cb-agents-'))
     const file = join(home, 'agents.json')
     await writeFile(file, '{ "agents": { "kimi": ')
-    const { store, sup, fake } = await setup(undefined, undefined, createAgents({ CREWBOARD_HOME: home }))
+    const { store, sup, fake, pool, root } = await setup(undefined, undefined, createAgents({ CREWBOARD_HOME: home }))
     fake.setFallback({ hold: true })
     await goal(store)
     await store.append('g', assign('a'))
+    await store.append('g', assign('b'))
+    await sup.tick()
     await sup.tick()
     expect(fake.runs.length).toBe(0)
     expect(await typesOf(store, 'a')).toEqual(['assigned'])
+    expect(await statusOf(store, 'a')).toBe('queued')
+    const pending = await createInbox(store).pending()
+    expect(pending).toHaveLength(1)
+    expect(pending[0]).toMatchObject({ assignmentId: 'g', type: 'progress', code: 'launch_registry', detail: expect.stringContaining(file) })
+    const restarted = createSupervisor({ repo: root, store, pool, now: () => new Date(), worktree: gitWorktree, agents: createAgents({ CREWBOARD_HOME: home }) })
+    await restarted.tick()
+    expect(await createInbox(store).pending()).toHaveLength(1)
     await writeFile(file, '{ "agents": {} }')
     await sup.tick()
-    expect(fake.runs.length).toBe(1)
+    expect(fake.runs.length).toBe(2)
   })
 
   it('records a failed run for an agent no longer registered', async () => {
@@ -161,6 +304,34 @@ describe('supervisor', () => {
     expect(await statusOf(store, 'a')).toBe('waiting_answer')
     const progress = (await store.read('g')).find((e) => e.type === 'progress')
     expect(progress).toMatchObject({ text: expect.not.stringContaining('<crewboard-') })
+  })
+
+  it.each([
+    ['Bearer token-123 sk-test_secret API_KEY=hidden', 'Bearer [redacted] [redacted] API_KEY=[redacted]'],
+    ['API_KEY="two words" other_key=secret KEY=bare', 'API_KEY=[redacted] other_key=[redacted] KEY=[redacted]'],
+    [`${'x'.repeat(490)} Bearer ${'secret'.repeat(100)}`, `${'x'.repeat(490)} Bearer [r`],
+  ])('keeps a bounded, redacted failure reason in the journal and inbox: %s', async (failureText, expected) => {
+    const { store, sup, fake } = await setup()
+    fake.script({ fail: 'worker_error', failureText })
+    await goal(store)
+    await store.append('g', assign('a'))
+    await sup.tick()
+    await sup.tick()
+    const ended = (await store.read('g')).find((e) => e.type === 'run_ended')
+    expect(ended).toMatchObject({ reason: 'worker_error', text: expected })
+    expect((await createInbox(store).pending()).find((e) => e.type === 'run_ended')).toEqual(ended)
+  })
+
+  it.each(['answer', 'decision', 'local'] as const)('delivers the full %s result outside the report block', async (resultKind) => {
+    const { store, sup, fake } = await setup()
+    fake.script({ final: `${'a'.repeat(30_010)}\n<crewboard-report>Summary</crewboard-report>` })
+    await goal(store)
+    await store.append('g', assign('a', { resultKind }))
+    await sup.tick()
+    await sup.tick()
+    const report = (await createInbox(store).pending()).find((e) => e.type === 'reported')
+    expect(report).toMatchObject({ summary: 'Summary' })
+    expect(report?.type === 'reported' && report.detail).toBe(resultKind === 'local' ? undefined : 'a'.repeat(30_000))
   })
 
   it('tells the lead when a run fails', async () => {

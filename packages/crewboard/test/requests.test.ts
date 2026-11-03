@@ -57,8 +57,10 @@ describe('owner requests decided by the lead', () => {
   it('launches an accepted handoff with its model and effort and keeps the chain', async () => {
     const t = await setup()
     await writeFile(join(t.env.CREWBOARD_HOME, 'agents.json'), JSON.stringify({ agents: { codex: { effort: 'low' }, claude: { effort: 'medium' } } }))
-    expect(await t.node()).toMatchObject({ model: 'gpt-6.1-sol', effort: 'low' })
-    const choices = await t.call<Array<{ id: string; models: unknown[]; efforts: string[]; defaultEffort: string | null }>>('crewboard_agents', {})
+    const before = await t.node()
+    expect(before.model).toBe('gpt-6.1-sol')
+    expect(before.effort).toBeUndefined()
+    const { agents: choices } = await t.call<{ agents: Array<{ id: string; models: unknown[]; efforts: string[]; defaultEffort: string | null }> }>('crewboard_agents', {})
     expect(choices.find((a) => a.id === 'claude')).toMatchObject({ models: [{ id: 'sonnet', label: 'Sonnet' }, { id: 'opus' }, { id: 'fable' }, { id: 'haiku' }], efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium' })
     expect(choices.find((a) => a.id === 'deepseek')).toMatchObject({ efforts: [], defaultEffort: null })
     const httpChoices = await (await fetch(`${t.server.url}/api/agents`)).json() as typeof choices
