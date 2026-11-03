@@ -1,5 +1,6 @@
 import { LEAD_SILENT_PAUSE_MS, STALE_ABANDON_MS } from './thresholds.js'
 import type { AssignmentView, Doing, EventOf, GoalEvent, ProviderId, RequestAction, Status } from './types.js'
+import type { AgentEntry } from '../workers/agents.js'
 
 export type StatusContext = { parentStatus: Status | null; isRoot: boolean; now: Date; leadLastSeen?: Date }
 
@@ -123,7 +124,7 @@ function requestOf(own: GoalEvent[]): AssignmentView['request'] {
   const asked = own.findLast((e): e is EventOf<'owner_requested'> => e.type === 'owner_requested' && e.action !== 'discuss')
   if (!asked) return undefined
   const decided = own.findLast((e): e is EventOf<'request_decided'> => e.type === 'request_decided' && e.requestId === asked.requestId)
-  const base = { id: asked.requestId, action: asked.action, ...(asked.text ? { text: asked.text } : {}), ...(asked.provider ? { provider: asked.provider } : {}) }
+  const base = { id: asked.requestId, action: asked.action, ...(asked.text ? { text: asked.text } : {}), ...(asked.provider ? { provider: asked.provider } : {}), ...(asked.model ? { model: asked.model } : {}), ...(asked.effort !== undefined ? { effort: asked.effort } : {}) }
   if (!decided) {
     // Work closed or cancelled after the request makes it moot: it no longer pins the node.
     const moot = own.some((e) => e.seq > asked.seq && (e.type === 'closed' || e.type === 'cancelled'))
@@ -135,18 +136,20 @@ function requestOf(own: GoalEvent[]): AssignmentView['request'] {
   return movedOn ? undefined : { ...base, state: 'declined', ...(decided.reason ? { reason: decided.reason } : {}) }
 }
 
-function handoffsOf(own: GoalEvent[]): { provider?: ProviderId; model?: string; handoffs: AssignmentView['handoffs'] } {
+function handoffsOf(own: GoalEvent[]): { provider?: ProviderId; model?: string; effort?: string; handoffs: AssignmentView['handoffs'] } {
   const assigned = lastOf(own, 'assigned')
   let provider = assigned?.provider
   let model = assigned?.model
+  let effort = assigned?.effort
   const handoffs: AssignmentView['handoffs'] = []
   for (const e of own) {
     if (e.type !== 'reassigned' || !provider) continue
     handoffs.push({ from: provider, to: e.provider })
     provider = e.provider
     model = e.model
+    effort = e.effort
   }
-  return { ...(provider ? { provider } : {}), ...(model ? { model } : {}), handoffs }
+  return { ...(provider ? { provider } : {}), ...(model ? { model } : {}), ...(effort !== undefined ? { effort } : {}), handoffs }
 }
 
 /** What the owner may ask for on a node. `emergency_stop` is offered on every live node: the owner can always stop work. */
@@ -170,8 +173,9 @@ export function availableActions(node: AssignmentView): Array<RequestAction | 'e
   return actions
 }
 
-/** The goal's tree with derived statuses. The root's id is the goal id. */
-export function buildTree(events: GoalEvent[], now: Date, leadLastSeen: Date | undefined): AssignmentView {
+/** The goal's tree with derived statuses and, when supplied, current agent defaults. The root's id is the goal id. */
+export function buildTree(events: GoalEvent[], now: Date, leadLastSeen: Date | undefined, agents: readonly Pick<AgentEntry, 'id' | 'model' | 'effort'>[] = []): AssignmentView {
+  const defaults = new Map(agents.map((a) => [a.id, a]))
   const byId = new Map<string, GoalEvent[]>()
   for (const e of events) {
     const list = byId.get(e.assignmentId)
@@ -212,10 +216,14 @@ export function buildTree(events: GoalEvent[], now: Date, leadLastSeen: Date | u
     }
     const quote = isRoot ? start.quote : a?.quote
     if (quote) view.quote = quote
-    if (chain.model) view.model = chain.model
+    const agent = isRoot ? undefined : defaults.get(view.provider)
+    const model = chain.model ?? agent?.model
+    const effort = chain.effort ?? agent?.effort
+    if (model) view.model = model
+    if (effort !== undefined) view.effort = effort
     const request = requestOf(own)
     if (request) view.request = request
-    if (run) Object.assign(view, { runId: run.runId, agent: run.agent, cwd: run.cwd })
+    if (run) Object.assign(view, { runId: run.runId, agent: run.agent, cwd: run.cwd, runOpen: !own.some((e) => e.type === 'run_ended' && e.runId === run.runId) })
     view.children = (kids.get(id) ?? []).map((k) => node(k, status, view.underFinished === true))
     // A worker waiting for the parts it split off is still at work, not waiting for the lead.
     const splitOff = view.children.filter((k) => (byId.get(k.id) ?? []).some((e) => e.type === 'assigned' && e.actor === 'worker'))

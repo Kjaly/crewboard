@@ -4,7 +4,7 @@ Thanks for helping improve Crewboard. Please follow the [code of conduct](CODE_O
 
 ## Set up
 
-Node.js 24 or newer, pnpm 11.5.2 and Git:
+Node.js 22.15 or newer, pnpm 11.5.2 and Git:
 
 ```sh
 pnpm install --frozen-lockfile

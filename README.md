@@ -28,13 +28,13 @@ Documentation: **[kjaly.github.io/crewboard](https://kjaly.github.io/crewboard/)
 
 ## Install
 
-With Node.js 24+:
+With Node.js 22.15+:
 
 ```sh
 npx crewboard serve
 ```
 
-Or install it once with `npm install -g crewboard` and run `crewboard serve`. From a source checkout (Node.js 24+, pnpm 11.5.2, Git):
+Or install it once with `npm install -g crewboard` and run `crewboard serve`. From a source checkout (Node.js 22.15+, pnpm 11.5.2, Git):
 
 ```sh
 git clone https://github.com/Kjaly/crewboard.git
@@ -53,6 +53,21 @@ crewboard connect claude   # or: codex, dsh, other
 
 From a source checkout, `crewboard` is `node packages/crewboard/dist/main.js`.
 
+In Claude Code you can install the Crewboard plugin instead of `crewboard connect claude`: it connects the server and adds a skill that teaches the lead to hand out, check and close work. In a Claude Code chat (2.1.275 or later):
+
+```text
+/plugin install crewboard --marketplace Kjaly/crewboard
+```
+
+Or from a terminal:
+
+```sh
+claude plugin marketplace add Kjaly/crewboard
+claude plugin install crewboard@crewboard
+```
+
+Use one or the other, not both: the plugin and `claude mcp add` would each add the same server.
+
 Then, in your lead chat inside one of your repositories, describe what you want. The [getting started guide](docs/en/getting-started.md) walks through the first goal.
 
 ## What you need for each worker
@@ -64,7 +79,7 @@ Then, in your lead chat inside one of your repositories, describe what you want.
 | DeepSeek | `dsh` (DeepSeek Harness) with a DeepSeek key in its settings |
 | Any other agent | an entry in `~/.crewboard/agents.json`: OpenCode, Cursor, Gemini, Grok, Devin, or Kimi, GLM and other models through dsh |
 
-See [workers](docs/en/workers.md) for models, defaults and how a worker splits its own work.
+See [workers](docs/en/workers.md) for models, defaults and how a worker splits its own work. The foot of the sidebar shows how much of each subscription limit is used and the money left on DeepSeek and Kimi; see [providers](docs/en/screen.md#providers) for what each one needs.
 
 ## Documentation
 
@@ -78,4 +93,4 @@ See [workers](docs/en/workers.md) for models, defaults and how a worker splits i
 
 ## Status
 
-Version 1.1.1. Used on macOS with Claude Code, Codex CLI and DeepSeek Harness. Linux should work; Windows is untested. The server listens on 127.0.0.1 only and has no login of its own: see [security](SECURITY.md).
+Version 1.2.0. Used on macOS with Claude Code, Codex CLI and DeepSeek Harness. Linux should work; Windows is untested. The server listens on 127.0.0.1 only and has no login of its own: see [security](SECURITY.md).

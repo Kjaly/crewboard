@@ -11,6 +11,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 export const SESSION_ENV = 'CREWBOARD_TEST_SESSION'
 export const TAG_ENV = 'CREWBOARD_TEST_TAG'
 const REAP_WAIT_MS = 8_000
+const DISABLED_ENV = 'CREWBOARD_TEST_PROCESS_GUARD_DISABLED'
 
 export type TaggedProcess = { pid: number; ppid: number; command: string; env: Record<string, string> }
 
@@ -20,7 +21,19 @@ export function findTagged(name: string, value: string): TaggedProcess[] {
 }
 
 function listProcesses(): TaggedProcess[] {
-  if (process.platform === 'linux') return listLinux()
+  if (process.env[DISABLED_ENV] === '1') return []
+  try {
+    return process.platform === 'linux' ? listLinux() : listBsd()
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code !== 'EPERM' && code !== 'EACCES') throw error
+    process.env[DISABLED_ENV] = '1'
+    console.warn(`crewboard tests: process inspection denied (${code}); skipping process leak detection`)
+    return []
+  }
+}
+
+function listBsd(): TaggedProcess[] {
   // BSD ps: -E appends the environment to the command; the value runs to the next space.
   const out = execFileSync('ps', ['-AEww', '-o', 'pid=,ppid=,command='], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   return out.split('\n').flatMap((line) => {
@@ -70,6 +83,8 @@ const describe = (procs: TaggedProcess[]) => procs.map((p) => `  pid ${p.pid} (p
 export default function setup(): () => Promise<void> {
   const session = randomUUID()
   process.env[SESSION_ENV] = session
+  // Probe before workers fork so a sandbox denial produces one warning for the whole run.
+  listProcesses()
   return async () => {
     const leaked = listProcesses().filter((p) => p.env[SESSION_ENV] === session && p.pid !== process.pid && p.ppid !== process.pid)
     if (!leaked.length) return

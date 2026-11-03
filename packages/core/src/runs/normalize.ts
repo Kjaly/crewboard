@@ -1,8 +1,9 @@
 import { basename } from 'node:path'
 import type { RawEvent } from '../runs/raw-event.js'
 import type { FailureReason } from './failure.js'
+import { type CommandPaths, readableCommand } from './command-text.js'
 
-export type NormKind = 'action' | 'file' | 'message' | 'steer' | 'problem' | 'final'
+export type NormKind = 'action' | 'file' | 'message' | 'thought' | 'steer' | 'problem' | 'final'
 export type { FailureReason } from './failure.js'
 
 /**
@@ -33,7 +34,7 @@ export type NormEvent = {
   kind: NormKind
   /** The 200-character, single-line summary every consumer already reads (the CLI and older screens). */
   text: string
-  /** Public answer/message/final text with its line breaks kept, bounded; absent on non-public events. */
+  /** Public message/final/summary text with its line breaks kept, bounded; absent on non-public events. */
   display?: string
   /** The source text was longer than the display bound, so `display` is a truthful prefix. */
   truncated?: true
@@ -46,6 +47,9 @@ export type NormEvent = {
   reason?: FailureReason
   note?: EventNote
   open?: true
+  /** Tool lifecycle metadata when `normalize` is asked to merge tool results into their starts. */
+  status?: 'running' | 'done' | 'failed'
+  durationMs?: number
 }
 
 /**
@@ -102,7 +106,7 @@ export function eventNoteOf(data: unknown): EventNote | undefined {
 export const eventNoteText = (note: EventNote): string => `${NOTE_TEXT[note.code]}${note.detail ? `: ${note.detail}` : ''}`
 
 // Backend noise observed on 2026-09-22: OpenCode lifecycle `progress` events,
-// heartbeats and reasoning streams carry no user-facing progress.
+// heartbeats and raw thinking streams carry no user-facing progress. Published reasoning summaries are separate.
 const NOISE_TYPES = new Set(['progress', 'heartbeat', 'thinking_delta', 'thinking', 'session', 'usage', 'end'])
 const FILE_TOOLS = new Set(['write', 'edit', 'patch', 'multiedit', 'apply_patch'])
 const MAX_TEXT = 200
@@ -227,7 +231,7 @@ type ToolData = { tool?: string; status?: string; input?: Record<string, unknown
 export function describeTool(tool: string, input: Record<string, unknown> | undefined): string {
   const pathValue = input?.filePath ?? input?.file_path ?? input?.path
   const path = typeof pathValue === 'string' ? pathValue : undefined
-  if (tool === 'bash' && typeof input?.command === 'string') return input.command.split('\n')[0] ?? ''
+  if (TOOL_OPERATIONS[tool] === 'command' && typeof input?.command === 'string') return input.command.split('\n')[0] ?? ''
   if (tool === 'read' && path) return `Read ${basename(path)}`
   if (path) return basename(path)
   return tool
@@ -243,7 +247,7 @@ export function parseEventData(data: unknown): unknown {
   }
 }
 
-function toNorm(raw: RawEvent): NormEvent | null {
+function toNorm(raw: RawEvent, paths: CommandPaths = {}): NormEvent | null {
   const ev = { ...raw, data: parseEventData(raw.data) }
   const ts = ev.ts
   if (ev.type === 'progress' && ev.data && typeof ev.data === 'object' && 'unknownType' in ev.data) {
@@ -257,8 +261,9 @@ function toNorm(raw: RawEvent): NormEvent | null {
         const d = ev.data as ToolData
         if (d.status !== 'running') return null
         const tool = d.tool ?? 'tool'
-        const structured = toolDetail(tool, d.input)
-        return { ts, kind: FILE_TOOLS.has(tool) ? 'file' : 'action', text: clip(describeTool(tool, d.input)), ...(structured ? { tool: structured } : {}) }
+        const input = TOOL_OPERATIONS[tool] === 'command' && typeof d.input?.command === 'string' ? { ...d.input, command: readableCommand(d.input.command, paths) } : d.input
+        const structured = toolDetail(tool, input)
+        return { ts, kind: FILE_TOOLS.has(tool) ? 'file' : 'action', text: clip(describeTool(tool, input)), ...(structured ? { tool: structured } : {}) }
       }
       const text = asText(ev.data)
       return { ts, kind: /^(edit|write|create|update)\b/i.test(text) ? 'file' : 'action', text: clip(text) }
@@ -276,6 +281,10 @@ function toNorm(raw: RawEvent): NormEvent | null {
       // The summary keeps the legacy JSON shape for an old consumer; only a recognized public string is chat.
       const public_ = publicText(raw.data)
       return { ts, kind: 'message', text: asText(ev.data), ...(public_ !== undefined ? { display: public_ } : {}) }
+    }
+    case 'reasoning_summary': {
+      const text = publicText(raw.data)
+      return text?.trim() ? { ts, kind: 'thought', text, display: text } : null
     }
     case 'error':
     case 'failed':
@@ -321,12 +330,13 @@ const callIdOf = (data: unknown): string | undefined => {
   return typeof callId === 'string' ? callId : undefined
 }
 
-export function normalize(events: RawEvent[]): NormEvent[] {
+export function normalize(events: RawEvent[], options: CommandPaths & { mergeToolResults?: boolean } = {}): NormEvent[] {
   const out: NormEvent[] = []
   // A tool/command start (st2) is «in flight» until its result arrives, matched by `callId`; a backend that
   // does not send one (Devin) is never marked open — its last action says nothing about whether it finished.
   const openedBy = new Map<string, NormEvent>()
-  const closed = new Set<string>()
+  const closed = new Map<string, { ts: string; status?: string }>()
+  const toolProblems = new Map<NormEvent, string>()
   // CLI processes can reuse item IDs after a new turn: a prior completion must not close a new call.
   let turnScope = 0
   for (const raw of events) {
@@ -334,10 +344,14 @@ export function normalize(events: RawEvent[]): NormEvent[] {
     const data = parseEventData(raw.data)
     if (raw.type === 'tool_completed') {
       const callId = callIdOf(data)
-      if (callId) closed.add(`${turnScope}:${callId}`)
+      if (callId) closed.set(`${turnScope}:${callId}`, { ts: raw.ts, status: (data as ToolData).status })
     }
-    const n = toNorm(raw)
+    const n = toNorm(raw, options)
     if (!n) continue
+    if (options.mergeToolResults && raw.type === 'tool_completed' && n.kind === 'problem') {
+      const callId = callIdOf(data)
+      if (callId) toolProblems.set(n, `${turnScope}:${callId}`)
+    }
     const prev = out.at(-1)
     if (n.kind === 'message' && prev?.kind === 'message') {
       prev.text += n.text
@@ -353,8 +367,8 @@ export function normalize(events: RawEvent[]): NormEvent[] {
     out.push(n)
   }
   for (const e of out) {
-    if (e.kind === 'message') e.text = clip(e.text.replace(/\s+/g, ' ').trim())
-    if ((e.kind === 'message' || e.kind === 'final') && e.display !== undefined) {
+    if (e.kind === 'message' || e.kind === 'thought') e.text = clip(e.text.replace(/\s+/g, ' ').trim())
+    if ((e.kind === 'message' || e.kind === 'thought' || e.kind === 'final') && e.display !== undefined) {
       const bounded = boundDisplay(displayText(e.display))
       if (bounded.display) e.display = bounded.display
       else delete e.display
@@ -362,6 +376,16 @@ export function normalize(events: RawEvent[]): NormEvent[] {
     }
   }
   boundDisplays(out)
-  for (const [callId, event] of openedBy) if (!closed.has(callId)) event.open = true
-  return out
+  for (const [callId, event] of openedBy) {
+    const result = closed.get(callId)
+    if (!result) event.open = true
+    if (!options.mergeToolResults) continue
+    event.status = result ? (result.status === 'error' || result.status === 'failed' ? 'failed' : 'done') : 'running'
+    if (result) {
+      const duration = Date.parse(result.ts) - Date.parse(event.ts)
+      if (Number.isFinite(duration) && duration >= 0) event.durationMs = duration
+    }
+  }
+  // Older consumers keep the separate tool problem; a step feed reports that failure on the tool itself.
+  return options.mergeToolResults ? out.filter((event) => !openedBy.has(toolProblems.get(event) ?? '')) : out
 }

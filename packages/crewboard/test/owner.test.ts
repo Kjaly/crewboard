@@ -23,6 +23,26 @@ async function escalated() {
   return { ...t, goalId, assignmentId, answer }
 }
 
+describe('project summary', () => {
+  it('counts work waiting for the lead apart from running, and dates a finished goal', async () => {
+    const t = await startApp()
+    running.push(t)
+    t.fake.script({ final: '<crewboard-question>Шторка или слой?</crewboard-question>' }, { hold: true })
+    const { goalId } = await t.call<{ goalId: string }>('crewboard_start_goal', { project: t.project, title: 'Кухня', criteria: [] })
+    const { assignmentId } = await t.call<{ assignmentId: string }>('crewboard_assign', { project: t.project, goalId, title: 'Панель', criteria: [], resultKind: 'local', provider: 'claude' })
+    await t.app.tick()
+    const goal = async () => ((await (await fetch(`${t.server.url}/api/projects`)).json()) as ProjectSummary[])[0]!.goals[0]!
+    expect(await goal()).toMatchObject({ counts: { waiting_lead: 1, running: 0, waiting_owner: 0 } })
+    expect((await goal()).finishedAt).toBeUndefined()
+
+    await t.call('crewboard_cancel', { project: t.project, goalId, assignmentId, reason: 'не нужно' })
+    await t.call('crewboard_close', { project: t.project, goalId, assignmentId: goalId, summary: 'Готово' })
+    const done = await goal()
+    expect(done.status).toBe('done')
+    expect(Number.isNaN(Date.parse(done.finishedAt ?? ''))).toBe(false)
+  })
+})
+
 describe('owner answer', () => {
   it('reaches the worker and the lead, and only once', async () => {
     const t = await escalated()

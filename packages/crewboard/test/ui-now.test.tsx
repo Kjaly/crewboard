@@ -5,6 +5,7 @@ import { coalesce } from '../src/ui/api.js'
 import { App } from '../src/ui/app.js'
 import { initialLang, setLang } from '../src/ui/text.js'
 import { userEvent } from '@testing-library/user-event'
+import type { AssignmentView } from '../src/model/types.js'
 import { fakeApi, kitchen, node } from './ui-fixtures.js'
 
 afterEach(() => {
@@ -251,8 +252,8 @@ describe('review fixes', () => {
     const other = node('g2', 'running', { parentId: null, title: 'Шкаф', provider: 'lead', resultKind: 'goal' })
     const f = fakeApi({
       projects: [{ repo: '/repo/cabinet', name: 'cabinet', goals: [
-        { goalId: 'g', title: 'Кухня полного цикла', createdAt: '2026-11-02T10:00:00Z', status: 'running', leadOnline: true, counts: { waiting_owner: 1, running: 1, queued: 0, finished: 0 } },
-        { goalId: 'g2', title: 'Шкаф', createdAt: '2026-11-01T10:00:00Z', status: 'running', leadOnline: true, counts: { waiting_owner: 0, running: 0, queued: 0, finished: 0 } },
+        { goalId: 'g', title: 'Кухня полного цикла', createdAt: '2026-11-02T10:00:00Z', status: 'running', leadOnline: true, counts: { waiting_lead: 0, waiting_owner: 1, running: 1, queued: 0, finished: 0 } },
+        { goalId: 'g2', title: 'Шкаф', createdAt: '2026-11-01T10:00:00Z', status: 'running', leadOnline: true, counts: { waiting_lead: 0, waiting_owner: 0, running: 0, queued: 0, finished: 0 } },
       ] }],
     })
     f.state.trees.g2 = other
@@ -284,33 +285,87 @@ describe('actions in the tree', () => {
     return { f, panel: screen.getByRole('complementary', { name: 'Контекст поручения' }) }
   }
 
-  it('offers what fits the status', async () => {
+  const withBox = (patch: Partial<AssignmentView>) => {
+    const tree = kitchen()
+    Object.assign(tree.children.find((c) => c.id === 'box') as AssignmentView, patch)
+    return tree
+  }
+
+  const agents = [
+    { id: 'claude', label: 'Claude', model: 'sonnet', models: [{ id: 'sonnet', label: 'Sonnet 5.5' }, { id: 'opus', label: 'Opus 5.5' }], efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
+    { id: 'codex', label: 'Codex', model: 'gpt-6.1-sol', models: [{ id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' }, { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra' }], efforts: ['low', 'medium', 'high'], defaultEffort: 'low' },
+    { id: 'kimi', label: 'Kimi', model: 'k3', models: ['k3'], efforts: [], defaultEffort: null },
+  ]
+
+  it('offers what fits the status, each with its effect', async () => {
     const { panel } = await open(/Модель короба/)
-    for (const name of ['Уточнить', 'Остановить', 'Передать', 'Обсудить с ведущим']) expect(within(panel).getByRole('button', { name })).toBeTruthy()
+    for (const name of [/Уточнить задачу/, /Остановить/, /Передать другому агенту/, /Обсудить в чате ведущего/]) expect(within(panel).getByRole('button', { name })).toBeTruthy()
+    expect(within(panel).getByText('Указание исполнителю по ходу работы')).toBeTruthy()
+    expect(within(panel).getByText('Это поручение и всё, что под ним')).toBeTruthy()
     await userEvent.click(screen.getByRole('treeitem', { name: /Сборочная инструкция/ }))
-    for (const name of ['Начать раньше', 'Отменить']) expect(within(panel).getByRole('button', { name })).toBeTruthy()
+    for (const name of [/Начать раньше/, /Отменить/]) expect(within(panel).getByRole('button', { name })).toBeTruthy()
   })
 
   it('asks to stop once, even on a double click', async () => {
     const { f, panel } = await open(/Модель короба/)
-    await userEvent.dblClick(within(panel).getByRole('button', { name: 'Остановить' }))
+    await userEvent.dblClick(within(panel).getByRole('button', { name: /^Остановить/ }))
     await waitFor(() => expect(f.state.requests).toEqual([{ id: 'box', action: 'stop' }]))
   })
 
-  it('hands work to the chosen provider', async () => {
+  it('sends a clarification with Ctrl+Enter', async () => {
     const { f, panel } = await open(/Модель короба/)
-    await userEvent.click(within(panel).getByRole('button', { name: 'Передать' }))
-    await userEvent.click(within(panel).getByRole('button', { name: 'Claude' }))
-    await waitFor(() => expect(f.state.requests).toEqual([{ id: 'box', action: 'handoff', provider: 'claude' }]))
+    await userEvent.click(within(panel).getByRole('button', { name: /Уточнить задачу/ }))
+    await userEvent.type(within(panel).getByRole('textbox', { name: 'Что передать ведущему' }), 'Только CI{Control>}{Enter}{/Control}')
+    await waitFor(() => expect(f.state.requests).toEqual([{ id: 'box', action: 'clarify', text: 'Только CI' }]))
   })
 
-  it('offers every other registered agent to hand work over', async () => {
-    const { panel } = await open(/Модель короба/, { agents: [{ id: 'claude', label: 'Claude' }, { id: 'codex', label: 'Codex' }, { id: 'kimi', label: 'Kimi' }] })
-    await userEvent.click(within(panel).getByRole('button', { name: 'Передать' }))
-    await waitFor(() => {
-      const group = within(panel).getByRole('group', { name: 'Кому передать' })
-      expect(within(group).getAllByRole('button').map((b) => b.textContent)).toEqual(['Claude', 'Kimi'])
-    })
+  it('hands work over with the chosen agent, model and effort', async () => {
+    const { f, panel } = await open(/Модель короба/, { agents })
+    await userEvent.click(within(panel).getByRole('button', { name: /Передать другому агенту/ }))
+    await userEvent.click(within(panel).getByRole('radio', { name: 'Claude' }))
+    await userEvent.click(within(panel).getByRole('button', { name: /Sonnet 5\.5/ }))
+    const dialog = within(panel).getByRole('dialog', { name: 'Модель и effort' })
+    await userEvent.click(within(dialog).getByRole('option', { name: /Opus 5\.5/ }))
+    within(dialog).getByRole('slider', { name: 'Effort' }).focus()
+    await userEvent.keyboard('{ArrowRight}')
+    await userEvent.click(within(panel).getByRole('button', { name: 'Попросить передать' }))
+    await waitFor(() => expect(f.state.requests).toEqual([{ id: 'box', action: 'handoff', provider: 'claude', model: 'opus', effort: 'high' }]))
+  })
+
+  it('offers the current agent first for another model or effort, and nothing to send while nothing changes', async () => {
+    const { f, panel } = await open(/Модель короба/, { agents, tree: withBox({ model: 'gpt-6.1-terra', effort: 'low' }) })
+    await userEvent.click(within(panel).getByRole('button', { name: /Передать другому агенту/ }))
+    const radios = within(panel).getAllByRole('radio')
+    expect(radios).toHaveLength(3)
+    expect(radios[0]?.textContent).toMatch(/Codex.*сейчас/)
+    await userEvent.click(radios[0] as HTMLElement)
+    expect((within(panel).getByRole('button', { name: 'Попросить передать' }) as HTMLButtonElement).disabled).toBe(true)
+    await userEvent.click(within(panel).getByRole('button', { name: /GPT-6\.1 Terra/ }))
+    await userEvent.click(within(within(panel).getByRole('dialog', { name: 'Модель и effort' })).getByRole('option', { name: /GPT-6\.1 Sol/ }))
+    await userEvent.click(within(panel).getByRole('button', { name: 'Попросить передать' }))
+    await waitFor(() => expect(f.state.requests).toEqual([{ id: 'box', action: 'handoff', provider: 'codex', model: 'gpt-6.1-sol', effort: 'low' }]))
+  })
+
+  it('says when an agent takes no effort', async () => {
+    const { panel } = await open(/Модель короба/, { agents })
+    await userEvent.click(within(panel).getByRole('button', { name: /Передать другому агенту/ }))
+    await userEvent.click(within(panel).getByRole('button', { name: /^k3/ }))
+    expect(within(panel).getByText(/не принимает effort/)).toBeTruthy()
+  })
+
+  it('stops at once only when the emergency stop is held', async () => {
+    const { f, panel } = await open(/Модель короба/)
+    const hold = within(panel).getByRole('button', { name: 'Аварийная остановка: удерживайте' })
+    vi.useFakeTimers()
+    fireEvent.pointerDown(hold)
+    act(() => void vi.advanceTimersByTime(500))
+    fireEvent.pointerUp(hold)
+    act(() => void vi.advanceTimersByTime(2000))
+    expect(f.state.stops).toEqual([])
+    fireEvent.pointerDown(hold)
+    act(() => void vi.advanceTimersByTime(1200))
+    vi.useRealTimers()
+    await waitFor(() => expect(f.state.stops).toEqual(['box']))
   })
 
   it('shows a waiting request and leaves only discussion', async () => {
@@ -318,8 +373,8 @@ describe('actions in the tree', () => {
     t.children[1] = { ...t.children[1]!, request: { id: 'r1', action: 'stop', state: 'pending' } }
     const { panel } = await open(/Модель короба/, { tree: t })
     expect(within(panel).getByText('Запрошено: остановить. Ведущий решает')).toBeTruthy()
-    expect(within(panel).queryByRole('button', { name: 'Остановить' })).toBeNull()
-    expect(within(panel).getByRole('button', { name: 'Обсудить с ведущим' })).toBeTruthy()
+    expect(within(panel).queryByRole('button', { name: /^Остановить/ })).toBeNull()
+    expect(within(panel).getByRole('button', { name: /Обсудить в чате ведущего/ })).toBeTruthy()
   })
 
   it('shows why the lead declined', async () => {
@@ -329,16 +384,13 @@ describe('actions in the tree', () => {
     expect(within(panel).getByText('Ведущий против: Нужна для инструкции')).toBeTruthy()
   })
 
-  it('offers an emergency stop only while the lead is away', async () => {
+  it('reminds that the emergency stop works while the lead is away', async () => {
     const f0 = fakeApi()
     f0.state.projects[0]!.goals[0]!.leadOnline = false
     render(<App api={f0.api} />)
     await userEvent.click(await screen.findByRole('treeitem', { name: /Модель короба/ }))
     const panel = screen.getByRole('complementary', { name: 'Контекст поручения' })
-    await userEvent.click(within(panel).getByRole('button', { name: 'Аварийная остановка' }))
-    expect(f0.state.stops).toEqual([])
-    await userEvent.click(within(panel).getByRole('button', { name: 'Точно остановить сейчас' }))
-    await waitFor(() => expect(f0.state.stops).toEqual(['box']))
+    expect(within(panel).getByText(/Ведущий не на связи/)).toBeTruthy()
   })
 
   it('asks to stop the selected node with S while the tree has focus', async () => {
@@ -355,11 +407,11 @@ describe('sidebar', () => {
     fakeApi({
       projects: [
         { repo: '/repo/cabinet', name: 'cabinet', goals: [
-          { goalId: 'g', title: 'Кухня полного цикла', createdAt: '2026-11-02T10:00:00Z', status: 'running', leadOnline: true, counts: { waiting_owner: 1, running: 2, queued: 1, finished: 1 } },
-          { goalId: 'g2', title: 'Шкаф', createdAt: '2026-11-01T10:00:00Z', status: 'running', leadOnline: true, counts: { waiting_owner: 0, running: 1, queued: 0, finished: 3 } },
+          { goalId: 'g', title: 'Кухня полного цикла', createdAt: '2026-11-02T10:00:00Z', status: 'running', leadOnline: true, counts: { waiting_lead: 0, waiting_owner: 1, running: 2, queued: 1, finished: 1 } },
+          { goalId: 'g2', title: 'Шкаф', createdAt: '2026-11-01T10:00:00Z', status: 'running', leadOnline: true, counts: { waiting_lead: 0, waiting_owner: 0, running: 1, queued: 0, finished: 3 } },
         ] },
         { repo: '/repo/newsroom', name: 'newsroom', goals: [
-          { goalId: 'n1', title: 'Лента новостей', createdAt: '2026-10-30T10:00:00Z', status: 'running', leadOnline: false, counts: { waiting_owner: 2, running: 0, queued: 0, finished: 0 } },
+          { goalId: 'n1', title: 'Лента новостей', createdAt: '2026-10-30T10:00:00Z', status: 'running', leadOnline: false, counts: { waiting_lead: 0, waiting_owner: 2, running: 0, queued: 0, finished: 0 } },
         ] },
       ],
     })

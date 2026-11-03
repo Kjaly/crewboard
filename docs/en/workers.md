@@ -45,7 +45,10 @@ Any agent Crewboard's adapters can run joins with an entry in `~/.crewboard/agen
 | --- | --- |
 | `run` | the adapter: `claude`, `codex`, `dsh`, `opencode`, `cursor`, `gemini`, `grok` or `devin` |
 | `model` | the default model; for `dsh`, `<route>/<model>` picks a route of your dsh profile |
+| `effort` | the default effort level; an assignment or accepted handoff can override it. `crewboard_agents` lists accepted `efforts` (empty when the adapter takes none); omitting it uses the CLI default |
+| `models` | suggested models as an array of `{ "id": "…", "label": "…", "note": "…" }`; `label` and `note` are optional. Other model ids are still allowed |
 | `label`, `color` | how the screen shows the agent |
+| `icon` | a provider logo for the avatar: `claude`, `codex`, `deepseek`, `kimi`, `moonshot`, `qwen`, `zhipu`, `gemini`, `grok`, `cursor`, `devin`, `opencode`, `mistral`, `openai`, `xai` or `anthropic`; without it, the run and model choose the logo |
 | `enabled` | `false` turns an agent off, built-in ones included |
 
 An id is letters, digits, `.`, `-` or `_` (so a worker can name it in a split), and `lead` is reserved. An entry with the id of a built-in agent changes only the fields it names. The lead sees the list with `crewboard_agents` and hands work by `id`; a worker may split work onto any of them. A goal that used an agent you later removed still opens; new work for that agent is refused with the reason.

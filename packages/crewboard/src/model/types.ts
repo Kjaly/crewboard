@@ -33,6 +33,7 @@ export const goalEventSchema = z.discriminatedUnion('type', [
     resultKind: z.enum(RESULT_KINDS),
     provider: z.string().min(1),
     model: text.optional(),
+    effort: text.optional(),
     quote: text.optional(),
     after: z.array(z.string()),
   }),
@@ -55,9 +56,9 @@ export const goalEventSchema = z.discriminatedUnion('type', [
   z.object({ ...base, type: z.literal('closed'), summary: text, code: z.enum(SYSTEM_TEXTS).optional() }),
   z.object({ ...base, type: z.literal('cancelled'), reason: text, code: z.enum(SYSTEM_TEXTS).optional(), detail: text.optional() }),
   z.object({ ...base, type: z.literal('adopted'), note: text.optional(), client: text.optional() }),
-  z.object({ ...base, type: z.literal('owner_requested'), requestId: text, action: z.enum(REQUEST_ACTIONS), text: text.optional(), provider: z.string().min(1).optional() }),
+  z.object({ ...base, type: z.literal('owner_requested'), requestId: text, action: z.enum(REQUEST_ACTIONS), text: text.optional(), provider: z.string().min(1).optional(), model: text.optional(), effort: text.optional() }),
   z.object({ ...base, type: z.literal('request_decided'), requestId: text, decision: z.enum(['accepted', 'declined']), reason: text.optional() }),
-  z.object({ ...base, type: z.literal('reassigned'), provider: z.string().min(1), model: text.optional() }),
+  z.object({ ...base, type: z.literal('reassigned'), provider: z.string().min(1), model: text.optional(), effort: text.optional() }),
   z.object({ ...base, type: z.literal('unblocked') }),
   z.object({ ...base, type: z.literal('reopened'), note: text }),
 ])
@@ -76,16 +77,20 @@ export type AssignmentView = {
   criteria: string[]
   resultKind: ResultKind | 'goal'
   provider: ProviderId | 'lead'
+  /** Next run's choices: the latest assignment or handoff overrides, else the current registry defaults. */
   model?: string
+  effort?: string
   quote?: string
   after: string[]
   status: Status
   doing: Doing
   runId?: string
+  /** The latest run has not ended yet: what the run feed follows (a node waiting for its parts runs without one). */
+  runOpen?: boolean
   agent?: string
   cwd?: string
   /** The owner's latest request while it waits for the lead, or after the lead declined it. */
-  request?: { id: string; action: RequestAction; text?: string; provider?: ProviderId; state: 'pending' | 'declined'; reason?: string }
+  request?: { id: string; action: RequestAction; text?: string; provider?: ProviderId; model?: string; effort?: string; state: 'pending' | 'declined'; reason?: string }
   /** Every change of worker, oldest first: the work's continuity across providers. */
   handoffs: Array<{ from: ProviderId; to: ProviderId }>
   /** An ancestor is finished (done, cancelled, abandoned): the work cannot be brought back from here. */

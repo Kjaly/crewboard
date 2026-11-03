@@ -6,7 +6,7 @@
 
 ## 1. Установите и запустите сервер
 
-Нужен Node.js 24 или новее.
+Нужен Node.js 22.15 или новее.
 
 ```sh
 npx crewboard serve
@@ -28,7 +28,7 @@ node packages/crewboard/dist/main.js serve
 crewboard http://127.0.0.1:4700  mcp: http://127.0.0.1:4700/mcp
 ```
 
-Флаг `--port` выбирает другой порт. Сервер слушает только 127.0.0.1. Когда порт открыт, сервер также пишет, какие исполнители готовы, например `workers ready: Codex, Claude · not ready: DeepSeek (not found)`.
+Флаг `--port` выбирает другой порт. Сервер слушает только 127.0.0.1. `--open` открывает экран в браузере, когда сервер начинает слушать; `--version` печатает версию. Когда порт открыт, сервер также пишет, какие исполнители готовы, например `workers ready: Codex, Claude · not ready: DeepSeek (not found)`.
 
 При запуске из исходников, чтобы вызывать его командой `crewboard` в текущей сессии оболочки, объявите функцию с абсолютным путём к клону. Дальше в документации пишется просто `crewboard`.
 
@@ -55,6 +55,8 @@ Claude Code:
 ```sh
 claude mcp add --scope user --transport http crewboard http://127.0.0.1:4700/mcp
 ```
+
+Или плагин Crewboard для Claude Code: он подключает тот же сервер и добавляет навык ведения работы. В чате Claude Code (версии 2.1.275 и новее) выполните `/plugin install crewboard --marketplace Kjaly/crewboard`, или из терминала `claude plugin marketplace add Kjaly/crewboard`, затем `claude plugin install crewboard@crewboard`. Выберите плагин или `claude mcp add`, не оба.
 
 Codex:
 

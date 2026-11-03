@@ -1,6 +1,6 @@
 {
   "name": "crewboard",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Lead your coding agents from one chat — Claude Code, Codex, dsh or any MCP client — and watch Codex, Claude, DeepSeek or any agent you register work on one local board.",
   "license": "MIT",
   "author": "Anton Varlamkin",
@@ -23,7 +23,7 @@
   },
   "type": "module",
   "engines": {
-    "node": ">=24"
+    "node": ">=22.15"
   },
   "bin": {
     "crewboard": "dist/main.js"

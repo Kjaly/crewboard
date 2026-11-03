@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -190,11 +190,39 @@ describe('runCliRun: claude background work (bg1)', () => {
 })
 
 describe('runCliRun: codex', () => {
+  it('grants both Git directories to a linked-worktree worker on its first and resumed turns', async () => {
+    const { runDir, args, argv } = await prepare('codex', 'HOLD first')
+    const repo = await makeRepo()
+    const cwd = join(repo, '.crewboard', 'worktrees', 'worker')
+    await nodeExec('git', ['-C', repo, 'worktree', 'add', '-qb', 'worker', cwd])
+    // Exercise the native-binary path: commandArgs deliberately remains absent.
+    const command = join(runDir, 'codex')
+    await copyFile(FAKE_CODEX, command)
+    await chmod(command, 0o755)
+    const { commandArgs: _wrapper, ...native } = args
+    const [state] = await Promise.all([
+      runCliRun({ ...native, command, cwd }),
+      whenTurnStarted(runDir, () => steer(runDir, args.promptFile, 'continue', 'auto')),
+    ])
+    expect(state.status).toBe('completed')
+    const calls = await argv()
+    expect(calls).toHaveLength(2)
+    for (const call of calls) {
+      for (const dir of [join(repo, '.git'), join(repo, '.git', 'worktrees', 'worker')]) {
+        const flag = call.indexOf(dir) - 1
+        expect(call[flag]).toBe('--add-dir')
+        expect(flag).toBeGreaterThan(call.indexOf('exec'))
+        if (call.includes('resume')) expect(flag).toBeLessThan(call.indexOf('resume'))
+      }
+    }
+    expect(calls[1]).toContain('th-1')
+  })
+
   it('runs one turn with the workspace-write sandbox and uncached token accounting', async () => {
     const { runDir, args, argv } = await prepare('codex', 'build it')
     const state = await runCliRun(args)
     expect(state).toMatchObject({ status: 'completed', sessionId: 'th-1', usage: { calls: 1, inputTokens: 200, cacheReadTokens: 800, outputTokens: 50, reasoningTokens: 5 } })
-    expect((await argv())[0]).toEqual(['exec', '--json', '--skip-git-repo-check', '-s', 'workspace-write', '-m', 'gpt-5.6-sol', 'build it'])
+    expect((await argv())[0]).toEqual(['exec', '--json', '--skip-git-repo-check', '-s', 'workspace-write', '-m', 'gpt-5.6-sol', '-c', 'model_reasoning_summary="concise"', 'build it'])
     const feed = normalize(await readRunEvents(runDir))
     expect(feed).toEqual([
       expect.objectContaining({ kind: 'action', text: 'cat b.txt' }),
@@ -211,7 +239,7 @@ describe('runCliRun: codex', () => {
     expect((await readSteer(runDir, '11111111-1111-4111-8111-111111111111'))?.state).toBe('acknowledged')
     const calls = await argv()
     expect(calls).toHaveLength(2)
-    expect(calls[1]).toEqual(['exec', 'resume', '--json', '--skip-git-repo-check', '-c', 'sandbox_mode="workspace-write"', '-m', 'gpt-5.6-sol', 'th-1', 'fix the test'])
+    expect(calls[1]).toEqual(['exec', 'resume', '--json', '--skip-git-repo-check', '-c', 'sandbox_mode="workspace-write"', '-m', 'gpt-5.6-sol', '-c', 'model_reasoning_summary="concise"', 'th-1', 'fix the test'])
   })
 
   it('holds a steer that arrives before codex reported its thread and resumes that thread with the correction', async () => {

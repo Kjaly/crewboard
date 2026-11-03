@@ -4,7 +4,7 @@ import { flatten } from '../model/project.js'
 import { availableActions } from '../model/project.js'
 import type { AssignmentView, GoalEvent, ProviderId, RequestAction } from '../model/types.js'
 import type { ProjectSummary } from '../owner.js'
-import { type Api, type LiveChange, coalesce } from './api.js'
+import { type Api, type HandoffPick, type LiveChange, coalesce } from './api.js'
 import { type ActionMode, Actions } from './components/actions.js'
 import { ContextPanel } from './components/context-panel.js'
 import { EmptyState } from './components/empty-state.js'
@@ -13,6 +13,7 @@ import { QuestionBox } from './components/question-box.js'
 import { AnalyticsView } from './components/analytics-view.js'
 import { HistoryView } from './components/history-view.js'
 import type { GoalAnalytics } from '../analytics.js'
+import { UsagePanel } from './components/usage-panel.js'
 import { Sidebar } from './components/sidebar.js'
 import type { GoalHistory } from '../history/sessions.js'
 import { Summary, countTree } from './components/summary.js'
@@ -271,13 +272,15 @@ export function App(props: { api: Api }) {
     await Promise.all([loadTree(target), loadProjects()])
   }
 
-  const leadOnline = projects?.find((p) => p.repo === target?.project)?.goals.find((g) => g.goalId === target?.goalId)?.leadOnline ?? true
+  const currentGoal = projects?.find((p) => p.repo === target?.project)?.goals.find((g) => g.goalId === target?.goalId)
+  const leadClient = currentGoal?.lead
+  const leadOnline = currentGoal?.leadOnline ?? true
   const refresh = () => Promise.all([loadTree(target), loadProjects()])
-  const request = async (action: RequestAction, text?: string, provider?: ProviderId) => {
+  const request = async (action: RequestAction, text?: string, provider?: ProviderId, pick?: HandoffPick) => {
     if (!target || !selected) return
     setChosen(selected.id)
     // 'conflict' means a request already waits or the node moved on: the refreshed node shows which.
-    await api.request(target.project, target.goalId, selected.id, action, text, provider)
+    await api.request(target.project, target.goalId, selected.id, action, text, provider, pick)
     await refresh()
   }
   const stopNow = async () => {
@@ -334,7 +337,7 @@ export function App(props: { api: Api }) {
   return (
     // No project yet means no goals sidebar: the screen takes the whole width instead of the sidebar's column.
     <div className={projects && projects.length > 0 ? 'shell' : 'shell solo'}>
-      {projects && projects.length > 0 && <Sidebar projects={projects} project={target?.project} goalId={target?.goalId} onPick={pick} drawer={sheet} open={navOpen} />}
+      {projects && projects.length > 0 && <Sidebar projects={projects} project={target?.project} goalId={target?.goalId} onPick={pick} drawer={sheet} open={navOpen} footer={<UsagePanel api={api} />} />}
       {sheet && navOpen && <div className="scrim on nav-scrim" onClick={() => setNavOpen(false)} aria-hidden="true" />}
       <div className="app">
       <header className="top">
@@ -396,15 +399,15 @@ export function App(props: { api: Api }) {
         <div className="now" role="tabpanel" aria-label={T.tabs.now}>
           <div className="left">
             <Summary counts={counts} onWaiting={showWaiting} />
-            <Tree root={tree} selectedId={selected.id} onSelect={select} open={open} onToggle={toggle} onShortcut={shortcut} />
+            <Tree api={api} project={target?.project ?? ''} root={tree} selectedId={selected.id} onSelect={select} open={open} onToggle={toggle} onShortcut={shortcut} leadClient={leadClient} />
           </div>
           <ContextPanel
-            lead={projects?.find((p) => p.repo === target?.project)?.goals.find((g) => g.goalId === target?.goalId)?.lead}
+            lead={leadClient}
             onOpenHistory={() => {
               setFocusAssignment(selected.id)
               setView('history')
             }}
-            actions={<Actions node={selected} leadOnline={leadOnline} mode={mode} onMode={setMode} onRequest={request} onEmergencyStop={stopNow} onDiscuss={discuss} />}
+            actions={<Actions key={selected.id} node={selected} leadOnline={leadOnline} mode={mode} onMode={setMode} onRequest={request} onEmergencyStop={stopNow} onDiscuss={discuss} />}
             question={escalation?.type === 'escalated' ? <QuestionBox question={escalation.text} why={escalation.why} options={escalation.options} onAnswer={answer} /> : undefined}
             node={selected} chain={chainOf(tree, selected.id)} events={events} onSelect={select} sheet={sheet} open={sheetOpen} onClose={() => setSheetOpen(false)} />
           {sheet && <div className={`scrim ${sheetOpen ? 'on' : ''}`} onClick={() => setSheetOpen(false)} aria-hidden="true" />}

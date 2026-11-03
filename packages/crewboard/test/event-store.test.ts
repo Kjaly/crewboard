@@ -86,6 +86,23 @@ describe('lead inbox', () => {
     expect((await inbox.unseen()).length).toBe(1)
   })
 
+  it('keeps hiding a taken batch while its session is active', async () => {
+    const store = createEventStore(await repo())
+    await store.writeMeta({ goalId: 'g1', title: 'Кухня', createdAt: new Date().toISOString() })
+    await store.append('g1', { type: 'question', goalId: 'g1', assignmentId: 'a', actor: 'worker', text: 'Шторка?', options: [] })
+    let clock = 0
+    const inbox = createInbox(store, () => clock)
+    await inbox.take('live-session')
+    clock = INBOX_HOLD_MS - 60_000
+    inbox.touch('live-session')
+    // Long past the hold counted from the take, but only just within it counted from the last activity.
+    clock += INBOX_HOLD_MS - 60_000
+    expect((await inbox.unseen()).length).toBe(0)
+    // The session fell silent for longer than the window: the batch no longer hides the events.
+    clock += 2 * 60_000 + 1
+    expect((await inbox.unseen()).length).toBe(1)
+  })
+
   it('keeps the reports of split-off parts away from the lead', async () => {
     const root = await repo()
     const store = createEventStore(root)

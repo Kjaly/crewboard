@@ -10,7 +10,7 @@ The lead is the chat you talk to, connected to Crewboard over MCP: Claude Code, 
 | --- | --- |
 | `crewboard_start_goal` | Starts a goal the owner agreed on. Returns `goalId`. |
 | `crewboard_agents` | Lists the agents work can go to, with what each can do. |
-| `crewboard_assign` | Hands a piece of work to a worker: title, criteria, result kind (`local`, `branch`, `answer`, `decision`), provider (an agent id from `crewboard_agents`), optional model, parent and `after` dependencies, and the owner's message it came from in `quote`. |
+| `crewboard_assign` | Hands a piece of work to a worker: title, criteria, result kind (`local`, `branch`, `answer`, `decision`), provider (an agent id from `crewboard_agents`), optional model and `effort` (one of the agent's `efforts`; omit when empty), parent and `after` dependencies, and the owner's message it came from in `quote`. |
 | `crewboard_inbox` | Returns everything workers and the owner sent that the lead has not confirmed. Calling it again confirms the previous batch. |
 | `crewboard_answer` | Answers a worker's question; the worker continues. |
 | `crewboard_escalate` | Raises a worker's question to the owner, with `why`. |

@@ -26,6 +26,9 @@ try {
   const manifest = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'))
   if (manifest.name !== 'crewboard') fail(`package name is ${manifest.name}`)
   if (manifest.bin?.crewboard !== 'dist/main.js') fail('bin crewboard must point at dist/main.js')
+  // The Claude Code plugin ships with the package version, so an install from the marketplace names what npm has.
+  const plugin = JSON.parse(readFileSync(join(root, 'plugins', 'crewboard', '.claude-plugin', 'plugin.json'), 'utf8'))
+  if (plugin.version !== manifest.version) fail(`the Claude Code plugin is ${plugin.version}, the package is ${manifest.version}: set plugins/crewboard/.claude-plugin/plugin.json`)
   // `npm publish` rewrites a manifest it finds invalid, and drops what it cannot fix (a `./` bin path, with npm 11):
   // `pack` does not, so only a publish dry run shows what npm would actually publish.
   const dry = spawnSync('npm', ['publish', '--dry-run'], { cwd: pkgDir, encoding: 'utf8' })

@@ -19,7 +19,7 @@ const out = (o) => process.stdout.write(`${JSON.stringify(o)}\n`)
 const prompt = argv.at(-1) ?? ''
 const usage = { input_tokens: 1000, cached_input_tokens: 800, output_tokens: 50, reasoning_output_tokens: 5, ...(prompt.includes('CACHEWRITE0') ? { cache_write_input_tokens: 0 } : {}) }
 const emitTurn = (turnUsage = usage) => out({ type: 'turn.completed', usage: turnUsage })
-const resume = argv[1] === 'resume'
+const resume = argv.includes('resume')
 const thread = resume ? argv.at(-2) : 'th-1'
 if (prompt.includes('LATE')) await new Promise((r) => setTimeout(r, 1000))
 process.on('SIGINT', () => process.exit(130))

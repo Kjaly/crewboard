@@ -1,20 +1,23 @@
 #!/usr/bin/env node
+import { spawn } from 'node:child_process'
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { nodeExec } from '@crewboard/core'
 import { createApp } from './app.js'
-import { duration, flag, portOf } from './cli.js'
+import { duration, flag, openRequested, openerFor, portOf, waitSlice } from './cli.js'
 import { connectLead } from './connect.js'
 import { checkAgents, readinessLine, readinessTable } from './doctor.js'
+import { statusline } from './statusline.js'
 import { createAgents } from './workers/agents.js'
 import { realBackendFor } from './workers/backends.js'
 
 const DEFAULT_PORT = 4700
 const USAGE = `crewboard — local Crewboard server
 
-  crewboard serve [--port ${DEFAULT_PORT}]
-      start the server; connect your lead (any MCP client) to http://127.0.0.1:${DEFAULT_PORT}/mcp, e.g.
+  crewboard serve [--port ${DEFAULT_PORT}] [--open]
+      start the server; --open opens http://127.0.0.1:${DEFAULT_PORT}/ in the default browser
+      connect your lead (any MCP client) to http://127.0.0.1:${DEFAULT_PORT}/mcp, e.g.
       claude mcp add --scope user --transport http crewboard http://127.0.0.1:${DEFAULT_PORT}/mcp
       codex mcp add crewboard --url http://127.0.0.1:${DEFAULT_PORT}/mcp
 
@@ -25,7 +28,19 @@ const USAGE = `crewboard — local Crewboard server
       check which workers can run on this machine (CLI installed, version, signed in)
 
   crewboard wait --project <path> [--port ${DEFAULT_PORT}] [--timeout 10m]
-      wait until the lead has news; exit 0 = news, 2 = timeout, 1 = server unreachable`
+      wait until the lead has news; exit 0 = news, 2 = timeout, 1 = server unreachable
+
+  crewboard statusline
+      a Claude Code status line that logs your plan's limits for the providers panel:
+      after npm install -g crewboard, set "statusLine": {"type": "command", "command": "crewboard statusline"}
+      in ~/.claude/settings.json
+
+  crewboard --version, -v
+      print the version`
+
+/** The package version, injected by the build; tests run from source and see 'dev'. */
+declare const __CREWBOARD_VERSION__: string | undefined
+const VERSION = typeof __CREWBOARD_VERSION__ === 'string' ? __CREWBOARD_VERSION__ : 'dev'
 
 /** `--port`, or a plain refusal: a typo must not start the server on NaN or reach a port nobody named. */
 const portOrExit = (args: string[]): number => {
@@ -33,6 +48,27 @@ const portOrExit = (args: string[]): number => {
   if (port !== undefined) return port
   console.error(`crewboard: --port needs a number from 1 to 65535, got ${flag(args, 'port') ?? 'nothing'}`)
   process.exit(1)
+}
+
+/** Opens `url` without waiting; a missing opener is a hint to the user, never a server error. */
+function openScreen(url: string): void {
+  const [command, args] = openerFor(process.platform, url)
+  let reported = false
+  const hint = () => {
+    if (reported) return
+    reported = true
+    console.log(`could not open a browser — open ${url} by hand`)
+  }
+  try {
+    const child = spawn(command, args, { detached: true, stdio: 'ignore' })
+    child.on('error', hint)
+    child.on('exit', (code) => {
+      if (code) hint()
+    })
+    child.unref()
+  } catch {
+    hint()
+  }
 }
 
 async function serve(args: string[]): Promise<void> {
@@ -50,6 +86,7 @@ async function serve(args: string[]): Promise<void> {
   }
   console.log(`crewboard ${server.url}  mcp: ${server.url}/mcp`)
   console.log(`  connect your lead: claude mcp add --scope user --transport http crewboard ${server.url}/mcp  |  codex mcp add crewboard --url ${server.url}/mcp`)
+  if (openRequested(args)) openScreen(`${server.url}/`)
   // After the port listens, so a slow CLI never delays the start.
   void app.doctor().then((result) => console.log(`  ${readinessLine(result)}  (details: crewboard doctor)`), () => undefined)
   const stop = () => void server.close().then(() => process.exit(0))
@@ -66,7 +103,7 @@ async function wait(args: string[]): Promise<number> {
   const port = portOrExit(args)
   const until = Date.now() + duration(flag(args, 'timeout'), 10 * 60_000)
   while (Date.now() < until) {
-    const slice = Math.min(until - Date.now(), 600_000)
+    const slice = waitSlice(until - Date.now())
     let res: Response
     try {
       res = await fetch(`http://127.0.0.1:${port}/api/lead/wait?project=${encodeURIComponent(resolve(project))}&timeoutMs=${slice}`)
@@ -115,7 +152,15 @@ if (command === 'serve') await serve(rest)
 else if (command === 'doctor') process.exit(await doctor())
 else if (command === 'connect') process.exit(await connect(rest))
 else if (command === 'wait') process.exit(await wait(rest))
-else {
+else if (command === 'statusline') {
+  const chunks: Buffer[] = []
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
+  console.log(await statusline(Buffer.concat(chunks).toString('utf8'), process.env))
+}
+else if (command === '--version' || command === '-v') {
+  console.log(`crewboard ${VERSION}`)
+  process.exit(0)
+} else {
   console.log(USAGE)
   process.exit(command === undefined || command === '--help' || command === 'help' ? 0 : 1)
 }

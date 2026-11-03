@@ -1,14 +1,24 @@
 import { CheckCircle, Clock, HandWaving, Pause, Prohibit, Question } from '../icons.js'
 import type { AssignmentView, Status } from '../../model/types.js'
 import { agentOf } from '../agents.js'
+import { leadLogo, logoOf } from '../logos.js'
 import { T, providerLabel } from '../text.js'
 
 const LETTER: Record<string, string> = { claude: 'C', codex: 'X', deepseek: 'D', lead: 'C' }
 const CLASS: Record<string, string> = { claude: 'claude', codex: 'codex', deepseek: 'deepseek', lead: 'claude' }
 
-/** An agent's mark: the built-in colours, the registry's colour for others, neutral for an agent no longer registered. */
-export function Avatar(props: { provider: AssignmentView['provider'] }) {
+/**
+ * An agent's mark: its provider logo on a neutral tile, the built-in colours, the registry's colour for others, or
+ * neutral for an agent no longer registered. The goal's root is the lead, so its logo follows the lead client.
+ */
+export function Avatar(props: { provider: AssignmentView['provider']; leadClient?: string }) {
   const label = providerLabel(props.provider)
+  const icon = props.provider === 'lead' ? leadLogo(props.leadClient) : agentOf(props.provider)?.icon
+  const logo = logoOf(icon)
+  if (logo) {
+    // biome-ignore lint/security/noDangerouslySetInnerHtml: bundled, reviewed provider logos; no user input reaches this HTML.
+    return <span className="av logo" data-icon={icon} title={label} aria-hidden="true" dangerouslySetInnerHTML={{ __html: logo }} />
+  }
   const color = agentOf(props.provider)?.color
   return (
     <span className={`av ${CLASS[props.provider] ?? 'other'}`} style={color ? { background: color } : undefined} title={label} aria-hidden="true">

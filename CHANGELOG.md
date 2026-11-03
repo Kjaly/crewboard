@@ -2,6 +2,39 @@
 
 All notable changes to Crewboard are documented here. This changelog follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-11-03
+
+Built through Crewboard itself: Claude Code led, Codex, DeepSeek and Claude did the work, and the lead reviewed and merged it.
+
+### Added
+
+- **A live feed under running work that reads like a progress note.** Each running node in the tree shows what its worker says it is doing as it happens: workers write a short line before each notable step, Codex adds its reasoning summaries as thoughts, and the commands and files between them fold into one line ("5 commands, 2 files") with **All steps** one click away. Commands appear without shell wrappers and absolute paths. Three sizes, remembered per node; it follows new steps unless you scrolled up, says when a worker has been silent for five minutes and folds into a one-line summary when the run ends. `GET /api/runs/<runId>/steps` serves the steps.
+- **Model and effort per assignment.** The lead passes `model` and `effort` to `crewboard_assign`, the owner picks both when asking to hand work over, and both reach the worker's CLI (`--effort` for Claude, `model_reasoning_effort` for Codex). Effort is checked against the levels each agent takes. `agents.json` takes `effort` and a `models` list; Claude and Codex come with suggestions.
+- **A sidebar that shows where things stand**: projects fold, each goal has a state mark, its lead's logo and a short count line, goals waiting for you come first and finished ones fold away.
+- **A providers panel at the foot of the sidebar**: each provider your agents use with what is left of it. Codex plan limits and credits from its session files, Claude's plan and its 5-hour and weekly limits from the account with Claude Code's own sign-in (or the new `crewboard statusline` as a fallback), and the money left on DeepSeek and Kimi from their balance APIs with the key in the environment. Nothing is stored; `CREWBOARD_NO_USAGE=1` turns it off. `GET /api/usage` serves it.
+- **Provider logos** for the lead and every worker instead of letters; an agent of your own can set `icon`.
+- **Hand work to the same agent with another model or effort**, for example Codex from Terra to Sol.
+- **A Claude Code plugin**: `/plugin install crewboard --marketplace Kjaly/crewboard` connects the server and adds a skill that teaches the lead to hand out, check and close work.
+- `crewboard --version` and `crewboard serve --open`.
+
+### Changed
+
+- **Node.js 22.15 or newer** is enough; CI runs on Node 22 and 24.
+- **The node actions read as requests to the lead**, each with what it does: clarify and hand over open in place, the handover chip opens the agent's models and a stepped effort meter, and the emergency stop sits apart and is held to confirm.
+
+### Fixed
+
+- A Codex worker doing branch work can commit in its own worktree from its sandbox: Codex 0.160 also needs the linked worktree's own git directory granted.
+- A finished run is recorded once even when two supervisor passes see it at the same time; before, its report and its costs could be counted twice.
+- `crewboard wait` waits as long as asked: a wait over five minutes no longer ends with a false "no Crewboard server".
+- A live lead waiting for news is no longer woken for events it already took: a taken batch stays held for ten minutes from the session's last request.
+- The test suites run in a sandbox that denies `ps`.
+- The lead's logo shows for the label the server sends; the emergency stop has its danger colour; a node waiting for its parts no longer shows an empty feed.
+- The run feed never changes a run's state and stays cheap on a large project; it fetches the last steps after a run ends, stops on a missing run and does not call a worker silent while a long command runs. The focus ring shows for keyboard focus only.
+- An emergency stop or a cancel ends the node's run feed; before, the feed kept polling and called the stopped worker silent.
+- A paused goal with a question for you stays at the top of the sidebar with its badge.
+- The feed no longer shows a worker's commands in your own checkout as if they were in its worktree: those paths read `<repo>/…`.
+
 ## [1.1.1] - 2026-11-03
 
 ### Fixed

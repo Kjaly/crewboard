@@ -11,6 +11,8 @@ import { join } from 'node:path'
 const args = process.argv.slice(2)
 const lang = args.includes('--lang') ? args[args.indexOf('--lang') + 1] : 'ru'
 const tr = (ruText, enText) => (lang === 'en' ? enText : ruText)
+// A live process for the runs that show as running (the capture script passes its own pid); a dead pid reads as a crash.
+const livePid = args.includes('--pid') ? Number(args[args.indexOf('--pid') + 1]) : process.pid
 const base = args.includes('--dir') ? args[args.indexOf('--dir') + 1] : mkdtempSync(join(tmpdir(), 'crewboard-demo-'))
 mkdirSync(base, { recursive: true })
 const repo = join(base, 'kitchen-planner')
@@ -87,6 +89,48 @@ run(25, 'copy', 'dsh/moonshot/kimi-k3', 1)
 ev(9, { type: 'reported', assignmentId: 'copy', actor: 'worker', summary: tr('Текст готов: три абзаца, сроки доставки не упомянуты.', 'Copy ready: three paragraphs, no delivery times mentioned.') })
 end(9, 'copy', 1, { inputTokens: 38000, outputTokens: 5200, usd: 0.04 })
 
+// The steps of the two running workers, in the shape their runners write them, for the run feed under each node.
+const runsRoot = join(root, '.crewboard', 'runs')
+const writeRun = (runId, backend, command, agent, startedMinAgo, steps) => {
+  const dir = join(runsRoot, runId)
+  mkdirSync(join(dir, 'mailbox'), { recursive: true })
+  writeFileSync(join(dir, 'args.json'), JSON.stringify({ runDir: dir, cwd: root, promptFile: join(runsRoot, `${runId}.md`), command, agent }))
+  writeFileSync(join(dir, 'state.json'), JSON.stringify({ status: 'running', startedAt: at(startedMinAgo), pid: livePid, usage: { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 } }))
+  let call = 0
+  const rows = [{ ts: at(startedMinAgo), type: 'turn_started', backend, data: { turn: 1, text: 'Assignment' } }]
+  for (const s of steps) {
+    if (s.say) rows.push({ ts: at(s.at), type: 'answer_delta', backend, data: s.say })
+    else if (s.think) rows.push({ ts: at(s.at), type: 'reasoning_summary', backend, data: s.think })
+    else if (s.usage) rows.push({ ts: at(s.at), type: 'usage', backend, data: s.usage })
+    else {
+      const callId = `demo_${++call}`
+      rows.push({ ts: at(s.at), type: 'tool_started', backend, data: { tool: s.tool, status: 'running', input: s.input, callId } })
+      if (s.took !== undefined) rows.push({ ts: new Date(now - s.at * 60_000 + s.took * 1000).toISOString(), type: 'tool_completed', backend, data: { tool: s.tool, status: s.failed ? 'error' : 'completed', callId } })
+    }
+  }
+  writeFileSync(join(dir, 'events.jsonl'), `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`)
+}
+writeRun('demo-geo-1', 'codex', 'codex', 'codex/gpt-6-luna', 28, [
+  { at: 27, say: tr('Пишу тесты вырезов по модели короба.', 'Writing cut-out tests against the carcass model.') },
+  { at: 26, tool: 'read', input: { path: 'src/geometry/cutouts.ts' }, took: 1 },
+  { at: 22, tool: 'write', input: { path: 'test/cutouts.test.ts' }, took: 2 },
+  { at: 21, tool: 'bash', input: { command: '/bin/zsh -lc "pnpm vitest run cutouts"' }, took: 9, failed: true },
+  { at: 20.5, think: 'Checking why the rounded cut-out drifts' },
+  { at: 20, say: tr('Скруглённый вырез сдвигается на 0,5 мм: правлю допуск в тесте.', 'The rounded cut-out shifts by 0.5 mm: fixing the tolerance in the test.') },
+  { at: 18, tool: 'write', input: { path: 'test/cutouts.test.ts' }, took: 1 },
+  { at: 17, tool: 'bash', input: { command: 'pnpm vitest run cutouts' }, took: 11 },
+  { at: 4, tool: 'write', input: { path: 'test/cutouts-rounded.test.ts' }, took: 2 },
+  { at: 1, tool: 'bash', input: { command: 'pnpm vitest run cutouts' } },
+])
+writeRun('demo-pdf-1', 'dsh', 'dsh', 'dsh/deepseek-flash', 40, [
+  { at: 39, usage: { used: 96000, size: 1000000 } },
+  { at: 38, say: tr('Раскладываю шаги сборки по панелям короба.', 'Laying out assembly steps across the carcass panels.') },
+  { at: 36, tool: 'read', input: { path: 'docs/assembly/outline.md' }, took: 1 },
+  { at: 12, tool: 'write', input: { path: 'docs/assembly/steps.md' }, took: 3 },
+  { at: 3, usage: { used: 412000, size: 1000000 } },
+  { at: 3, tool: 'bash', input: { command: 'pnpm build:guide' } },
+])
+
 const goalDir = join(root, '.crewboard', 'goals', goalId)
 mkdirSync(goalDir, { recursive: true })
 writeFileSync(join(root, '.crewboard', '.gitignore'), '*\n')
@@ -125,4 +169,15 @@ const folder = join(claude, root.replace(/[^a-zA-Z0-9]/g, '-'))
 mkdirSync(folder, { recursive: true })
 writeFileSync(join(folder, `${session}.jsonl`), `${lines.map((l) => JSON.stringify(l)).join('\n')}\n`)
 
-console.log(JSON.stringify({ repo: root, goalId, emptyHome, env: { CREWBOARD_HOME: home, CREWBOARD_CLAUDE_PROJECTS: claude, CREWBOARD_CODEX_SESSIONS: noSessions, CREWBOARD_DSH_SESSIONS: noSessions } }, null, 2))
+// The providers panel: a Codex session that carries only its plan limits (no conversation for the history tab) and
+// the Claude limits a status line would have logged.
+const codexSessions = join(base, 'codex-sessions')
+const day = join(codexSessions, '2026', '11', '03')
+mkdirSync(day, { recursive: true })
+const hours = (h) => Math.round(Date.now() / 1000 + h * 3600)
+const limits = { primary: { used_percent: 38, window_minutes: 300, resets_at: hours(2.4) }, secondary: { used_percent: 61, window_minutes: 10080, resets_at: hours(77) }, credits: { has_credits: true, unlimited: false, balance: '1240' }, plan_type: 'pro', rate_limit_reached_type: null }
+writeFileSync(join(day, 'rollout-demo.jsonl'), `${JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type: 'token_count', rate_limits: limits } })}\n`)
+const claudeLimits = join(base, 'claude-limits.jsonl')
+writeFileSync(claudeLimits, `${JSON.stringify({ ts: new Date().toISOString(), five_hour: 24, seven_day: 83, five_hour_resets_at: hours(3.1), seven_day_resets_at: hours(41) })}\n`)
+
+console.log(JSON.stringify({ repo: root, goalId, emptyHome, env: { CREWBOARD_HOME: home, CREWBOARD_CLAUDE_PROJECTS: claude, CREWBOARD_CLAUDE_LIMITS: claudeLimits, CREWBOARD_CODEX_SESSIONS: codexSessions, CREWBOARD_DSH_SESSIONS: noSessions } }, null, 2))

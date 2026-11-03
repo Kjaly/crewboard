@@ -400,10 +400,11 @@ async function driveCodex(args: CliRunnerArgs, s: Session, prompt: string, env: 
     await s.emit('turn_started', { turn, text: next.text.trim().slice(0, 200), fullText: next.text })
     /** The current turn's answer, glued back from its `answer_delta` chunks (cm1): read once the turn ends. */
     let turnText = ''
-    const model = [...(args.model ? ['-m', args.model] : []), ...(args.effort ? ['-c', `model_reasoning_effort="${args.effort}"`] : [])]
+    const model = [...(args.model ? ['-m', args.model] : []), ...(args.effort ? ['-c', `model_reasoning_effort="${args.effort}"`] : []), '-c', 'model_reasoning_summary="concise"']
     const sandbox = args.readOnly ? 'read-only' : 'workspace-write'
-    // A linked worktree stores its index, objects and refs in the main repository's .git, outside its cwd.
-    // The global check queue is outside it too. Grant only those paths when this worker actually owns commits;
+    // A linked worktree's index lives in --git-dir; objects and shared refs live in --git-common-dir.
+    // Codex 0.160 protects the resolved .git pointer target even inside a broader writable root, so both
+    // directories need explicit grants. The global check queue is outside cwd too. Grant Git only to commit owners;
     // an orchestrator-commit contract grants the slot directory but keeps Git metadata read-only to the worker.
     const writableRoots: string[] = []
     if (!args.readOnly && basename(args.command) === 'codex' && !args.commandArgs?.length) {
@@ -412,17 +413,18 @@ async function driveCodex(args: CliRunnerArgs, s: Session, prompt: string, env: 
       writableRoots.push(checkSlots)
       if (args.commitRequired !== false) {
         try {
-          writableRoots.push(execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: args.cwd, encoding: 'utf8' }).trim())
+          writableRoots.push(...execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir', '--git-dir'], { cwd: args.cwd, encoding: 'utf8' }).trim().split('\n'))
         } catch {
           // A non-repository draft has no Git metadata to grant; its normal preflight handles Git errors.
         }
       }
     }
-    const writable = writableRoots.flatMap((root) => ['--add-dir', root])
+    const writable = [...new Set(writableRoots)].flatMap((root) => ['--add-dir', root])
+    // --add-dir belongs to exec; resume inherits its parent's options, but has no --add-dir of its own.
     const cli = thread
-      ? ['exec', 'resume', '--json', '--skip-git-repo-check', '-c', `sandbox_mode="${sandbox}"`, ...model, thread, next.text]
-      : ['exec', '--json', '--skip-git-repo-check', '-s', sandbox, ...model, next.text]
-    const child = spawn(args.command, [...(args.commandArgs ?? []), ...writable, ...cli], { cwd: args.cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: true, env })
+      ? ['exec', ...writable, 'resume', '--json', '--skip-git-repo-check', '-c', `sandbox_mode="${sandbox}"`, ...model, thread, next.text]
+      : ['exec', ...writable, '--json', '--skip-git-repo-check', '-s', sandbox, ...model, next.text]
+    const child = spawn(args.command, [...(args.commandArgs ?? []), ...cli], { cwd: args.cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: true, env })
     s.worker(child.pid)
     const steerId = next.id
     let acknowledged = false

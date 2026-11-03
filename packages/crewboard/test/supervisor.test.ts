@@ -26,7 +26,7 @@ async function gitRepo(): Promise<string> {
 async function setup(fake = createFakeBackend(), repo?: string, agents?: ReturnType<typeof createAgents>) {
   const root = repo ?? (await gitRepo())
   const store = createEventStore(root)
-  const pool = createPool({ backendFor: async () => fake.backend, runsDir: runsDir(root) })
+  const pool = createPool({ backendFor: async () => fake.backend, runsDir: runsDir(root), repo: root })
   const sup = createSupervisor({ repo: root, store, pool, now: () => new Date(), worktree: gitWorktree, ...(agents ? { agents } : {}) })
   return { root, store, pool, sup, fake }
 }
@@ -43,6 +43,25 @@ const statusOf = async (store: ReturnType<typeof createEventStore>, id: string) 
 const typesOf = async (store: ReturnType<typeof createEventStore>, id: string) => (await store.read('g')).filter((e) => e.assignmentId === id).map((e) => e.type)
 
 describe('supervisor', () => {
+  it.each(['message', 'thought', 'command'] as const)('uses readable %s progress, preferring narration to later commands', async (kind) => {
+    const { store, sup, fake, root } = await setup()
+    fake.setFallback({ hold: true })
+    await goal(store)
+    await store.append('g', assign('a'))
+    await sup.tick()
+    const run = fake.runs[0]!
+    if (kind !== 'command') run.events.push({ ts: new Date().toISOString(), type: kind === 'message' ? 'answer_delta' : 'reasoning_summary', data: 'Looking for where the encryption key is stored' })
+    run.events.push({ ts: new Date().toISOString(), type: 'tool_started', data: { callId: 'c1', tool: 'bash', status: 'running', input: { command: `/bin/zsh -lc "git -C ${root} grep -n key"` } } })
+    await sup.tick()
+    expect((await store.read('g')).findLast((e) => e.type === 'progress')).toMatchObject({ text: kind === 'command' ? 'git grep -n key' : 'Looking for where the encryption key is stored' })
+    if (kind !== 'command') {
+      run.events.push({ ts: new Date().toISOString(), type: 'tool_started', data: { callId: 'c2', tool: 'bash', status: 'running', input: { command: 'git status' } } })
+      fake.finish(run.id, { final: '<crewboard-report>Checked</crewboard-report>' })
+      await sup.tick()
+      expect((await store.read('g')).findLast((e) => e.type === 'progress')).toMatchObject({ text: 'Looking for where the encryption key is stored' })
+    }
+  })
+
   it('launches a registered agent through its core id', async () => {
     const home = await mkdtemp(join(tmpdir(), 'cb-agents-'))
     await writeFile(join(home, 'agents.json'), JSON.stringify({ agents: { kimi: { label: 'Kimi', run: 'dsh', model: 'moonshot/kimi-k3' } } }))
@@ -217,6 +236,17 @@ describe('supervisor', () => {
     expect(fake.runs.map((r) => r.agent).length).toBe(1)
   })
 
+  it('records a run that has just ended once when two ticks overlap', async () => {
+    const { store, sup, fake } = await setup()
+    fake.script({ hold: true, final: '<crewboard-report>Готово</crewboard-report>' })
+    await goal(store)
+    await store.append('g', assign('a'))
+    await sup.tick()
+    fake.finish('run-1')
+    await Promise.all([sup.tick(), sup.tick()])
+    expect(await typesOf(store, 'a')).toEqual(['assigned', 'run_started', 'reported', 'run_ended'])
+  })
+
   it('picks a live run back up after a restart without starting it twice', async () => {
     const fake = createFakeBackend()
     fake.setFallback({ hold: true, final: '<crewboard-report>Готово</crewboard-report>' })
@@ -254,6 +284,7 @@ describe('supervisor', () => {
     await sup.tick()
     await sup.cancelTree('g', 'box', 'курс изменён')
     expect(fake.cancelled.length).toBe(2)
+    expect((await store.read('g')).filter((e) => e.type === 'run_ended').map((e) => e.type === 'run_ended' && e.outcome)).toEqual(['cancelled', 'cancelled'])
     expect(await statusOf(store, 'box')).toBe('cancelled')
     expect(await statusOf(store, 'geo')).toBe('cancelled')
   })
@@ -282,4 +313,3 @@ describe('supervisor', () => {
     expect(ended).toMatchObject({ usage: { inputTokens: 100_000, outputTokens: 20_000, apiUsd: expect.any(Number) } })
   })
 })
-

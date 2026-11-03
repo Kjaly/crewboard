@@ -1,7 +1,9 @@
+import type { ProviderUsage } from '../src/usage.js'
 import type { AssignmentView, GoalEvent, Status } from '../src/model/types.js'
 import type { ProjectSummary } from '../src/owner.js'
 import type { Api, AgentBadge } from '../src/ui/api.js'
 import type { LiveChange } from '../src/live.js'
+import type { RunSteps } from '../src/workers/steps.js'
 import type { GoalHistory } from '../src/history/sessions.js'
 
 export const node = (id: string, status: Status, extra: Partial<AssignmentView> = {}, children: AssignmentView[] = []): AssignmentView => ({
@@ -19,14 +21,16 @@ export const kitchen = (): AssignmentView =>
 /** An `Api` in memory: tests change `tree`/`projects`, then `emit` a live change or a connection status. */
 export function fakeApi(init: { projects?: ProjectSummary[]; tree?: AssignmentView; events?: Record<string, GoalEvent[]>; agents?: AgentBadge[] } = {}) {
   const state = {
+    usage: [] as ProviderUsage[],
     doctor: [] as Array<{ id: string; label: string; ok: boolean; checks: Array<{ name: string; ok: boolean; detail: string; fix?: string }> }>,
     agents: init.agents ?? [{ id: 'claude', label: 'Claude' }, { id: 'codex', label: 'Codex' }, { id: 'deepseek', label: 'DeepSeek' }],
     tree: init.tree ?? kitchen(),
-    projects: init.projects ?? [{ repo: '/repo/cabinet', name: 'cabinet', goals: [{ goalId: 'g', title: 'Кухня полного цикла', createdAt: '2026-11-02T10:00:00Z', status: 'running' as Status, leadOnline: true, counts: { waiting_owner: 1, running: 2, queued: 1, finished: 1 } }] }],
+    projects: init.projects ?? [{ repo: '/repo/cabinet', name: 'cabinet', goals: [{ goalId: 'g', title: 'Кухня полного цикла', createdAt: '2026-11-02T10:00:00Z', status: 'running' as Status, leadOnline: true, counts: { waiting_lead: 0, waiting_owner: 1, running: 2, queued: 1, finished: 1 } }] }],
     events: init.events ?? {},
     answers: [] as string[],
-    requests: [] as Array<{ id: string; action: string; text?: string; provider?: string }>,
+    requests: [] as Array<{ id: string; action: string; text?: string; provider?: string; model?: string; effort?: string }>,
     stops: [] as string[],
+    runSteps: {} as Record<string, RunSteps>,
     answerResult: 'ok' as 'ok' | 'conflict' | 'fail',
     trees: {} as Record<string, AssignmentView>,
     delays: {} as Record<string, number>,
@@ -45,6 +49,9 @@ export function fakeApi(init: { projects?: ProjectSummary[]; tree?: AssignmentVi
   const api: Api = {
     async agents() {
       return state.agents
+    },
+    async usage() {
+      return state.usage
     },
     async doctor() {
       return state.doctor
@@ -69,8 +76,8 @@ export function fakeApi(init: { projects?: ProjectSummary[]; tree?: AssignmentVi
       if (state.answerResult === 'fail') throw new Error('Failed to fetch')
       return state.answerResult
     },
-    async request(_p, _g, id, action, text, provider) {
-      state.requests.push({ id, action, ...(text ? { text } : {}), ...(provider ? { provider } : {}) })
+    async request(_p, _g, id, action, text, provider, pick) {
+      state.requests.push({ id, action, ...(text ? { text } : {}), ...(provider ? { provider } : {}), ...(pick?.model ? { model: pick.model } : {}), ...(pick?.effort ? { effort: pick.effort } : {}) })
       await new Promise((r) => setTimeout(r, 20))
       return 'ok'
     },
@@ -84,6 +91,10 @@ export function fakeApi(init: { projects?: ProjectSummary[]; tree?: AssignmentVi
     },
     async analytics() {
       return { from: '2026-11-02T10:00:00Z', to: '2026-11-02T11:00:00Z', lanes: [], byProvider: {}, byAssignment: [] }
+    },
+    async steps(_p, runId, since) {
+      const run = state.runSteps[runId] ?? { steps: [], next: 0, done: false }
+      return { ...run, steps: run.steps.filter((s) => s.i >= since) }
     },
     live(change, status) {
       onChange = change

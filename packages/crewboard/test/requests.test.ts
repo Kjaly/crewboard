@@ -1,3 +1,5 @@
+import { writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { LEAD_OFFLINE_MS } from '../src/model/thresholds.js'
 import type { AssignmentView, GoalEvent } from '../src/model/types.js'
@@ -52,14 +54,43 @@ describe('owner requests decided by the lead', () => {
     expect(after.request).toBeUndefined()
   })
 
-  it('hands work to another provider and keeps the chain', async () => {
+  it('launches an accepted handoff with its model and effort and keeps the chain', async () => {
     const t = await setup()
-    const { requestId } = (await (await t.ask({ action: 'handoff', provider: 'claude' })).json()) as { requestId: string }
+    await writeFile(join(t.env.CREWBOARD_HOME, 'agents.json'), JSON.stringify({ agents: { codex: { effort: 'low' }, claude: { effort: 'medium' } } }))
+    expect(await t.node()).toMatchObject({ model: 'gpt-6.1-sol', effort: 'low' })
+    const choices = await t.call<Array<{ id: string; models: unknown[]; efforts: string[]; defaultEffort: string | null }>>('crewboard_agents', {})
+    expect(choices.find((a) => a.id === 'claude')).toMatchObject({ models: [{ id: 'sonnet', label: 'Sonnet' }, { id: 'opus' }, { id: 'fable' }, { id: 'haiku' }], efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium' })
+    expect(choices.find((a) => a.id === 'deepseek')).toMatchObject({ efforts: [], defaultEffort: null })
+    const httpChoices = await (await fetch(`${t.server.url}/api/agents`)).json() as typeof choices
+    for (const choice of choices) expect(httpChoices.find((a) => a.id === choice.id)).toMatchObject({ models: choice.models, efforts: choice.efforts, defaultEffort: choice.defaultEffort })
+    const refused = await t.ask({ action: 'handoff', provider: 'claude', effort: 'ultra' })
+    expect(refused.status).toBe(400)
+    expect(await refused.json()).toMatchObject({ error: expect.stringContaining('allowed levels: low, medium, high, xhigh, max') })
+    const { requestId } = (await (await t.ask({ action: 'handoff', provider: 'claude', model: 'opus', effort: 'high' })).json()) as { requestId: string }
+    expect(t.fake.launches).toHaveLength(1)
+    expect((await t.node()).request).toMatchObject({ model: 'opus', effort: 'high', state: 'pending' })
     await t.decide(requestId, 'accepted')
     const after = await t.node()
-    expect(after.provider).toBe('claude')
+    expect(after).toMatchObject({ provider: 'claude', model: 'opus', effort: 'high' })
     expect(after.handoffs).toEqual([{ from: 'codex', to: 'claude' }])
-    expect(t.fake.runs.at(-1)!.agent).toBe('claude/sonnet')
+    expect(t.fake.launches.at(-1)).toMatchObject({ agent: 'claude/opus', model: 'opus', effort: 'high' })
+    const inbox = await t.call<GoalEvent[]>('crewboard_inbox', { project: t.project })
+    expect(inbox.find((e) => e.type === 'owner_requested')).toMatchObject({ model: 'opus', effort: 'high' })
+    const { requestId: back } = await (await t.ask({ action: 'handoff', provider: 'codex' })).json() as { requestId: string }
+    await t.decide(back, 'accepted')
+    expect(t.fake.launches.at(-1)).toMatchObject({ model: 'gpt-6.1-sol', effort: 'low' })
+    expect(await t.node()).toMatchObject({ provider: 'codex', model: 'gpt-6.1-sol', effort: 'low' })
+  })
+
+  it('hands work to the same agent with another model or effort, and refuses a handover that changes nothing', async () => {
+    const t = await setup()
+    const same = await t.ask({ action: 'handoff', provider: 'codex' })
+    expect(same.status).toBe(400)
+    expect(await same.json()).toMatchObject({ error: expect.stringContaining('changes nothing') })
+    const { requestId } = (await (await t.ask({ action: 'handoff', provider: 'codex', model: 'gpt-6-astra', effort: 'high' })).json()) as { requestId: string }
+    await t.decide(requestId, 'accepted')
+    expect(t.fake.launches.at(-1)).toMatchObject({ model: 'gpt-6-astra', effort: 'high' })
+    expect(await t.node()).toMatchObject({ provider: 'codex', model: 'gpt-6-astra', effort: 'high' })
   })
 
   it('needs a reason to decline and shows it on the node', async () => {
@@ -137,4 +168,3 @@ describe('owner requests decided by the lead', () => {
     expect(projects[0]!.goals[0]!.leadOnline).toBe(true)
   })
 })
-

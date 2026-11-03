@@ -1,4 +1,4 @@
-import type { RawEvent, RunBackend, RunState, RunUsage } from '@crewboard/core'
+import type { LaunchInput, RawEvent, RunBackend, RunState, RunUsage } from '@crewboard/core'
 import { readFile } from 'node:fs/promises'
 
 /** What one fake run does: the events it emits and how it ends. `hold` keeps it running until `finish` is called. */
@@ -13,6 +13,7 @@ const ts = () => new Date().toISOString()
  */
 export function createFakeBackend() {
   const runs: FakeRun[] = []
+  const launches: LaunchInput[] = []
   const queue: FakeScript[] = []
   const cancelled: string[] = []
   const stats = { status: 0, statusDelayMs: 0 }
@@ -31,6 +32,7 @@ export function createFakeBackend() {
     id: 'example',
     readOnlyLaunch: true,
     async launch(input) {
+      launches.push({ ...input })
       const script = queue.shift() ?? fallback
       if (script.refuse) throw new Error(script.refuse)
       const run: FakeRun = {
@@ -75,6 +77,7 @@ export function createFakeBackend() {
   return {
     backend,
     runs,
+    launches,
     cancelled,
     stats,
     script(...scripts: FakeScript[]) {

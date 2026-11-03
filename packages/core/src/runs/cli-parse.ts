@@ -1,5 +1,6 @@
 // Translate Claude Code / Codex JSON streams into orch raw events (the same vocabulary the dsh runner
 // emits), so normalize(), supervision rules and buildTrajectory() work unchanged.
+import { readableCommand } from './command-text.js'
 
 export type TurnUsage = { input: number; output: number; cacheRead: number; cacheWrite?: number; cacheWritePartial?: boolean; reasoning: number }
 
@@ -279,8 +280,6 @@ export function parseGrokLine(line: string): Parsed {
   return out
 }
 
-const SHELL_WRAPPER = /^\S+ -l?c '(.*)'$/s
-
 export function parseCodexLine(line: string): Parsed {
   const o = parse(line)
   const out: Parsed = { events: [] }
@@ -296,7 +295,7 @@ export function parseCodexLine(line: string): Parsed {
       out.events.push(
         done
           ? ['tool_completed', { tool: 'bash', status: item.exit_code === 0 ? 'completed' : 'error', callId, output: item.aggregated_output }]
-          : ['tool_started', { tool: 'bash', status: 'running', input: { command: SHELL_WRAPPER.exec(command)?.[1] ?? command }, callId }],
+          : ['tool_started', { tool: 'bash', status: 'running', input: { command: readableCommand(command) }, callId }],
       )
     } else if (item.type === 'file_change') {
       const first = Array.isArray(item.changes) ? obj(item.changes[0]) : {}
@@ -307,6 +306,10 @@ export function parseCodexLine(line: string): Parsed {
       )
     } else if (item.type === 'agent_message' && done && typeof item.text === 'string') {
       out.events.push(['answer_delta', `${item.text}\n`])
+    } else if (item.type === 'reasoning' && done) {
+      // exec --json's reasoning.text is the public summary, never the raw reasoning stream.
+      const summary = typeof item.text === 'string' ? item.text : typeof item.summary === 'string' ? item.summary : Array.isArray(item.summary) ? item.summary.map((part) => typeof obj(part).text === 'string' ? obj(part).text : '').join('\n') : ''
+      if (summary.trim()) out.events.push(['reasoning_summary', summary])
     } else if (item.type === 'error' && done) {
       out.events.push(['warning', String(item.message ?? '')])
     }

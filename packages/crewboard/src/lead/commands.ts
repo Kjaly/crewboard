@@ -1,10 +1,11 @@
 import { randomBytes } from 'node:crypto'
-import { buildTree, flatten } from '../model/project.js'
+import { flatten } from '../model/project.js'
 import type { AssignmentView, EventOf, GoalEvent, NewEvent, ProviderId, ResultKind } from '../model/types.js'
 import type { ProjectContext } from '../app.js'
 import { decideRequest } from '../requests.js'
+import { goalTree } from '../owner.js'
 import { leadCall } from './call.js'
-import { type Agents, builtinAgents } from '../workers/agents.js'
+import { type Agents, agentChoices, builtinAgents, validateEffort } from '../workers/agents.js'
 
 const id = (n: number) => randomBytes(n).toString('hex')
 const slug = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24)
@@ -22,10 +23,7 @@ export function createLeadCommands(projectOf: (path: string) => Promise<ProjectC
     await ctx.store.touchLead(goalId, now())
     return ctx
   }
-  const tree = async (ctx: ProjectContext, goalId: string): Promise<AssignmentView> => {
-    const meta = await ctx.store.readMeta(goalId)
-    return buildTree(await ctx.store.read(goalId), now(), meta?.leadLastSeen ? new Date(meta.leadLastSeen) : undefined)
-  }
+  const tree = (ctx: ProjectContext, goalId: string): Promise<AssignmentView> => goalTree(ctx, goalId, now())
   const node = async (ctx: ProjectContext, t: Target): Promise<AssignmentView> => {
     const found = flatten(await tree(ctx, t.goalId)).find((n) => n.id === t.assignmentId)
     if (!found) throw new Error(`assignment ${t.assignmentId} not found in goal ${t.goalId}`)
@@ -38,7 +36,7 @@ export function createLeadCommands(projectOf: (path: string) => Promise<ProjectC
   return {
     /** Who the lead can hand work to, with what each can do. */
     async agents() {
-      return (await agents.list()).map((a) => ({ id: a.id, label: a.label, run: a.run, model: a.model, readOnly: a.readOnly }))
+      return (await agents.list()).map((a) => ({ id: a.id, label: a.label, run: a.run, model: a.model, readOnly: a.readOnly, ...agentChoices(a) }))
     },
     async startGoal(i: { project: string; title: string; criteria: string[]; quote?: string }) {
       const ctx = await projectOf(i.project)
@@ -49,16 +47,18 @@ export function createLeadCommands(projectOf: (path: string) => Promise<ProjectC
       await ctx.store.append(goalId, { type: 'goal_started', goalId, assignmentId: goalId, actor: 'lead', title: i.title, criteria: i.criteria, ...(i.quote ? { quote: i.quote } : {}), ...(lead ? { client: lead.client } : {}) })
       return { goalId }
     },
-    async assign(i: { project: string; goalId: string; parentId?: string; title: string; criteria: string[]; resultKind: ResultKind; provider: ProviderId; model?: string; quote?: string; after?: string[] }) {
+    async assign(i: { project: string; goalId: string; parentId?: string; title: string; criteria: string[]; resultKind: ResultKind; provider: ProviderId; model?: string; effort?: string; quote?: string; after?: string[] }) {
       const list = await agents.list()
-      if (!list.some((a) => a.id === i.provider)) throw new Error(`unknown agent ${i.provider}; available: ${list.map((a) => a.id).join(', ')}`)
+      const agent = list.find((a) => a.id === i.provider)
+      if (!agent) throw new Error(`unknown agent ${i.provider}; available: ${list.map((a) => a.id).join(', ')}`)
+      validateEffort(agent, i.effort ?? agent.effort)
       return (await goalCtx(i.project, i.goalId)).exclusive(async (ctx) => {
         const parentId = i.parentId ?? i.goalId
         await node(ctx, { project: i.project, goalId: i.goalId, assignmentId: parentId })
         const assignmentId = `a-${id(3)}`
         await ctx.store.append(i.goalId, {
           type: 'assigned', goalId: i.goalId, assignmentId, actor: 'lead', parentId, title: i.title, criteria: i.criteria, resultKind: i.resultKind, provider: i.provider, after: i.after ?? [],
-          ...(i.model ? { model: i.model } : {}), ...(i.quote ? { quote: i.quote } : {}),
+          ...(i.model ? { model: i.model } : {}), ...(i.effort !== undefined ? { effort: i.effort } : {}), ...(i.quote ? { quote: i.quote } : {}),
         })
         await ctx.supervisor.tick()
         return { assignmentId }
@@ -82,6 +82,10 @@ export function createLeadCommands(projectOf: (path: string) => Promise<ProjectC
     releaseSession(session: string): void {
       for (const ctx of sessionProjects.get(session) ?? []) ctx.inbox.release(session)
       sessionProjects.delete(session)
+    },
+    /** The session made an MCP request: the batches it took keep hiding events for the hold window from now. */
+    touchSession(session: string): void {
+      for (const ctx of sessionProjects.get(session) ?? []) ctx.inbox.touch(session)
     },
     async answer(t: Target & { text: string }) {
       return (await goalCtx(t.project, t.goalId)).exclusive(async (ctx) => {

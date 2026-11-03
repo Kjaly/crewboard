@@ -1,0 +1,10 @@
+{
+  "name": "crewboard",
+  "version": "1.2.0",
+  "description": "Lead your coding agents from Claude Code through a local Crewboard server, and watch them work on one board.",
+  "author": { "name": "Anton Varlamkin", "url": "https://github.com/Kjaly" },
+  "homepage": "https://kjaly.github.io/crewboard/",
+  "repository": "https://github.com/Kjaly/crewboard",
+  "license": "MIT",
+  "keywords": ["mcp", "orchestration", "codex", "deepseek", "coding-agents"]
+}

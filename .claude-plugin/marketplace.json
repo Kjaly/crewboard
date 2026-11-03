@@ -1,0 +1,14 @@
+{
+  "name": "crewboard",
+  "owner": { "name": "Anton Varlamkin", "url": "https://github.com/Kjaly" },
+  "metadata": { "description": "Crewboard for Claude Code: lead coding agents from your chat and watch them on one local board." },
+  "plugins": [
+    {
+      "name": "crewboard",
+      "source": "./plugins/crewboard",
+      "description": "Connects Claude Code to a local Crewboard server and teaches it to lead work through it: goals, assignments to Codex, Claude, DeepSeek or any registered agent, answers, reviews and closing.",
+      "category": "productivity",
+      "homepage": "https://kjaly.github.io/crewboard/"
+    }
+  ]
+}

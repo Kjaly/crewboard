@@ -25,10 +25,11 @@ export function isLeadEvent(e: GoalEvent, workerParts: ReadonlySet<string> = new
 type Delivered = { delivered: Record<string, number> }
 
 /**
- * How long a batch a session took keeps it from waking `crewboard wait`. A lead whose client died without closing its
- * session would otherwise hide new events until the idle sweep; past this, the worst case is one empty wake.
+ * How long a session's last MCP activity keeps the batch it took from waking `crewboard wait`. A live lead that took
+ * a batch and then waits makes no MCP calls meanwhile, so the hold is measured from its last request, not the take;
+ * a lead whose client died without closing its session would otherwise hide new events until the idle sweep.
  */
-export const INBOX_HOLD_MS = 2 * 60_000
+export const INBOX_HOLD_MS = 10 * 60_000
 
 /**
  * The lead's inbox across every goal of one repository; confirmed delivery is remembered in `.crewboard/inbox.json`.
@@ -47,7 +48,8 @@ export function createInbox(store: EventStore, now: () => number = Date.now) {
   }
   let chain: Promise<unknown> = Promise.resolve()
   const offered = new Map<string, Map<string, number>>()
-  const offeredAt = new Map<string, number>()
+  // The session's last MCP request (or its take): how long its unconfirmed batch still hides events.
+  const activeAt = new Map<string, number>()
   const highest = (events: GoalEvent[]) => {
     const top = new Map<string, number>()
     for (const e of events) top.set(e.goalId, Math.max(top.get(e.goalId) ?? 0, e.seq))
@@ -75,14 +77,18 @@ export function createInbox(store: EventStore, now: () => number = Date.now) {
       for (const [goalId, seq] of offered.get(session) ?? []) await this.ack(goalId, seq)
       const events = await this.pending()
       offered.set(session, highest(events))
-      offeredAt.set(session, now())
+      activeAt.set(session, now())
       return events
+    },
+    /** A session's MCP request: its unconfirmed batch keeps hiding events for the hold window from now. */
+    touch(session: string): void {
+      activeAt.set(session, now())
     },
     /** Unconfirmed events no live session holds: what should wake a waiting lead. */
     async unseen(): Promise<GoalEvent[]> {
       const held = new Map<string, number>()
       for (const [session, top] of offered) {
-        if (now() - (offeredAt.get(session) ?? 0) > INBOX_HOLD_MS) continue
+        if (now() - (activeAt.get(session) ?? 0) > INBOX_HOLD_MS) continue
         for (const [goalId, seq] of top) held.set(goalId, Math.max(held.get(goalId) ?? 0, seq))
       }
       return (await this.pending()).filter((e) => e.seq > (held.get(e.goalId) ?? 0))
@@ -90,7 +96,7 @@ export function createInbox(store: EventStore, now: () => number = Date.now) {
     /** Forgets what a session held without confirming it: the next session gets those events again. */
     release(session: string): void {
       offered.delete(session)
-      offeredAt.delete(session)
+      activeAt.delete(session)
     },
     ack(goalId: string, seq: number): Promise<void> {
       const next = chain.then(async () => {

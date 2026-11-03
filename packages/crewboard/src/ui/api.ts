@@ -4,28 +4,50 @@ import type { GoalAnalytics } from '../analytics.js'
 import type { GoalHistory } from '../history/sessions.js'
 import type { ProjectSummary } from '../owner.js'
 import type { AgentReadiness } from '../doctor.js'
+import type { ProviderUsage } from '../usage.js'
+import type { RunSteps } from '../workers/steps.js'
 
 export type { LiveChange }
 
 /** A registered agent as the screen shows it. */
-export type AgentBadge = { id: string; label: string; color?: string }
+export type AgentBadge = {
+  id: string
+  label: string
+  color?: string
+  icon?: string
+  /** The default model, the suggested models, the accepted effort levels and the default one. All may be absent: older servers send none. */
+  model?: string
+  models?: Array<{ id: string; label?: string; note?: string } | string>
+  efforts?: string[]
+  defaultEffort?: string | null
+}
+
+/** What a handoff request asks of the new worker besides the provider. */
+export type HandoffPick = { model?: string; effort?: string }
 
 /** Everything the screen asks the server; tests pass an in-memory one. */
 export type Api = {
   projects(): Promise<ProjectSummary[]>
   agents(): Promise<AgentBadge[]>
   doctor(): Promise<AgentReadiness[]>
+  usage(): Promise<ProviderUsage[]>
   goal(project: string, goalId: string): Promise<AssignmentView>
   events(project: string, goalId: string, assignmentId: string): Promise<GoalEvent[]>
   history(project: string, goalId: string): Promise<GoalHistory>
   analytics(project: string, goalId: string): Promise<GoalAnalytics>
   answer(project: string, goalId: string, assignmentId: string, text: string): Promise<'ok' | 'conflict'>
-  request(project: string, goalId: string, assignmentId: string, action: RequestAction, text?: string, provider?: ProviderId): Promise<'ok' | 'conflict'>
+  request(project: string, goalId: string, assignmentId: string, action: RequestAction, text?: string, provider?: ProviderId, pick?: HandoffPick): Promise<'ok' | 'conflict'>
   emergencyStop(project: string, goalId: string, assignmentId: string): Promise<'ok' | 'conflict'>
+  steps(project: string, runId: string, since: number): Promise<RunSteps>
   live(onChange: (c: LiveChange) => void, onStatus: (online: boolean) => void): () => void
 }
 
 const q = (params: Record<string, string>) => new URLSearchParams(params).toString()
+
+/** True for a failed request the server answered with 404: the thing asked for does not exist (any more). */
+export function isNotFound(error: unknown): boolean {
+  return error instanceof Error && /^404\b/.test(error.message)
+}
 
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url)
@@ -42,16 +64,22 @@ async function post(url: string, body: unknown): Promise<'ok' | 'conflict'> {
 
 export function httpApi(base = ''): Api {
   return {
-    request: (project, goalId, assignmentId, action, text, provider) =>
-      post(`${base}/api/request`, { project, goalId, assignmentId, action, ...(text ? { text } : {}), ...(provider ? { provider } : {}) }),
+    request: (project, goalId, assignmentId, action, text, provider, pick) =>
+      post(`${base}/api/request`, {
+        project, goalId, assignmentId, action,
+        ...(text ? { text } : {}), ...(provider ? { provider } : {}),
+        ...(pick?.model ? { model: pick.model } : {}), ...(pick?.effort ? { effort: pick.effort } : {}),
+      }),
     emergencyStop: (project, goalId, assignmentId) => post(`${base}/api/emergency-stop`, { project, goalId, assignmentId }),
     projects: () => getJson(`${base}/api/projects`),
     agents: () => getJson(`${base}/api/agents`),
     doctor: () => getJson(`${base}/api/doctor`),
+    usage: () => getJson(`${base}/api/usage`),
     goal: (project, goalId) => getJson(`${base}/api/goals/${encodeURIComponent(goalId)}?${q({ project })}`),
     history: (project, goalId) => getJson(`${base}/api/goals/${encodeURIComponent(goalId)}/history?${q({ project })}`),
     analytics: (project, goalId) => getJson(`${base}/api/goals/${encodeURIComponent(goalId)}/analytics?${q({ project })}`),
     events: (project, goalId, assignmentId) => getJson(`${base}/api/goals/${encodeURIComponent(goalId)}/events?${q({ project, assignmentId })}`),
+    steps: (project, runId, since) => getJson(`${base}/api/runs/${encodeURIComponent(runId)}/steps?${q({ project, since: String(since) })}`),
     answer: (project, goalId, assignmentId, text) => post(`${base}/api/answer`, { project, goalId, assignmentId, text }),
     live(onChange, onStatus) {
       // EventSource reconnects by itself; `hello` arrives on every (re)connect.

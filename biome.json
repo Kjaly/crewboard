@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!docs/notes/assets/**"]
+    "includes": ["**", "!docs/notes/assets/**", "!.crewboard", "!docs/superpowers/mockups/**"]
   },
   "formatter": {
     "enabled": true,

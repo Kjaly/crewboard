@@ -4,6 +4,8 @@ import type { AssignmentView, Status } from '../../model/types.js'
 import { T } from '../text.js'
 import { Avatar, StatusBadge } from './badges.js'
 import { requestText } from './request-line.js'
+import { RunFeed } from './run-feed.js'
+import type { Api } from '../api.js'
 
 const ORDER: Record<Status, number> = { waiting_owner: 0, waiting_answer: 1, running: 2, reported: 2, paused: 2, queued: 3, done: 4, cancelled: 4, abandoned: 4 }
 const FINISHED: ReadonlySet<Status> = new Set(['done', 'cancelled', 'abandoned'])
@@ -20,9 +22,11 @@ export function visibleOrder(root: AssignmentView, open: ReadonlySet<string>): A
   return out
 }
 
-export function Tree(props: { root: AssignmentView; selectedId: string; onSelect: (id: string) => void; open: ReadonlySet<string>; onToggle: (id: string) => void; onShortcut?: (key: string) => void }) {
+export function Tree(props: { api: Api; project: string; root: AssignmentView; selectedId: string; onSelect: (id: string) => void; open: ReadonlySet<string>; onToggle: (id: string) => void; onShortcut?: (key: string) => void; leadClient?: string }) {
   const { selectedId, onSelect, open, onToggle } = props
   const box = useRef<HTMLDivElement>(null)
+  // A feed stays after its run ends (folded to a summary), so remember which runs were seen running.
+  const fed = useRef(new Map<string, string>())
   // Arrow keys move the selection only while the tree has focus; focus follows the selected row.
   const onKeyDown = (e: React.KeyboardEvent) => {
     // By physical key, so U/S/P/C also work on a Russian layout.
@@ -55,7 +59,7 @@ export function Tree(props: { root: AssignmentView; selectedId: string; onSelect
       className={`n press ${n.parentId === null ? 'root' : ''} ${n.status === 'waiting_owner' ? 'ask' : ''} ${FINISHED.has(n.status) ? (n.status === 'done' ? 'done' : 'cancel') : ''}`}
       onClick={() => onSelect(n.id)}
     >
-      <Avatar provider={n.provider} />
+      <Avatar provider={n.provider} leadClient={props.leadClient} />
       <span className="t">{n.title}</span>
       <StatusBadge status={n.status} />
       <span className="doing">
@@ -63,6 +67,12 @@ export function Tree(props: { root: AssignmentView; selectedId: string; onSelect
       </span>
     </button>
   )
+  const feed = (n: AssignmentView) => {
+    if (n.runId && n.runOpen) fed.current.set(n.id, n.runId)
+    const runId = n.runId
+    if (!runId || fed.current.get(n.id) !== runId) return null
+    return <RunFeed key={runId} api={props.api} project={props.project} assignmentId={n.id} runId={runId} running={n.runOpen === true} />
+  }
   const branch = (n: AssignmentView): React.ReactNode => {
     const kids = [...n.children].sort((a, b) => ORDER[a.status] - ORDER[b.status])
     const active = kids.filter((k) => !FINISHED.has(k.status))
@@ -71,6 +81,7 @@ export function Tree(props: { root: AssignmentView; selectedId: string; onSelect
     return (
       <div key={n.id}>
         {row(n)}
+        {feed(n)}
         {kids.length > 0 && (
           <div className="kids">
             {active.map(branch)}

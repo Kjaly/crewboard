@@ -7,18 +7,24 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Live } from './live.js'
 import { MCP_IDLE_MS } from './model/thresholds.js'
+import type { RunSteps } from './workers/steps.js'
 
 export type Api = {
-  mcp: () => McpServer
+  /** One MCP server for the transport session with this id, so its inbox session and requests share the id. */
+  mcp: (session: string) => McpServer
+  /** An MCP request by this session: its taken inbox batch keeps hiding events for the hold window from now. */
+  activity?: (session: string) => void
   wait: (project: string, timeoutMs: number) => Promise<number>
   goals: (project: string) => Promise<unknown>
   goal: (project: string, goalId: string) => Promise<unknown>
   projects: () => Promise<unknown>
   agents: () => Promise<unknown>
   doctor: () => Promise<unknown>
+  usage: () => Promise<unknown>
   events: (project: string, goalId: string, assignmentId: string) => Promise<unknown>
   history: (project: string, goalId: string) => Promise<unknown>
   analytics: (project: string, goalId: string) => Promise<unknown>
+  steps: (project: string, runId: string, since: number) => Promise<RunSteps | undefined>
   answer: (body: Record<string, unknown>) => Promise<void>
   request: (body: Record<string, unknown>) => Promise<{ requestId: string }>
   emergencyStop: (body: Record<string, unknown>) => Promise<void>
@@ -114,16 +120,20 @@ export function createHttpServer(api: Api, opts: { now?: () => number; mcpIdleMs
     const body = req.method === 'POST' ? await readBody(req) : undefined
     if (existing && typeof sessionId === 'string') {
       lastSeen.set(sessionId, now())
+      api.activity?.(sessionId)
       return existing.handleRequest(req, res, body)
     }
     // A session this process does not know (the server restarted): 404 tells an MCP client to initialise again.
     if (typeof sessionId === 'string') return json(res, 404, { jsonrpc: '2.0', error: { code: -32001, message: 'Session not found' }, id: null })
     if (req.method !== 'POST' || !isInitializeRequest(body)) return json(res, 400, { jsonrpc: '2.0', error: { code: -32000, message: 'No valid MCP session' }, id: null })
+    // The id is made here, not inside the transport, so the MCP server's inbox session is this transport session.
+    const id = randomUUID()
     const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (id) => {
-        sessions.set(id, transport)
-        lastSeen.set(id, now())
+      sessionIdGenerator: () => id,
+      onsessioninitialized: (initialized) => {
+        sessions.set(initialized, transport)
+        lastSeen.set(initialized, now())
+        api.activity?.(initialized)
       },
     })
     transport.onclose = () => {
@@ -132,7 +142,7 @@ export function createHttpServer(api: Api, opts: { now?: () => number; mcpIdleMs
         lastSeen.delete(transport.sessionId)
       }
     }
-    await api.mcp().connect(transport)
+    await api.mcp(id).connect(transport)
     return transport.handleRequest(req, res, body)
   }
 
@@ -152,6 +162,7 @@ export function createHttpServer(api: Api, opts: { now?: () => number; mcpIdleMs
     if (url.pathname === '/api/projects') return json(res, 200, await api.projects())
     if (url.pathname === '/api/agents') return json(res, 200, await api.agents())
     if (url.pathname === '/api/doctor') return json(res, 200, await api.doctor())
+    if (url.pathname === '/api/usage') return json(res, 200, await api.usage())
     if (req.method === 'POST' && (url.pathname === '/api/answer' || url.pathname === '/api/request' || url.pathname === '/api/emergency-stop')) {
       if (refuseForeignPost(req, res)) return
       const body = ((await readBody(req)) ?? {}) as Record<string, unknown>
@@ -160,6 +171,20 @@ export function createHttpServer(api: Api, opts: { now?: () => number; mcpIdleMs
       return res.writeHead(204).end()
     }
     if (url.pathname === '/api/goals') return json(res, 200, await api.goals(project))
+    const runSteps = /^\/api\/runs\/([^/]+)\/steps$/.exec(url.pathname)
+    if (req.method === 'GET' && runSteps?.[1]) {
+      let runId: string
+      try {
+        runId = decodeURIComponent(runSteps[1])
+      } catch {
+        return json(res, 404, { error: 'run not found' })
+      }
+      if (!/^[A-Za-z0-9_-]+$/.test(runId)) return json(res, 404, { error: 'run not found' })
+      const since = Number(url.searchParams.get('since') ?? 0)
+      if (!Number.isSafeInteger(since) || since < 0) return json(res, 400, { error: 'since must be a non-negative integer' })
+      const result = await api.steps(project, runId, since)
+      return result ? json(res, 200, result) : json(res, 404, { error: 'run not found' })
+    }
     const goalAnalytics = /^\/api\/goals\/([^/]+)\/analytics$/.exec(url.pathname)
     if (goalAnalytics?.[1]) return json(res, 200, await api.analytics(project, decodeURIComponent(goalAnalytics[1])))
     const goalHistory = /^\/api\/goals\/([^/]+)\/history$/.exec(url.pathname)

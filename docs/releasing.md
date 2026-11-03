@@ -3,7 +3,7 @@
 Crewboard is released as one npm package, `crewboard`, from `packages/crewboard`.
 
 1. Make sure `main` is green: `pnpm build && pnpm typecheck && pnpm test && pnpm lint && pnpm release:check`.
-2. Set the version in `packages/crewboard/package.json` and add the entry to `CHANGELOG.md`.
+2. Set the version in `packages/crewboard/package.json` and in the Claude Code plugin `plugins/crewboard/.claude-plugin/plugin.json` (release:check fails when they differ), and add the entry to `CHANGELOG.md`. After changing the plugin, run `claude plugin validate plugins/crewboard` and `claude plugin validate .`.
 3. Commit, tag `v<version>` and push the tag. The release workflow verifies the tree again and publishes with npm trusted publishing; a version already on npm is skipped.
 
 `pnpm release:check` packs the package and checks the tarball: the server and the worker runners, the screen, the readme and licence, and nothing from the sources. It then unpacks the tarball and runs `crewboard --help` and `crewboard doctor` from it, without this repository's `node_modules`, the way `npx` will.

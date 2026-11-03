@@ -6,7 +6,7 @@ This guide takes you from a fresh checkout to a first goal that a worker finishe
 
 ## 1. Install and start the server
 
-You need Node.js 24 or newer.
+You need Node.js 22.15 or newer.
 
 ```sh
 npx crewboard serve
@@ -28,7 +28,7 @@ The server prints its address:
 crewboard http://127.0.0.1:4700  mcp: http://127.0.0.1:4700/mcp
 ```
 
-`--port` picks another port. The server listens on 127.0.0.1 only. Once it listens, it also prints which workers are ready, for example `workers ready: Codex, Claude · not ready: DeepSeek (not found)`.
+`--port` picks another port. The server listens on 127.0.0.1 only. `--open` opens the screen in your browser once the server listens; `--version` prints the version. Once it listens, it also prints which workers are ready, for example `workers ready: Codex, Claude · not ready: DeepSeek (not found)`.
 
 From a source checkout, to call it `crewboard` in this shell session, define a function with the checkout's absolute path. The rest of the docs write `crewboard`.
 
@@ -55,6 +55,8 @@ Claude Code:
 ```sh
 claude mcp add --scope user --transport http crewboard http://127.0.0.1:4700/mcp
 ```
+
+Or the Crewboard plugin for Claude Code, which connects the same server and adds a skill for leading. In a Claude Code chat (2.1.275 or later) run `/plugin install crewboard --marketplace Kjaly/crewboard`, or from a terminal `claude plugin marketplace add Kjaly/crewboard` and then `claude plugin install crewboard@crewboard`. Use the plugin or `claude mcp add`, not both.
 
 Codex:
 

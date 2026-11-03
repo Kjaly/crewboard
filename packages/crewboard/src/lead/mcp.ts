@@ -33,10 +33,10 @@ const wrap = (fn: () => Promise<unknown>) => async (): Promise<Result> => {
 }
 
 /** One MCP server per lead session, all calling the same commands. */
-export function createLeadMcp(commands: LeadCommands): McpServer {
+export function createLeadMcp(commands: LeadCommands, session: string = randomUUID()): McpServer {
   const server = new McpServer({ name: 'crewboard', version: VERSION }, { instructions: LEAD_INSTRUCTIONS })
   // One server per MCP session (server.ts): its inbox batches are confirmed by its own next call and released when it ends.
-  const session = randomUUID()
+  // The transport's session id is passed in, so the server can note this session's every request as activity.
   // Who this session's lead is, as its client named itself at `initialize`; unnamed clients stay anonymous.
   const clientOf = (): LeadClient | undefined => {
     const info = server.server.getClientVersion()
@@ -47,10 +47,10 @@ export function createLeadMcp(commands: LeadCommands): McpServer {
     server.registerTool(name, { description, inputSchema }, ((args: z.infer<z.ZodObject<S>>) => leadCall.run(clientOf(), () => wrap(() => fn(args))())) as never)
 
   tool('crewboard_start_goal', 'Start a goal the owner agreed on. Returns its goalId.', { project: z.string(), title: z.string(), criteria: z.array(z.string()), quote: z.string().optional() }, (a) => commands.startGoal(a))
-  tool('crewboard_agents', 'The agents you can hand work to: id (pass it as provider), label, how it runs, its default model, and whether it can run read-only.', {}, () => commands.agents())
-  tool('crewboard_assign', 'Hand a piece of work to a worker. provider: an agent id from crewboard_agents. parentId defaults to the goal; after lists assignments that must be done first.', {
+  tool('crewboard_agents', 'The agents you can hand work to: id (pass it as provider), label, how it runs, its default model, suggested models, accepted effort levels (empty when it takes none), defaultEffort (null means the CLI default), and whether it can run read-only.', {}, () => commands.agents())
+  tool('crewboard_assign', 'Hand a piece of work to a worker. provider: an agent id from crewboard_agents. model and effort optionally override its defaults; models are suggestions, while effort must be one of that agent’s efforts and must be omitted when the list is empty. parentId defaults to the goal; after lists assignments that must be done first.', {
     project: z.string(), goalId: z.string(), parentId: z.string().optional(), title: z.string(), criteria: z.array(z.string()),
-    resultKind: z.enum(RESULT_KINDS), provider: z.string().min(1), model: z.string().optional(), quote: z.string().optional(), after: z.array(z.string()).optional(),
+    resultKind: z.enum(RESULT_KINDS), provider: z.string().min(1), model: z.string().min(1).optional(), effort: z.string().optional(), quote: z.string().optional(), after: z.array(z.string()).optional(),
   }, (a) => commands.assign(a))
   tool('crewboard_inbox', 'Everything workers and the owner sent you that you have not confirmed. Calling it again confirms the previous batch: act on every event first.', { project: z.string() }, (a) => commands.inbox(a, session))
   tool('crewboard_answer', "Answer a worker's question; the worker continues with it.", { ...target, text: z.string() }, (a) => commands.answer(a))

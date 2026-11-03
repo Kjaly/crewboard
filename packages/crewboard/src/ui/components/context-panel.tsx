@@ -65,7 +65,7 @@ export function ContextPanel(props: {
         <div className="meta">
           <StatusBadge status={node.status} />
           <span>
-            <Avatar provider={node.provider} /> <b>{providerLabel(node.provider)}</b> {node.parentId === null ? (props.lead ?? '') : (node.model ?? '')}
+            <Avatar provider={node.provider} leadClient={props.lead} /> <b>{providerLabel(node.provider)}</b> {node.parentId === null ? (props.lead ?? '') : (node.model ?? '')}
           </span>
         </div>
         {chain.length > 0 && (

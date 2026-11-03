@@ -6,6 +6,7 @@
 // Needs ffmpeg on PATH. Writes docs/assets/<lang>/{now,request,history,analytics,mobile,empty}-{dark,light}.png,
 // walkthrough.mp4 and walkthrough.gif.
 import { execFileSync, spawn } from 'node:child_process'
+import { createServer } from 'node:http'
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -27,7 +28,7 @@ const chromium = pw.chromium ?? pw.default.chromium
 const L = {
   en: {
     locale: 'en-US', history: 'History', analytics: 'Analytics', now: 'Now', guide: /Assembly guide/, mobile: /Mobile kitchen properties/, geo: /^Cut-out geometry tests/,
-    firstWords: 'I want a full-cycle kitchen', option: 'Bottom sheet', handoff: 'Hand over',
+    firstWords: 'I want a full-cycle kitchen', option: 'Bottom sheet', handoff: 'Hand over to another agent', handoffSend: 'Ask to hand over',
     cap: {
       intro: '<h1>Crew<b>board</b></h1><p>One chat leads: Claude Code, Codex or dsh. Any agent does the work.</p>',
       tree: 'The tree shows who is doing what, right now',
@@ -40,7 +41,7 @@ const L = {
   },
   ru: {
     locale: 'ru-RU', history: 'История', analytics: 'Аналитика', now: 'Сейчас', guide: /Сборочная инструкция/, mobile: /Мобильная панель/, geo: /^Тесты геометрии/,
-    firstWords: 'Хочу кухню полного цикла', option: 'Шторка снизу', handoff: 'Передать',
+    firstWords: 'Хочу кухню полного цикла', option: 'Шторка снизу', handoff: 'Передать другому агенту', handoffSend: 'Попросить передать',
     cap: {
       intro: '<h1>Crew<b>board</b></h1><p>Ведёт один чат: Claude Code, Codex или dsh. Работает любой агент.</p>',
       tree: 'Дерево показывает, кто чем занят прямо сейчас',
@@ -57,7 +58,7 @@ const L = {
 const startDemo = async (lang, o = {}) => {
   const demoDir = join('/tmp', 'crewboard-demo')
   rmSync(demoDir, { recursive: true, force: true })
-  const seed = JSON.parse(execFileSync('node', [join(root, 'scripts', 'seed-demo.mjs'), '--dir', demoDir, '--lang', lang]).toString())
+  const seed = JSON.parse(execFileSync('node', [join(root, 'scripts', 'seed-demo.mjs'), '--dir', demoDir, '--lang', lang, '--pid', String(process.pid)]).toString())
   // A stand-in worker that just keeps working: an answer or a handover on screen shows a live run, and no agent starts.
   // It also answers the readiness checks the first-run screen shows (version, sign-in, dsh profile), with no CLI run.
   const stub = (name, version) => {
@@ -72,10 +73,13 @@ const startDemo = async (lang, o = {}) => {
     writeFileSync(file, `#!/bin/sh\n${answers.join('\n')}\nexec sleep 90\n`, { mode: 0o755 })
     return file
   }
+  // DeepSeek's balance API, answered locally: the panel shows money left without a request leaving the machine.
+  const balance = createServer((_req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ is_available: true, balance_infos: [{ currency: 'USD', total_balance: '18.42', granted_balance: '0.00', topped_up_balance: '18.42' }] })))
+  await new Promise((r) => balance.listen(0, '127.0.0.1', r))
   const server = spawn('node', [join(root, 'packages', 'crewboard', 'dist', 'main.js'), 'serve', '--port', String(port)], {
     env: {
       // The operator's own Crewboard settings (a dsh argument list, a runner) could route a check to a real CLI.
-      ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('CREWBOARD_') && !k.startsWith('ORCH_'))), ...seed.env, ...(o.empty ? { CREWBOARD_HOME: seed.emptyHome } : {}), ANTHROPIC_API_KEY: 'demo-not-used', DEEPSEEK_API_KEY: 'demo-not-used',
+      ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('CREWBOARD_') && !k.startsWith('ORCH_'))), ...seed.env, ...(o.empty ? { CREWBOARD_HOME: seed.emptyHome } : {}), ANTHROPIC_API_KEY: 'demo-not-used', DEEPSEEK_API_KEY: 'demo-not-used', DEEPSEEK_BASE_URL: `http://127.0.0.1:${balance.address().port}`, MOONSHOT_API_KEY: '', CREWBOARD_CLAUDE_USAGE: 'log',
       CREWBOARD_CLAUDE_COMMAND: stub('claude', '2.1.316 (Claude Code)'), CREWBOARD_CODEX_COMMAND: stub('codex', 'codex-cli 0.166.0'), CREWBOARD_DSH_COMMAND: stub('dsh', '0.1.5'),
     },
     stdio: 'ignore',
@@ -88,6 +92,7 @@ const startDemo = async (lang, o = {}) => {
   }
   return () =>
     new Promise((r) => {
+      balance.close()
       server.once('exit', r)
       server.kill('SIGTERM')
     })
@@ -180,12 +185,21 @@ const video = async (lang) => {
   await d.caption(l.cap.request)
   await d.click(page.getByRole('treeitem', { name: l.geo }), 800)
   await d.pause(700)
-  await d.zoom(page.locator('.actions'), 1.55)
-  await d.click(page.getByRole('button', { name: l.handoff }), 800)
+  await d.zoom(page.locator('.na'), 1.45)
+  await d.click(page.getByRole('button', { name: new RegExp(`^${l.handoff}`) }), 800)
   await d.pause(500)
-  await d.click(page.getByRole('button', { name: 'Claude', exact: true }), 700)
-  await d.pause(2200)
+  await d.click(page.getByRole('radio', { name: /Claude/ }), 700)
+  await d.pause(400)
+  // The chip of the chosen agent opens its model and effort card. The card places itself from on-screen
+  // coordinates, which the camera zoom would stretch, so the camera steps back first.
   await d.zoom(null)
+  await d.click(page.locator('.na-ag[data-checked=true] .na-chip'), 700)
+  await page.locator('.na-pop').waitFor({ state: 'visible', timeout: 3000 })
+  await d.pause(1800)
+  await page.keyboard.press('Escape')
+  await d.pause(300)
+  await d.click(page.getByRole('button', { name: l.handoffSend }), 700)
+  await d.pause(2000)
 
   await d.caption(l.cap.history)
   await d.click(page.getByRole('tab', { name: l.history }), 800)

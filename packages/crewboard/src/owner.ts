@@ -4,25 +4,28 @@ import { leadLabel } from './lead/clients.js'
 import { buildTree, flatten, statusBucket } from './model/project.js'
 import { LEAD_OFFLINE_MS } from './model/thresholds.js'
 import type { AssignmentView, GoalEvent, Status } from './model/types.js'
+import { AgentsFileError } from './workers/agents.js'
 
 /** The request is well formed but the state moved on (already answered): HTTP 409. */
 export class ConflictError extends Error {}
 /** The request is malformed or names nothing that exists: HTTP 400. */
 export class BadRequestError extends Error {}
 
-export type GoalSummary = { goalId: string; title: string; createdAt: string; status: Status; leadOnline: boolean; counts: Record<'waiting_owner' | 'running' | 'queued' | 'finished', number>; lead?: string }
+export type GoalSummary = { goalId: string; title: string; createdAt: string; status: Status; leadOnline: boolean; counts: Record<'waiting_owner' | 'waiting_lead' | 'running' | 'queued' | 'finished', number>; lead?: string; finishedAt?: string }
 export type ProjectSummary = { repo: string; name: string; goals: GoalSummary[] }
 
-// The sidebar has no separate «waiting for the lead»: that work is still in progress.
-const bucket = (s: Status): keyof GoalSummary['counts'] | undefined => {
-  const b = statusBucket(s)
-  return b === 'waiting_lead' ? 'running' : b
-}
+const FINISHED_ROOT: ReadonlySet<Status> = new Set(['done', 'cancelled', 'abandoned'])
 
 export async function goalTree(ctx: ProjectContext, goalId: string, now: Date): Promise<AssignmentView> {
   const meta = await ctx.store.readMeta(goalId)
   if (!meta) throw new BadRequestError(`goal ${goalId} not found`)
-  return buildTree(await ctx.store.read(goalId), now, meta.leadLastSeen ? new Date(meta.leadLastSeen) : undefined)
+  // The journal stays readable while a registry edit is broken. The agent list still reports the registry error,
+  // and the supervisor leaves queued work waiting until the owner fixes it.
+  const agents = await ctx.agents.list().catch((error: unknown) => {
+    if (error instanceof AgentsFileError) return []
+    throw error
+  })
+  return buildTree(await ctx.store.read(goalId), now, meta.leadLastSeen ? new Date(meta.leadLastSeen) : undefined, agents)
 }
 
 /** One project as the screen lists it: its goals with the root status and how many nodes sit in each state. */
@@ -30,15 +33,17 @@ export async function summarize(ctx: ProjectContext, now: Date): Promise<Project
   const goals: GoalSummary[] = []
   for (const meta of await ctx.store.listGoals()) {
     const root = await goalTree(ctx, meta.goalId, now)
-    const counts = { waiting_owner: 0, running: 0, queued: 0, finished: 0 }
+    const counts: GoalSummary['counts'] = { waiting_owner: 0, waiting_lead: 0, running: 0, queued: 0, finished: 0 }
     for (const node of flatten(root)) {
       if (node.parentId === null) continue
-      const b = bucket(node.status)
+      const b = statusBucket(node.status)
       if (b) counts[b] += 1
     }
     const leadOnline = meta.leadLastSeen !== undefined && now.getTime() - new Date(meta.leadLastSeen).getTime() <= LEAD_OFFLINE_MS
     const lead = leadLabel(meta.lead?.client)
-    goals.push({ goalId: meta.goalId, title: meta.title, createdAt: meta.createdAt, status: root.status, leadOnline, counts, ...(lead ? { lead } : {}) })
+    // When a finished goal was closed (or cancelled): the root's last closing event.
+    const finishedAt = FINISHED_ROOT.has(root.status) ? (await ctx.store.read(meta.goalId)).findLast((e) => e.assignmentId === meta.goalId && (e.type === 'closed' || e.type === 'cancelled'))?.ts : undefined
+    goals.push({ goalId: meta.goalId, title: meta.title, createdAt: meta.createdAt, status: root.status, leadOnline, counts, ...(lead ? { lead } : {}), ...(finishedAt ? { finishedAt } : {}) })
   }
   return { repo: ctx.repo, name: basename(ctx.repo), goals }
 }

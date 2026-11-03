@@ -19,7 +19,7 @@
     "url": "https://github.com/Kjaly/crewboard/issues"
   },
   "engines": {
-    "node": ">=24"
+    "node": ">=22.15"
   },
   "type": "module",
   "exports": {

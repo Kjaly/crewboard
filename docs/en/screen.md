@@ -6,7 +6,17 @@ The screen is at http://127.0.0.1:4700/. It follows the lead's work live; there 
 
 ## Sidebar
 
-Every repository Crewboard knows, with its goals underneath. Each goal is one conversation with the lead. A goal shows how many things wait for you, how much is in work, and **lead is offline** when its lead has been silent for 10 minutes. On a narrow screen the sidebar opens from the header.
+Every repository Crewboard knows, with its goals underneath. Each goal is one conversation with the lead. A project folds with its caret and keeps a badge of what waits for you even when folded. Each goal shows a mark for its state (running, waiting for you with a count, waiting for the lead, paused, finished), its lead's logo and a short line such as "2 running, 1 waiting for you". Goals that wait for you come first, then running ones; finished goals fold under **Finished N**. Folded projects and groups are remembered. On a narrow screen the sidebar opens from the header.
+
+### Providers
+
+At the foot of the sidebar, each provider your agents run on with what is left of it. Crewboard stores nothing here and asks again at most once a minute.
+
+- **Codex**: your plan and how much of each limit window is used, with when it resets, read from Codex's own session files in `~/.codex/sessions`, plus the credit balance. The numbers are as of Codex's last run.
+- **Claude**: your plan and the 5-hour and weekly limits (and per-model weekly ones where your plan has them), the same numbers as the Claude app. Crewboard asks the endpoint Claude Code itself uses with Claude Code's sign-in, read from the macOS Keychain or `~/.claude/.credentials.json` for that request only: never stored, logged or sent anywhere but `api.anthropic.com`. On macOS the first read asks for Keychain access; **Always Allow** keeps it quiet. The endpoint is not documented by Anthropic, so if it refuses or changes, Crewboard falls back to what a status line logged: install once with `npm install -g crewboard` and set `"statusLine": {"type": "command", "command": "crewboard statusline"}` in `~/.claude/settings.json`; it prints the model and both limits and logs each change to `~/.claude/usage/rate-limits.jsonl` (`CREWBOARD_CLAUDE_LIMITS` moves it). `CREWBOARD_CLAUDE_USAGE=log` uses only the log and never reads the sign-in. On an API key there are no limits to show.
+- **DeepSeek** and **Kimi**: the money left, from each provider's balance API, with the key from `DEEPSEEK_API_KEY` or `MOONSHOT_API_KEY` in the server's environment. Without a key the row says which variable to set. `DEEPSEEK_BASE_URL` and `MOONSHOT_BASE_URL` point at a mirror or proxy; Kimi on `api.moonshot.cn` shows the balance in yuan.
+
+A bar turns orange past 70% and red past 90%; a provider that refuses work shows **Limit reached**. `CREWBOARD_NO_USAGE=1` turns the panel off and reads nothing.
 
 **Waiting for you** in the header counts what waits for you across all projects and jumps to the first such node.
 
@@ -18,7 +28,8 @@ Every repository Crewboard knows, with its goals underneath. Each goal is one co
 </picture>
 
 - **Summary**: how many nodes wait for you, wait for the lead, run, are queued and are finished.
-- **Tree**: the goal at the root, assignments under whoever gave them. What waits for you comes first; finished work folds into **Finished N**. Under each node: what it is doing right now.
+- **Tree**: the goal at the root, assignments under whoever gave them, each with its agent's logo. What waits for you comes first; finished work folds into **Finished N**. Under each node: what it is doing right now.
+- **Run feed** under a running node: what the worker says it is doing, as it happens. Its short messages and, for Codex, its thoughts are the main lines; the commands and files between them fold into one line such as "5 commands, 2 files" that opens with a click, and **All steps** shows every step. Commands are shown without shell wrappers and absolute paths. It has three sizes (one line, the last three steps, up to 300 px with scrolling) and remembers yours per node. It follows new steps unless you scrolled up, says **silent for N min** when the worker has written nothing for five minutes, and folds into a one-line summary when the run ends.
 - **Context** of the selected node: the request or question if there is one, the actions, who assigned it, **Where it came from** (the owner's message) with **Open in history**, the criteria, the parts inside it, its history and its working copy.
 
 On a phone the context opens as a sheet from the bottom.
@@ -49,21 +60,23 @@ On a phone the context opens as a sheet from the bottom.
   <img alt="A request on a node: the lead declined it and the reason shows on the node." src="../assets/en/request-light.png">
 </picture>
 
-The actions follow the status:
+Under **Ask the lead**, each action is a row with what it does. They are requests, not commands: the lead decides, and the node shows "Requested: …. The lead is deciding", then the result, or "The lead declined: …" with the reason. The actions follow the status:
 
 | On screen | Offered when |
 | --- | --- |
-| Clarify, Stop, Hand over | the work runs or waits for the lead |
+| Clarify the task, Stop, Hand over to another agent | the work runs or waits for the lead |
 | Start sooner, Cancel | it is queued |
 | Reopen | it is done |
 | Bring back | it was cancelled or abandoned, and its parent is not finished |
-| Discuss with the lead | always |
+| Discuss in the lead's chat | always |
 
-**Hand over** offers every other agent from the [registry](workers.md#your-agents). Each action is a request to the lead. The node shows "Requested: …. The lead is deciding", then the result, or "The lead declined: …" with the reason.
+**Clarify the task**, **Reopen** and **Bring back** open a text field in place: **⌘/Ctrl Enter** sends, **Esc** closes.
 
-**Discuss with the lead** copies a ready message about the node to paste into the chat, and lets the lead know.
+**Hand over to another agent** lists the agent doing the work first, marked **now**, to move it to another model or effort, then every other agent from the [registry](workers.md#your-agents), each with its logo and a chip showing the model and effort it will get. The chip opens a card next to it: the agent's models (the default marked, keys **1–9**, or any other model by name) and its effort levels as a stepped meter, or a note when the agent takes no effort. **Reset** restores the defaults.
 
-**Emergency stop** is there on any running work and asks for a second click. It does not wait for the lead, and the lead hears about it in its inbox. While the lead is offline, the screen notes that a request may get no answer.
+**Discuss in the lead's chat** copies a ready message about the node to paste into the chat, and lets the lead know.
+
+**Emergency stop** sits apart, below the requests, on any running work: press and hold it. It stops the run at once without waiting for the lead, and the lead hears about it in its inbox. While the lead is offline, the screen notes that a request may get no answer.
 
 ### Keys
 

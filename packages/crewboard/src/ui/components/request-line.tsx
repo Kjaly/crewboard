@@ -7,6 +7,7 @@ export function requestText(request: NonNullable<AssignmentView['request']>): st
 }
 
 export function RequestLine(props: { request: AssignmentView['request'] }) {
-  if (!props.request) return null
+  // A waiting request is the banner at the top of the actions; only the lead's refusal stays as a line.
+  if (props.request?.state !== 'declined') return null
   return <p className={`request ${props.request.state}`}>{requestText(props.request)}</p>
 }

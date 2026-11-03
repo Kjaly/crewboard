@@ -28,13 +28,13 @@
 
 ## Установка
 
-С Node.js 24+:
+С Node.js 22.15+:
 
 ```sh
 npx crewboard serve
 ```
 
-Или установите один раз командой `npm install -g crewboard` и запускайте `crewboard serve`. Из исходников (Node.js 24+, pnpm 11.5.2, Git):
+Или установите один раз командой `npm install -g crewboard` и запускайте `crewboard serve`. Из исходников (Node.js 22.15+, pnpm 11.5.2, Git):
 
 ```sh
 git clone https://github.com/Kjaly/crewboard.git
@@ -53,6 +53,21 @@ crewboard connect claude   # или: codex, dsh, other
 
 При установке из исходников `crewboard` — это `node packages/crewboard/dist/main.js`.
 
+В Claude Code вместо `crewboard connect claude` можно поставить плагин Crewboard: он подключает сервер и добавляет навык, который учит ведущего раздавать, проверять и закрывать работу. В чате Claude Code (версии 2.1.275 и новее):
+
+```text
+/plugin install crewboard --marketplace Kjaly/crewboard
+```
+
+Или из терминала:
+
+```sh
+claude plugin marketplace add Kjaly/crewboard
+claude plugin install crewboard@crewboard
+```
+
+Выберите что-то одно: плагин и `claude mcp add` подключили бы один и тот же сервер дважды.
+
 Дальше в чате ведущего внутри одного из ваших репозиториев опишите, что хотите. [Руководство по началу работы](docs/ru/getting-started.md) проводит через первую цель.
 
 ## Что нужно каждому исполнителю
@@ -64,7 +79,7 @@ crewboard connect claude   # или: codex, dsh, other
 | DeepSeek | `dsh` (DeepSeek Harness) с ключом DeepSeek в его настройках |
 | Любой другой агент | запись в `~/.crewboard/agents.json`: OpenCode, Cursor, Gemini, Grok, Devin или Kimi, GLM и другие модели через dsh |
 
-Модели, значения по умолчанию и то, как исполнитель сам делит работу, описаны в [руководстве по исполнителям](docs/ru/workers.md).
+Модели, значения по умолчанию и то, как исполнитель сам делит работу, описаны в [руководстве по исполнителям](docs/ru/workers.md). Внизу боковой панели видно, сколько израсходовано из лимитов подписок и сколько денег осталось на DeepSeek и Kimi; что для этого нужно каждому — в разделе [«Провайдеры»](docs/ru/screen.md#провайдеры).
 
 ## Документация
 
@@ -78,4 +93,4 @@ crewboard connect claude   # или: codex, dsh, other
 
 ## Состояние
 
-Версия 1.1.1. Используется на macOS с Claude Code, Codex CLI и DeepSeek Harness. На Linux должно работать, на Windows не проверялось. Сервер слушает только 127.0.0.1 и своей авторизации не имеет, подробнее в разделе о [безопасности](SECURITY.md).
+Версия 1.2.0. Используется на macOS с Claude Code, Codex CLI и DeepSeek Harness. На Linux должно работать, на Windows не проверялось. Сервер слушает только 127.0.0.1 и своей авторизации не имеет, подробнее в разделе о [безопасности](SECURITY.md).

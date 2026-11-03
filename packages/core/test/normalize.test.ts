@@ -2,11 +2,32 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import type { RawEvent } from '../src/runs/raw-event.js'
 import { compactNormEvents, normalize } from '../src/runs/normalize.js'
+import { readableCommand } from '../src/runs/command-text.js'
 
 const fixture = async (name: string) =>
   JSON.parse(await readFile(new URL(`./fixtures/${name}`, import.meta.url), 'utf8')) as RawEvent[]
 
 describe('normalize', () => {
+  it.each([
+    ['/bin/zsh -lc "git -C /Users/x/repo/.crewboard/worktrees/a grep -n -E \'Fernet|AESGCM\'"', "git grep -n -E 'Fernet|AESGCM'"],
+    ['git -C /Users/x/repo commit -m x', 'git -C <repo> commit -m x'],
+    ['cd /Users/x/repo/.crewboard/worktrees/a/ && ls', 'cd . && ls'],
+    ["bash -lc 'cat /Users/x/repo/.crewboard/worktrees/a/src/key.ts'", 'cat src/key.ts'],
+    ['sh -c "git -C /Users/x/repo/.crewboard/worktrees/a diff -- /Users/x/repo/README.md"', 'git diff -- <repo>/README.md'],
+    ["/bin/zsh -lc 'printf '\\''%s\\n'\\'' /Users/x/repo/src/key.ts'", "printf '%s\\n' <repo>/src/key.ts"],
+    ['bash -c "printf \\"%s\\\\n\\" /Users/x/repo/src/key.ts"', 'printf "%s\\n" <repo>/src/key.ts'],
+    ['git -C "/Users/x/repo/.crewboard/worktrees/a" status --short', 'git status --short'],
+    ['git -C /elsewhere status', 'git -C /elsewhere status'],
+    ['cat /Users/x/repository/key /Users/x/repo/src/key', 'cat /Users/x/repository/key <repo>/src/key'],
+    ['cat "/Users/x/repo/src/key file.ts"', 'cat "<repo>/src/key file.ts"'],
+    ['pnpm test && git diff', 'pnpm test && git diff'],
+    ["printf 'bash -lc test'", "printf 'bash -lc test'"],
+  ])('cleans command %s before clipping it', (command, expected) => {
+    expect(readableCommand(command, { cwd: '/Users/x/repo/.crewboard/worktrees/a', repo: '/Users/x/repo' })).toBe(expected)
+    const raw = [{ ts: 't1', type: 'tool_started', data: { tool: 'bash', status: 'running', input: { command } } }]
+    expect(normalize(raw, { cwd: '/Users/x/repo/.crewboard/worktrees/a', repo: '/Users/x/repo' })[0]?.text).toBe(expected)
+  })
+
   it('turns an OpenCode run into a short meaningful feed', async () => {
     const feed = normalize(await fixture('opencode-run.json'))
     expect(feed.map((e) => [e.kind, e.text])).toEqual([

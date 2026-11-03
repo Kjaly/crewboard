@@ -29,6 +29,7 @@ export function workerPrompt(a: { title: string; criteria: string[]; resultKind:
     '## Result',
     RESULT_RULE[a.resultKind],
     'Write your report and questions in the language the assignment is written in.',
+    'Before each notable step, write one short sentence in the assignment’s language saying what you are doing and why, as normal output outside the handback blocks.',
     '',
     '## How to hand back',
     'End your last message with one of these blocks.',
