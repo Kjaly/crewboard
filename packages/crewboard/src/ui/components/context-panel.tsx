@@ -1,9 +1,10 @@
 import { CaretRight, X } from '../icons.js'
-import { type ReactNode, useEffect, useRef } from 'react'
+import { type ReactNode, useLayoutEffect, useRef } from 'react'
 import type { AssignmentView, GoalEvent } from '../../model/types.js'
+import { useModal } from '../use-modal.js'
 import { T, providerLabel } from '../text.js'
 import { Avatar, StatusBadge } from './badges.js'
-import { RequestLine } from './request-line.js'
+import { RequestLine, requestContent } from './request-line.js'
 
 const time = (iso: string) => new Date(iso).toLocaleTimeString(T.locale, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
 
@@ -22,6 +23,10 @@ const EVENT_TEXT: Partial<Record<GoalEvent['type'], (e: GoalEvent) => string>> =
   closed: (e) => (e.type === 'closed' ? T.event.closed(e.code ? T.system(e.code) : e.summary) : ''),
   cancelled: (e) => (e.type === 'cancelled' ? T.event.cancelled(e.code ? T.system(e.code, e.detail) : e.reason) : ''),
   adopted: () => T.event.adopted,
+  owner_requested: (e) => e.type === 'owner_requested' ? T.event.ownerRequested(requestContent(e)) : '',
+  request_decided: (e) => e.type === 'request_decided' ? (e.decision === 'accepted' ? T.event.requestAccepted : T.event.requestDeclined(e.reason ?? '')) : '',
+  request_completed: (e) => e.type === 'request_completed' ? (e.outcome === 'succeeded' ? T.event.requestSucceeded : T.event.requestFailed(e.reason ?? '')) : '',
+  request_withdrawn: () => T.event.requestWithdrawn,
 }
 
 export function ContextPanel(props: {
@@ -44,16 +49,36 @@ export function ContextPanel(props: {
   const aside = useRef<HTMLElement>(null)
   const hidden = props.sheet && !props.open
   // React 18 has no `inert` prop: a closed sheet is set inert by hand, so its buttons leave the tab order.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = aside.current
     if (!el) return
     if (hidden) el.setAttribute('inert', '')
     else el.removeAttribute('inert')
-    if (props.sheet && props.open) el.querySelector<HTMLElement>('.sheet-close')?.focus()
-  }, [hidden, props.sheet, props.open])
-  const history = events.map((e) => ({ e, text: EVENT_TEXT[e.type]?.(e) ?? '' })).filter((x) => x.text)
+  }, [hidden])
+  useModal(aside, props.sheet && props.open, props.onClose)
+  const modal = props.sheet && props.open ? { role: 'dialog', 'aria-modal': true as const } : {}
+  const waiting = node.status === 'waiting_owner'
+  const worker = (
+    <span>
+      <Avatar provider={provider} leadClient={props.lead} /> <b>{providerLabel(provider)}</b> {node.parentId === null ? (props.lead ?? '') : (node.model ?? '')}
+      {node.parentId !== null && node.effort && `, ${T.effort[node.effort] ?? node.effort}`}
+    </span>
+  )
+  let from: string | undefined
+  const history = events.map((e, index) => {
+    if (e.type === 'assigned') from = e.provider
+    if (e.type === 'reassigned') {
+      // Legacy handoffs may omit a model; use the first run's snapshot before the next handoff.
+      const next = events.slice(index + 1).find((event) => event.type === 'run_started' || event.type === 'reassigned')
+      const model = e.model ?? e.resolvedModel ?? (next?.type === 'run_started' ? next.model : undefined)
+      const text = T.event.reassigned(from ? providerLabel(from) : T.noData, providerLabel(e.provider), model ?? T.noData)
+      from = e.provider
+      return { e, text }
+    }
+    return { e, text: EVENT_TEXT[e.type]?.(e) ?? '' }
+  }).filter((x) => x.text)
   return (
-    <aside ref={aside} className={`ctx ${props.sheet && props.open ? 'on' : ''}`} aria-label={T.context}>
+    <aside ref={aside} {...modal} tabIndex={-1} className={`ctx ${props.sheet && props.open ? 'on' : ''}`} aria-label={T.context}>
       <div className="ctx-in">
         <div className="ctx-h">
           <h2>{node.title}</h2>
@@ -65,11 +90,10 @@ export function ContextPanel(props: {
         </div>
         <div className="meta">
           <StatusBadge status={node.status} />
-          <span>
-            <Avatar provider={provider} leadClient={props.lead} /> <b>{providerLabel(provider)}</b> {node.parentId === null ? (props.lead ?? '') : (node.model ?? '')}
-            {node.parentId !== null && node.effort && `, ${T.effort[node.effort] ?? node.effort}`}
-          </span>
+          {!waiting && worker}
         </div>
+        {waiting && props.question}
+        {waiting && <div className="meta">{worker}</div>}
         {chain.length > 0 && (
           <nav className="crumbs" aria-label={T.assignedBy}>
             {chain.map((c, i) => (
@@ -84,7 +108,7 @@ export function ContextPanel(props: {
         )}
         <RequestLine request={node.request} />
         {props.actions}
-        {props.question}
+        {!waiting && props.question}
         <section className="sec">
           <h4>{T.origin}</h4>
           <div className="quote">

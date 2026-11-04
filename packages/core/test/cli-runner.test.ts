@@ -231,6 +231,18 @@ describe('runCliRun: codex', () => {
     ])
   })
 
+  it.each([
+    ['network', ['-s', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true'], ['-c', 'sandbox_mode="workspace-write"', '-c', 'sandbox_workspace_write.network_access=true']],
+    ['full', ['-s', 'danger-full-access'], ['-c', 'sandbox_mode="danger-full-access"']],
+  ] as const)('ac1/%s access widens the sandbox on the first and the resumed turn', async (access, first, resumed) => {
+    const { runDir, args, argv } = await prepare('codex', 'HOLD first')
+    const [state] = await Promise.all([runCliRun({ ...args, access }), whenTurnStarted(runDir, () => steer(runDir, args.promptFile, 'fix the test', 'auto'))])
+    expect(state.status).toBe('completed')
+    const calls = await argv()
+    expect(calls[0]).toEqual(['exec', '--json', '--skip-git-repo-check', ...first, '-m', 'gpt-5.6-sol', '-c', 'model_reasoning_summary="concise"', 'HOLD first'])
+    expect(calls[1]).toEqual(['exec', 'resume', '--json', '--skip-git-repo-check', ...resumed, '-m', 'gpt-5.6-sol', '-c', 'model_reasoning_summary="concise"', 'th-1', 'fix the test'])
+  })
+
   it('interrupts a turn on steer and resumes the same thread with the correction', async () => {
     // HOLD: a 5 s SLOW turn could end before a starved runner took the steer, which then ran as a queued next turn.
     const { runDir, args, argv } = await prepare('codex', 'HOLD first')

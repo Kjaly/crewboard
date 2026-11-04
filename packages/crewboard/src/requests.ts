@@ -3,6 +3,7 @@ import type { ProjectContext } from './app.js'
 import { availableActions, flatten, isTerminal } from './model/project.js'
 import type { AssignmentView, ProviderId, RequestAction } from './model/types.js'
 import { BadRequestError, ConflictError, goalTree } from './owner.js'
+import { failureText } from './workers/failure.js'
 import { validateEffort } from './workers/agents.js'
 
 const validateHandoff = async (ctx: ProjectContext, provider: ProviderId, model?: string, effort?: string) => {
@@ -52,12 +53,28 @@ export function emergencyStop(ctx: ProjectContext, i: { goalId: string; assignme
   })
 }
 
-/** The lead's decision on a request. Accepting carries the action out here, so decision and effect never diverge. */
+/** Withdrawal and decision use the same project lock: only one can win. */
+export function withdrawRequest(ctx: ProjectContext, i: { goalId: string; assignmentId: string; requestId: string }, now: Date): Promise<void> {
+  return ctx.exclusive(async (c) => {
+    await findNode(c, i.goalId, i.assignmentId, now)
+    const events = await c.store.read(i.goalId)
+    const asked = events.find((e) => e.type === 'owner_requested' && e.requestId === i.requestId && e.assignmentId === i.assignmentId)
+    if (!asked) throw new BadRequestError(`request ${i.requestId} not found on assignment ${i.assignmentId}`)
+    if (events.some((e) => (e.type === 'request_decided' || e.type === 'request_withdrawn') && e.requestId === i.requestId)) {
+      throw new ConflictError(`request ${i.requestId} is already decided or withdrawn`)
+    }
+    await c.store.append(i.goalId, { type: 'request_withdrawn', goalId: i.goalId, assignmentId: i.assignmentId, actor: 'owner', requestId: i.requestId })
+  })
+}
+
+/** Acceptance records the decision first, then the outcome, including a partially applied action that failed. */
 export function decideRequest(ctx: ProjectContext, i: { goalId: string; assignmentId: string; requestId: string; decision: 'accepted' | 'declined'; reason?: string }, now: Date): Promise<void> {
   return ctx.exclusive(async (c) => {
     const node = await findNode(c, i.goalId, i.assignmentId, now)
-    const asked = (await c.store.read(i.goalId)).findLast((e) => e.type === 'owner_requested' && e.requestId === i.requestId)
+    const events = await c.store.read(i.goalId)
+    const asked = events.findLast((e) => e.type === 'owner_requested' && e.requestId === i.requestId)
     if (asked?.type !== 'owner_requested' || asked.assignmentId !== i.assignmentId) throw new BadRequestError(`request ${i.requestId} not found on assignment ${i.assignmentId}`)
+    if (events.some((e) => e.type === 'request_withdrawn' && e.requestId === i.requestId)) throw new ConflictError(`request ${i.requestId} was withdrawn by the owner`)
     if (node.request?.id !== i.requestId || node.request.state !== 'pending') {
       if (isTerminal(node.status)) throw new ConflictError(`cannot ${asked.action}: the assignment is ${node.status}`)
       throw new ConflictError(`request ${i.requestId} is already decided`)
@@ -72,38 +89,49 @@ export function decideRequest(ctx: ProjectContext, i: { goalId: string; assignme
     if (!availableActions({ ...node, request: undefined }).includes(asked.action)) throw new ConflictError(`cannot ${asked.action}: the assignment is ${node.status}`)
     const handoff = node.pendingRun ?? node
     if (asked.action === 'handoff' && asked.provider) await validateHandoff(c, asked.provider, asked.model ?? (asked.provider === node.provider ? handoff.model : undefined), asked.effort === null ? undefined : asked.effort ?? (asked.provider === node.provider ? handoff.effort : undefined))
-    // The decision is recorded before the effect: if the effect fails, the request reads as accepted (the owner can
-    // ask again) instead of staying pending with half an effect applied and the node locked.
-    await decided()
+    // Never retry a partially applied action as though it still waited for a decision.
+    const accepted = await decided()
     const at = { goalId: i.goalId, assignmentId: i.assignmentId }
-    switch (asked.action) {
-      case 'clarify':
-        await c.store.append(i.goalId, { type: 'steered', ...at, actor: 'owner', text: asked.text ?? '' })
-        await c.supervisor.deliver(i.goalId, i.assignmentId, `Clarification from the owner: ${asked.text ?? ''}`)
-        break
-      case 'stop':
-      case 'cancel':
-        await c.supervisor.cancelTree(i.goalId, i.assignmentId, "Stopped at the owner's request", 'lead', 'owner_stop')
-        break
-      case 'handoff':
-        if (asked.provider) {
-          // Staying with the same agent keeps what the owner did not change: the model when only effort moves, and back.
-          const same = asked.provider === node.provider
-          const handoff = node.pendingRun ?? node
-          await c.supervisor.reassign(i.goalId, i.assignmentId, asked.provider, asked.model ?? (same ? handoff.model : undefined), asked.effort === null ? undefined : asked.effort ?? (same ? handoff.effort : undefined))
-        }
-        break
-      case 'start_now':
-        await c.store.append(i.goalId, { type: 'unblocked', ...at, actor: 'lead' })
-        await c.supervisor.tick()
-        break
-      case 'reopen':
-      case 'revive':
-        await c.store.append(i.goalId, { type: 'reopened', ...at, actor: 'owner', note: asked.text ?? '' })
-        await c.supervisor.deliver(i.goalId, i.assignmentId, `The owner brought the work back: ${asked.text ?? ''}`)
-        break
-      case 'discuss':
-        break
+    try {
+      switch (asked.action) {
+        case 'clarify':
+          await c.store.append(i.goalId, { type: 'steered', ...at, actor: 'owner', text: asked.text ?? '' })
+          await c.supervisor.deliver(i.goalId, i.assignmentId, `Clarification from the owner: ${asked.text ?? ''}`)
+          break
+        case 'stop':
+        case 'cancel':
+          await c.supervisor.cancelTree(i.goalId, i.assignmentId, "Stopped at the owner's request", 'lead', 'owner_stop')
+          break
+        case 'handoff':
+          if (asked.provider) {
+            // Staying with the same agent keeps what the owner did not change: the model when only effort moves, and back.
+            const same = asked.provider === node.provider
+            const handoff = node.pendingRun ?? node
+            await c.supervisor.reassign(i.goalId, i.assignmentId, asked.provider, asked.model ?? (same ? handoff.model : undefined), asked.effort === null ? undefined : asked.effort ?? (same ? handoff.effort : undefined))
+          }
+          break
+        case 'start_now':
+          await c.store.append(i.goalId, { type: 'unblocked', ...at, actor: 'lead' })
+          await c.supervisor.tick()
+          break
+        case 'reopen':
+        case 'revive':
+          await c.store.append(i.goalId, { type: 'reopened', ...at, actor: 'owner', note: asked.text ?? '' })
+          await c.supervisor.deliver(i.goalId, i.assignmentId, `The owner brought the work back: ${asked.text ?? ''}`)
+          break
+        case 'discuss':
+          break
+      }
+      // Launch failures are recorded by the supervisor rather than thrown; surface those too.
+      const effects = (await c.store.read(i.goalId)).filter((e) => e.seq > accepted.seq && e.assignmentId === i.assignmentId)
+      const started = effects.findLast((e) => e.type === 'run_started')
+      const failed = effects.findLast((e) => e.type === 'run_ended' && e.outcome === 'failed' && started?.type === 'run_started' && e.runId === started.runId)
+      if (failed?.type === 'run_ended') throw new Error([failed.reason, failed.text].filter(Boolean).join(': ') || 'Worker launch failed')
+    } catch (error) {
+      const reason = failureText(error instanceof Error ? error.message : String(error))
+      await c.store.append(i.goalId, { type: 'request_completed', ...at, actor: 'system', requestId: i.requestId, outcome: 'failed', reason })
+      throw error
     }
+    await c.store.append(i.goalId, { type: 'request_completed', ...at, actor: 'system', requestId: i.requestId, outcome: 'succeeded' })
   })
 }

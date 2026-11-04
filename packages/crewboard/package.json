@@ -1,6 +1,6 @@
 {
   "name": "crewboard",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Lead your coding agents from one chat — Claude Code, Codex, dsh or any MCP client — and watch Codex, Claude, DeepSeek or any agent you register work on one local board.",
   "license": "MIT",
   "author": "Anton Varlamkin",

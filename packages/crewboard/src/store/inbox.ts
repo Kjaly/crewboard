@@ -18,7 +18,8 @@ export function isLeadEvent(e: GoalEvent, workerParts: ReadonlySet<string> = new
   if (e.type === 'reported') return e.split !== true
   if (e.type === 'run_ended') return e.outcome === 'failed'
   if (e.type === 'answered') return e.actor === 'owner'
-  if (e.type === 'owner_requested') return true
+  if (e.type === 'owner_requested' || e.type === 'request_withdrawn') return true
+  if (e.type === 'request_completed') return e.outcome === 'failed'
   if (e.type === 'cancelled') return e.actor === 'owner'
   return false
 }

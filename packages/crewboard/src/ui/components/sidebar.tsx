@@ -1,6 +1,7 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import type { GoalSummary, ProjectSummary } from '../../owner.js'
 import { CaretDown, CheckCircle, HandWaving, Pause, Question } from '../icons.js'
+import { useModal } from '../use-modal.js'
 import { T } from '../text.js'
 import { Avatar } from './badges.js'
 
@@ -89,6 +90,7 @@ const MARK: Record<Kind, () => React.ReactNode> = {
 function GoalRow(props: { repo: string; g: GoalSummary; kind: Kind; current: boolean; now: Date; onPick: (project: string, goalId: string) => void }) {
   const { g, kind } = props
   const line = lineOf(g, kind, props.now)
+  const waiting = kind === 'ask' && g.counts.waiting_owner > 0 ? T.waitingYou(g.counts.waiting_owner) : ''
   return (
     <li>
       <button type="button" className={`sb-goal press ${kind === 'done' ? 'fin' : ''}`} aria-current={props.current ? 'page' : undefined} aria-label={`${g.title}. ${line}`} onClick={() => props.onPick(props.repo, g.goalId)}>
@@ -99,7 +101,7 @@ function GoalRow(props: { repo: string; g: GoalSummary; kind: Kind; current: boo
             <span className="sb-lead">
               <Avatar provider="lead" leadClient={g.lead} />
             </span>
-            <span className={kind === 'ask' ? 'ask' : undefined}>{line}</span>
+            <span>{waiting ? <><span className="ask">{waiting}</span>{line.slice(waiting.length)}</> : line}</span>
           </span>
         </span>
         {kind === 'ask' && g.counts.waiting_owner > 0 && <span className="sb-badge">{g.counts.waiting_owner}</span>}
@@ -154,13 +156,16 @@ function Project(props: { p: ProjectSummary; goalId?: string; isCurrent: boolean
 }
 
 /** Every project with its goals (one conversation with the lead each): where each stands and how much waits for the owner. */
-export function Sidebar(props: { projects: ProjectSummary[]; project?: string; goalId?: string; onPick: (project: string, goalId: string) => void; drawer: boolean; open: boolean; footer?: React.ReactNode }) {
+export function Sidebar(props: { projects: ProjectSummary[]; project?: string; goalId?: string; onPick: (project: string, goalId: string) => void; drawer: boolean; open: boolean; onClose?: () => void; footer?: React.ReactNode }) {
+  const nav = useRef<HTMLElement>(null)
+  useModal(nav, props.drawer && props.open, () => props.onClose?.())
+  const modal = props.drawer && props.open ? { role: 'dialog', 'aria-modal': true as const } : {}
   const hidden = props.drawer && !props.open
   const [closed, toggleClosed] = useRemembered(CLOSED_KEY)
   const [finishedOpen, toggleFinished] = useRemembered(FINISHED_KEY)
   const now = new Date()
   return (
-    <nav className={`side-nav ${props.drawer ? 'drawer' : ''} ${props.open ? 'on' : ''}`} aria-label={T.sidebar} {...(hidden ? { inert: '' as unknown as boolean } : {})}>
+    <nav ref={nav} {...modal} tabIndex={-1} className={`side-nav ${props.drawer ? 'drawer' : ''} ${props.open ? 'on' : ''}`} aria-label={T.sidebar} {...(hidden ? { inert: '' as unknown as boolean } : {})}>
       <div className="brand">{T.appTitle}</div>
       {props.projects.map((p) => (
         <Project

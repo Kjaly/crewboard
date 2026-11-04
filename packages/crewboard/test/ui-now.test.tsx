@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { coalesce } from '../src/ui/api.js'
 import { App } from '../src/ui/app.js'
-import { initialLang, setLang } from '../src/ui/text.js'
+import { T, initialLang, setLang } from '../src/ui/text.js'
 import { userEvent } from '@testing-library/user-event'
 import type { AssignmentView } from '../src/model/types.js'
 import { fakeApi, kitchen, node } from './ui-fixtures.js'
@@ -11,6 +11,7 @@ import { fakeApi, kitchen, node } from './ui-fixtures.js'
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
+  vi.unstubAllGlobals()
   localStorage.clear()
   setLang('ru')
 })
@@ -168,27 +169,43 @@ describe('answering and the connection', () => {
     await waitFor(() => expect(f.state.answers).toEqual(['Шторка, но выше']))
   })
 
-  it('refreshes instead of showing an error when the answer was already taken', async () => {
+  it('keeps a conflicting answer editable and prevents resending after an accepted answer fails to refresh', async () => {
     const f = fakeApi({ events: escalation() })
     f.state.answerResult = 'conflict'
     render(<App api={f.api} />)
-    const before = f.state.calls.goal
-    await userEvent.click(await screen.findByRole('button', { name: 'Шторка снизу' }))
-    await waitFor(() => expect(f.state.calls.goal).toBeGreaterThan(before))
-    expect(screen.queryByRole('alert')).toBeNull()
+    const field = await screen.findByRole('textbox', { name: T.question.own })
+    await userEvent.type(field, 'Шторка, но выше')
+    await userEvent.click(screen.getByRole('button', { name: T.question.send }))
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect((field as HTMLInputElement).value).toBe('Шторка, но выше')
+    expect((screen.getByRole('button', { name: T.question.send }) as HTMLButtonElement).disabled).toBe(false)
+    f.state.answerResult = 'ok'
+    f.api.goal = async () => { throw new Error('refresh unavailable') }
+    await userEvent.click(screen.getByRole('button', { name: T.question.send }))
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect((screen.getByRole('button', { name: T.question.send }) as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('opens what waits for you from the summary and from the header', async () => {
+  it('opens the waiting question from another tab on a narrow screen', async () => {
     const t = kitchen()
-    const f = fakeApi({ tree: t })
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener: () => undefined, removeEventListener: () => undefined }))
+    const f = fakeApi({ tree: t, events: escalation() })
     render(<App api={f.api} />)
     await userEvent.click(await screen.findByRole('treeitem', { name: /Модель короба/ }))
-    const panel = screen.getByRole('complementary', { name: 'Контекст поручения' })
+    const panel = screen.getByRole('dialog', { name: 'Контекст поручения' })
+    await userEvent.keyboard('{Escape}')
     await userEvent.click(within(screen.getByRole('region', { name: 'Сводка' })).getByRole('button', { name: '1 ждёт вас' }))
     expect(within(panel).getByRole('heading', { name: 'Мобильная панель' })).toBeTruthy()
+    await userEvent.keyboard('{Escape}')
     await userEvent.click(screen.getByRole('treeitem', { name: /Модель короба/ }))
-    await userEvent.click(screen.getByRole('button', { name: /Ждёт вас/ }))
-    expect(within(panel).getByRole('heading', { name: 'Мобильная панель' })).toBeTruthy()
+    await userEvent.keyboard('{Escape}')
+    await userEvent.click(screen.getByRole('tab', { name: T.tabs.analytics }))
+    await userEvent.click(screen.getByRole('button', { name: /Жд[ёу]т вас/ }))
+    expect(screen.getByRole('tab', { name: T.tabs.now }).getAttribute('aria-selected')).toBe('true')
+    const context = screen.getByRole('dialog', { name: T.context })
+    expect(context.hasAttribute('inert')).toBe(false)
+    expect(await within(context).findByRole('button', { name: 'Шторка снизу' })).toBeTruthy()
+    vi.unstubAllGlobals()
   })
 
   it('says when the server is gone and reloads when it is back', async () => {
@@ -219,7 +236,7 @@ describe('review fixes', () => {
     const field = await screen.findByRole('textbox', { name: 'Свой ответ' })
     await userEvent.type(field, 'Шторка, но выше')
     await userEvent.click(screen.getByRole('button', { name: 'Ответить' }))
-    expect(await screen.findByText('Ответ не отправлен. Проверьте связь и попробуйте ещё раз.')).toBeTruthy()
+    expect(await screen.findByRole('alert')).toBeTruthy()
     expect((field as HTMLInputElement).value).toBe('Шторка, но выше')
   })
 
@@ -273,7 +290,7 @@ describe('review fixes', () => {
     f.state.projects[0]!.goals[0]!.counts.waiting_owner = 0
     render(<App api={f.api} />)
     await screen.findByRole('tree')
-    expect((screen.getByRole('button', { name: /Ждёт вас/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: /Жд[ёу]т вас/ }) as HTMLButtonElement).disabled).toBe(true)
   })
 })
 
@@ -324,9 +341,9 @@ describe('actions in the tree', () => {
     await userEvent.click(within(panel).getByRole('button', { name: /Передать другому агенту/ }))
     await userEvent.click(within(panel).getByRole('radio', { name: 'Claude' }))
     await userEvent.click(within(panel).getByRole('button', { name: /Sonnet 5\.5/ }))
-    const dialog = within(panel).getByRole('dialog', { name: 'Модель и effort' })
+    const dialog = within(panel).getByRole('dialog', { name: T.modelAndEffort })
     await userEvent.click(within(dialog).getByRole('option', { name: /Opus 5\.5/ }))
-    within(dialog).getByRole('slider', { name: 'Effort' }).focus()
+    within(dialog).getByRole('slider', { name: T.effortLabel }).focus()
     await userEvent.keyboard('{ArrowRight}')
     await userEvent.click(within(panel).getByRole('button', { name: 'Попросить передать' }))
     await waitFor(() => expect(f.state.requests).toEqual([{ id: 'box', action: 'handoff', provider: 'claude', model: 'opus', effort: 'high' }]))
@@ -352,7 +369,7 @@ describe('actions in the tree', () => {
     await userEvent.click(radios[0] as HTMLElement)
     expect((within(panel).getByRole('button', { name: 'Попросить передать' }) as HTMLButtonElement).disabled).toBe(true)
     await userEvent.click(within(panel).getByRole('button', { name: /GPT-6\.1 Terra/ }))
-    await userEvent.click(within(within(panel).getByRole('dialog', { name: 'Модель и effort' })).getByRole('option', { name: /GPT-6\.1 Sol/ }))
+    await userEvent.click(within(within(panel).getByRole('dialog', { name: T.modelAndEffort })).getByRole('option', { name: /GPT-6\.1 Sol/ }))
     await userEvent.click(within(panel).getByRole('button', { name: 'Попросить передать' }))
     await waitFor(() => expect(f.state.requests).toEqual([{ id: 'box', action: 'handoff', provider: 'codex', model: 'gpt-6.1-sol', effort: 'low' }]))
   })
@@ -361,22 +378,74 @@ describe('actions in the tree', () => {
     const { panel } = await open(/Модель короба/, { agents })
     await userEvent.click(within(panel).getByRole('button', { name: /Передать другому агенту/ }))
     await userEvent.click(within(panel).getByRole('button', { name: /^k3/ }))
-    expect(within(panel).getByText(/не принимает effort/)).toBeTruthy()
+    expect(within(panel).getByText(T.effortNone)).toBeTruthy()
   })
 
-  it('stops at once only when the emergency stop is held', async () => {
+  it('waits for the stop response, restores the button after failure and allows a deliberate retry', async () => {
     const { f, panel } = await open(/Модель короба/)
-    const hold = within(panel).getByRole('button', { name: 'Аварийная остановка: удерживайте' })
+    let resolve!: (result: 'ok' | 'conflict') => void
+    f.api.emergencyStop = () => new Promise((done) => { resolve = done })
+    const hold = within(panel).getByRole('button', { name: T.holdStopLabel })
     vi.useFakeTimers()
-    fireEvent.pointerDown(hold)
+    fireEvent.keyDown(hold, { key: 'Enter' })
     act(() => void vi.advanceTimersByTime(500))
-    fireEvent.pointerUp(hold)
+    fireEvent.keyUp(hold, { key: 'Enter' })
     act(() => void vi.advanceTimersByTime(2000))
-    expect(f.state.stops).toEqual([])
+    expect(resolve).toBeUndefined()
+    fireEvent.keyDown(hold, { key: ' ' })
+    act(() => void vi.advanceTimersByTime(1000))
+    expect(resolve).toBeTypeOf('function')
+    expect(within(panel).getByRole('button', { name: T.holdStopping })).toBe(hold)
+    expect(within(panel).queryByRole('button', { name: T.holdStopped })).toBeNull()
+    expect((hold as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => resolve('conflict'))
+    expect(within(panel).getByRole('alert')).toBeTruthy()
+    expect((hold as HTMLButtonElement).disabled).toBe(false)
     fireEvent.pointerDown(hold)
-    act(() => void vi.advanceTimersByTime(1200))
-    vi.useRealTimers()
-    await waitFor(() => expect(f.state.stops).toEqual(['box']))
+    act(() => void vi.advanceTimersByTime(1000))
+    expect((hold as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => resolve('ok'))
+    expect(within(panel).getByRole('button', { name: T.holdStopped })).toBe(hold)
+    expect((hold as HTMLButtonElement).disabled).toBe(true)
+    expect(within(panel).queryByRole('alert')).toBeNull()
+  })
+
+  it('keeps a conflicting clarification open and shows server errors for clicks and shortcuts', async () => {
+    const { f, panel } = await open(/Модель короба/)
+    f.api.request = async () => 'conflict'
+    await userEvent.click(within(panel).getByRole('button', { name: /Уточнить задачу/ }))
+    const field = within(panel).getByRole('textbox', { name: T.actionText })
+    await userEvent.type(field, 'Только CI')
+    await userEvent.click(within(panel).getByRole('button', { name: T.actionSendLead }))
+    expect(await within(panel).findByRole('alert')).toBeTruthy()
+    expect((field as HTMLTextAreaElement).value).toBe('Только CI')
+    f.api.request = async () => { throw new Error('Model is unavailable') }
+    const row = screen.getByRole('treeitem', { name: /Модель короба/ })
+    row.focus()
+    fireEvent.keyDown(row, { key: 's', code: 'KeyS' })
+    await waitFor(() => expect(within(panel).getByRole('alert').textContent).toContain('Model is unavailable'))
+  })
+
+  it.each(['click', 'shortcut'])('offers manual discussion copy after notifying the lead by %s', async (trigger) => {
+    const { f, panel } = await open(/Модель короба/)
+    const clipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => { throw new Error('denied') } } })
+    try {
+      if (trigger === 'click') await userEvent.click(within(panel).getByRole('button', { name: new RegExp(T.actionTitle.discuss) }))
+      else {
+        const row = screen.getByRole('treeitem', { name: /Модель короба/ })
+        row.focus()
+        fireEvent.keyDown(row, { key: 'c', code: 'KeyC' })
+      }
+      const message = await within(panel).findByRole('textbox', { name: T.discussMessage }) as HTMLTextAreaElement
+      expect(message.readOnly).toBe(true)
+      expect(message.value).toContain('g/box')
+      expect(f.state.requests).toEqual([{ id: 'box', action: 'discuss' }])
+      expect(within(panel).queryByRole('alert')).toBeNull()
+    } finally {
+      if (clipboard) Object.defineProperty(navigator, 'clipboard', clipboard)
+      else Reflect.deleteProperty(navigator, 'clipboard')
+    }
   })
 
   it('shows a waiting request and leaves only discussion', async () => {

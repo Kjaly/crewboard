@@ -124,7 +124,10 @@ function requestOf(own: GoalEvent[]): AssignmentView['request'] {
   const asked = own.findLast((e): e is EventOf<'owner_requested'> => e.type === 'owner_requested' && e.action !== 'discuss')
   if (!asked) return undefined
   const decided = own.findLast((e): e is EventOf<'request_decided'> => e.type === 'request_decided' && e.requestId === asked.requestId)
-  const base = { id: asked.requestId, action: asked.action, ...(asked.text ? { text: asked.text } : {}), ...(asked.provider ? { provider: asked.provider } : {}), ...(asked.model ? { model: asked.model } : {}), ...(asked.effort !== undefined ? { effort: asked.effort } : {}) }
+  if (own.some((e) => e.type === 'request_withdrawn' && e.requestId === asked.requestId)) return undefined
+  const completed = own.findLast((e): e is EventOf<'request_completed'> => e.type === 'request_completed' && e.requestId === asked.requestId)
+  const base = { id: asked.requestId, ts: asked.ts, action: asked.action, ...(asked.text ? { text: asked.text } : {}), ...(asked.provider ? { provider: asked.provider } : {}), ...(asked.model ? { model: asked.model } : {}), ...(asked.effort !== undefined ? { effort: asked.effort } : {}) }
+  if (completed?.outcome === 'failed') return { ...base, state: 'failed', ...(completed.reason ? { reason: completed.reason } : {}) }
   if (!decided) {
     // Work closed or cancelled after the request makes it moot: it no longer pins the node.
     const moot = own.some((e) => e.seq > asked.seq && (e.type === 'closed' || e.type === 'cancelled'))

@@ -97,14 +97,16 @@ function useNow(active: boolean): number {
   return now
 }
 
-/** The live feed of one run under its tree node; once the run ends it folds to a one-line summary. */
-export function RunFeed(props: { api: Api; project: string; assignmentId: string; runId: string; running: boolean }) {
+/** The live feed of one run; only an untouched feed folds when its run ends. */
+export function RunFeed(props: { api: Api; project: string; assignmentId: string; runId: string; running: boolean; onRead?: () => void }) {
   const { api, project, assignmentId, runId, running } = props
   const [steps, setSteps] = useState<FeedStep[]>([])
   const [context, setContext] = useState<{ used: number; size: number } | undefined>()
   const [size, setSize] = useState<Size>(() => initialSize(assignmentId))
   const [view, setView] = useState<View>(() => initialView(assignmentId))
   const [folds, setFolds] = useState<ReadonlySet<number>>(new Set())
+  const [failed, setFailed] = useState(false)
+  const engaged = useRef(size === 'full')
   const [endedSize, setEndedSize] = useState<Size>('line')
   const [details, setDetails] = useState<ReadonlySet<number>>(new Set())
   const [fresh, setFresh] = useState(false)
@@ -114,6 +116,11 @@ export function RunFeed(props: { api: Api; project: string; assignmentId: string
   const list = useRef<HTMLUListElement>(null)
   const atBottom = useRef(true)
   const seenCount = useRef(0)
+  const rendered = useRef(new Set<number>())
+  const newSteps = new Set(steps.filter((s) => !rendered.current.has(s.i)).map((s) => s.i))
+  useEffect(() => {
+    for (const s of steps) rendered.current.add(s.i)
+  }, [steps])
   const now = useNow(running)
 
   useEffect(() => {
@@ -125,12 +132,15 @@ export function RunFeed(props: { api: Api; project: string; assignmentId: string
       try {
         const res = await api.steps(project, runId, next.current)
         if (cancelled) return false
+        setFailed(false)
         next.current = res.next
         finished.current = res.done
         setSteps((have) => mergeSteps(have, res.steps))
         setContext(res.context)
         return !res.done
       } catch (error) {
+        if (cancelled) return false
+        setFailed(true)
         // A run the server does not know will not appear: stop asking. Any other failure is retried next tick.
         if (isNotFound(error)) {
           gone.current = runId
@@ -168,12 +178,17 @@ export function RunFeed(props: { api: Api; project: string; assignmentId: string
     }
   }, [api, project, runId, running])
 
-  const current = running ? size : endedSize
+  const current = running || engaged.current ? size : endedSize
+  const reading = () => {
+    engaged.current = true
+    props.onRead?.()
+  }
   const cycle = () => {
+    reading()
     const to = NEXT_SIZE[current]
     atBottom.current = true
     setFresh(false)
-    if (!running) return setEndedSize(to)
+    if (!running) setEndedSize(to)
     setSize(to)
     try {
       localStorage.setItem(sizeKey(assignmentId), to)
@@ -183,6 +198,7 @@ export function RunFeed(props: { api: Api; project: string; assignmentId: string
   }
 
   const switchView = () => {
+    reading()
     const to: View = view === 'all' ? 'messages' : 'all'
     setView(to)
     try {
@@ -210,6 +226,7 @@ export function RunFeed(props: { api: Api; project: string; assignmentId: string
   }, [steps, current, view])
 
   const onScroll = () => {
+    reading()
     const el = list.current
     if (!el) return
     atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8
@@ -232,14 +249,14 @@ export function RunFeed(props: { api: Api; project: string; assignmentId: string
   const last = steps.at(-1)
   const startedAt = first ? Date.parse(first.ts) : undefined
   const endedAt = last ? Date.parse(last.ts) : undefined
-  const silentMin = running && last?.status !== 'running' && endedAt !== undefined && now - endedAt > SILENT_MS ? Math.floor((now - endedAt) / 60_000) : 0
+  const silentMin = !failed && running && last?.status !== 'running' && endedAt !== undefined && now - endedAt > SILENT_MS ? Math.floor((now - endedAt) / 60_000) : 0
   const pct = context && context.size > 0 ? Math.min(100, Math.round((context.used / context.size) * 100)) : undefined
   const items: Item[] = view === 'all' ? steps.map((step) => ({ type: 'step', step })) : foldSteps(steps)
   const rows = current === 'short' ? items.slice(-SHORT_ROWS) : items
 
   return (
     // The tree's arrow-key and letter shortcuts belong to the rows, not to the controls in here.
-    <section className="feed" data-size={current} data-view={view} data-running={running} aria-label={T.feed.label} onKeyDown={(e) => e.stopPropagation()}>
+    <section className="feed" data-size={current} data-view={view} data-running={running} aria-label={T.feed.label} onFocus={() => { if (running) reading() }} onPointerEnter={() => { if (running) reading() }} onKeyDown={(e) => e.stopPropagation()}>
       <div className="feed-h">
         <button type="button" className="feed-toggle press" data-size={current} aria-label={current === 'full' ? T.feed.collapse : T.feed.expand} onClick={cycle}>
           <CaretRight size={12} aria-hidden="true" />
@@ -261,15 +278,16 @@ export function RunFeed(props: { api: Api; project: string; assignmentId: string
           </button>
         )}
       </div>
+      {failed && <p className="hint-line">{T.feed.loadFailed}</p>}
       {current !== 'line' && (
         <div className="feed-body">
           <ul className="feed-list" ref={list} onScroll={onScroll}>
-            {rows.length === 0 && running && <li className="feed-empty">{T.feed.waiting}</li>}
+            {rows.length === 0 && running && !failed && <li className="feed-empty">{T.feed.waiting}</li>}
             {rows.map((item) =>
               item.type === 'step' ? (
-                <StepRow key={item.step.i} step={item.step} open={details.has(item.step.i)} onToggle={() => toggleDetail(item.step.i)} />
+                <StepRow key={item.step.i} fresh={newSteps.has(item.step.i)} step={item.step} open={details.has(item.step.i)} onToggle={() => toggleDetail(item.step.i)} />
               ) : (
-                <li key={`w${item.id}`} className="feed-row feed-fold">
+                <li key={`w${item.id}`} className={`feed-row feed-fold ${newSteps.has(item.id) ? 'feed-new-row' : ''}`}>
                   <FoldRow steps={item.steps} open={folds.has(item.id)} onToggle={() => toggleFold(item.id)} />
                   {folds.has(item.id) && (
                     <ul className="feed-sub">
@@ -315,7 +333,7 @@ function FoldRow(props: { steps: readonly FeedStep[]; open: boolean; onToggle: (
   )
 }
 
-function StepRow(props: { step: FeedStep; open: boolean; onToggle: () => void }) {
+function StepRow(props: { step: FeedStep; fresh?: boolean; open: boolean; onToggle: () => void }) {
   const { step: s, open, onToggle } = props
   const Icon = KIND_ICON[s.kind]
   const body = (
@@ -332,7 +350,7 @@ function StepRow(props: { step: FeedStep; open: boolean; onToggle: () => void })
     </>
   )
   return (
-    <li className={`feed-row ${s.kind === 'thought' ? 'thought' : ''} ${s.kind === 'message' || s.kind === 'final' ? 'say' : ''} ${s.kind === 'problem' ? 'problem' : ''} ${s.status === 'failed' ? 'failed' : ''}`}>
+    <li className={`feed-row ${props.fresh ? 'feed-new-row' : ''} ${s.kind === 'thought' ? 'thought' : ''} ${s.kind === 'message' || s.kind === 'final' ? 'say' : ''} ${s.kind === 'problem' ? 'problem' : ''} ${s.status === 'failed' ? 'failed' : ''}`}>
       {(s.kind === 'message' || s.kind === 'thought' || s.kind === 'final') && s.detail ? (
         <button type="button" className="feed-line" aria-expanded={open} onClick={onToggle}>
           {body}

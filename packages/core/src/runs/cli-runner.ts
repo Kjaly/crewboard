@@ -10,6 +10,7 @@ import { type BackgroundTask, type Parsed, type RateLimited, type TurnUsage, ope
 import { type FailureReason, failureTextOf } from './failure.js'
 import { uncommittedFiles } from './git-status.js'
 import { slotsDir } from '../slots/slots.js'
+import type { WorkerAccess } from '../backend/types.js'
 import { AnthropicPolicyError, assertAnthropicLaunchAllowed, classifyAnthropicRoute } from '../routing/anthropic-policy.js'
 import type { Backend } from '../preflight/preflight.js'
 
@@ -66,7 +67,7 @@ export type CliRunState = {
  */
 export type ClaudeAuth = 'native' | 'isolated'
 
-export type CliRunnerArgs = { kind: CliKind; claudeAuth?: ClaudeAuth; runDir: string; cwd: string; promptFile: string; model?: string; effort?: string; command: string; commandArgs?: string[]; background?: BackgroundTiming; readOnly?: boolean; commitRequired?: boolean; /** Non-secret: the resolved auth channel and policy revision, so a steer can tell a guarded run from an old child. */ authChannel?: string; policyRevision?: string }
+export type CliRunnerArgs = { kind: CliKind; claudeAuth?: ClaudeAuth; runDir: string; cwd: string; promptFile: string; model?: string; effort?: string; command: string; commandArgs?: string[]; background?: BackgroundTiming; readOnly?: boolean; access?: WorkerAccess; commitRequired?: boolean; /** Non-secret: the resolved auth channel and policy revision, so a steer can tell a guarded run from an old child. */ authChannel?: string; policyRevision?: string }
 /** How long a Claude run stays open for the worker's own background work (bg1); tests shorten it. */
 export type BackgroundTiming = { limitMs?: number; wakeGraceMs?: number; noticeMs?: number }
 
@@ -401,13 +402,15 @@ async function driveCodex(args: CliRunnerArgs, s: Session, prompt: string, env: 
     /** The current turn's answer, glued back from its `answer_delta` chunks (cm1): read once the turn ends. */
     let turnText = ''
     const model = [...(args.model ? ['-m', args.model] : []), ...(args.effort ? ['-c', `model_reasoning_effort="${args.effort}"`] : []), '-c', 'model_reasoning_summary="concise"']
-    const sandbox = args.readOnly ? 'read-only' : 'workspace-write'
+    // ac1: a read-only run stays read-only whatever access its preset grants.
+    const sandbox = args.readOnly ? 'read-only' : args.access === 'full' ? 'danger-full-access' : 'workspace-write'
+    const network = !args.readOnly && args.access === 'network' ? ['-c', 'sandbox_workspace_write.network_access=true'] : []
     // A linked worktree's index lives in --git-dir; objects and shared refs live in --git-common-dir.
     // Codex 0.160 protects the resolved .git pointer target even inside a broader writable root, so both
     // directories need explicit grants. The global check queue is outside cwd too. Grant Git only to commit owners;
     // an orchestrator-commit contract grants the slot directory but keeps Git metadata read-only to the worker.
     const writableRoots: string[] = []
-    if (!args.readOnly && basename(args.command) === 'codex' && !args.commandArgs?.length) {
+    if (sandbox === 'workspace-write' && basename(args.command) === 'codex' && !args.commandArgs?.length) {
       const checkSlots = slotsDir(process.env, homedir())
       await mkdir(checkSlots, { recursive: true })
       writableRoots.push(checkSlots)
@@ -422,8 +425,8 @@ async function driveCodex(args: CliRunnerArgs, s: Session, prompt: string, env: 
     const writable = [...new Set(writableRoots)].flatMap((root) => ['--add-dir', root])
     // --add-dir belongs to exec; resume inherits its parent's options, but has no --add-dir of its own.
     const cli = thread
-      ? ['exec', ...writable, 'resume', '--json', '--skip-git-repo-check', '-c', `sandbox_mode="${sandbox}"`, ...model, thread, next.text]
-      : ['exec', ...writable, '--json', '--skip-git-repo-check', '-s', sandbox, ...model, next.text]
+      ? ['exec', ...writable, 'resume', '--json', '--skip-git-repo-check', '-c', `sandbox_mode="${sandbox}"`, ...network, ...model, thread, next.text]
+      : ['exec', ...writable, '--json', '--skip-git-repo-check', '-s', sandbox, ...network, ...model, next.text]
     const child = spawn(args.command, [...(args.commandArgs ?? []), ...cli], { cwd: args.cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: true, env })
     s.worker(child.pid)
     const steerId = next.id

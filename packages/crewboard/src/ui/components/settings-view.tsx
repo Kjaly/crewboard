@@ -111,10 +111,15 @@ export function SettingsView(props: { api: Api; onSaved: () => void }) {
             const agent = agents.find((a) => a.id === value.agent)
             return <div key={id} className="settings-row settings-preset">
               <div className="settings-identity"><b className="mono">{id}</b></div>
-              <label>{T.settings.agent}<select value={value.agent} onChange={(e) => patchPreset(id, { ...value, agent: e.target.value, model: undefined, effort: undefined })}>
+              <label>{T.settings.agent}<select value={value.agent} onChange={(e) => patchPreset(id, { ...value, agent: e.target.value, model: undefined, effort: undefined, access: undefined })}>
                 {agents.map((a) => <option key={a.id} value={a.id}>{a.label}{!a.enabled ? ` · ${T.settings.disabled}` : ''}</option>)}
               </select></label>
               {agent && <ModelFields agent={agent} model={value.model} effort={value.effort} allowDefault loadModels={props.api.models} onChange={({ model, effort, models }) => { patchPreset(id, { ...value, model, effort }); if (models) patchAgent(agent.id, { models }) }} />}
+              {agent?.run === 'codex' && <label title={T.settings.accessHint}>{T.settings.access}<select value={value.access ?? ''} onChange={(e) => patchPreset(id, { ...value, access: (e.target.value || undefined) as AgentPreset['access'] })}>
+                <option value="">{T.settings.accessSandbox}</option>
+                <option value="network">{T.settings.accessNetwork}</option>
+                <option value="full">{T.settings.accessFull}</option>
+              </select></label>}
               <label className="settings-toggle"><input type="checkbox" checked={preset !== false} onChange={(e) => patchPreset(id, e.target.checked ? value : false)} />{T.settings.enabled}</label>
               <label className="settings-note">{T.settings.note}<input value={value.note ?? ''} onChange={(e) => patchPreset(id, { ...value, note: e.target.value })} /></label>
             </div>

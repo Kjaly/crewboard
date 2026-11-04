@@ -11,6 +11,10 @@ import type { RunSteps } from '../workers/steps.js'
 
 export type { LiveChange }
 
+/** The mutation succeeded even if its follow-up read failed. Never retry the mutation for that failure. */
+export type SendResult = { refreshFailed: boolean }
+export type DiscussResult = SendResult & { copied: boolean; prompt: string }
+
 /** A registered agent as the screen shows it. */
 export type AgentBadge = {
   id: string
@@ -43,6 +47,7 @@ export type Api = {
   analytics(project: string, goalId: string): Promise<GoalAnalytics>
   answer(project: string, goalId: string, assignmentId: string, text: string): Promise<'ok' | 'conflict'>
   request(project: string, goalId: string, assignmentId: string, action: RequestAction, text?: string, provider?: ProviderId, pick?: HandoffPick): Promise<'ok' | 'conflict'>
+  withdrawRequest(project: string, goalId: string, assignmentId: string, requestId: string): Promise<'ok' | 'conflict'>
   emergencyStop(project: string, goalId: string, assignmentId: string): Promise<'ok' | 'conflict'>
   steps(project: string, runId: string, since: number): Promise<RunSteps>
   live(onChange: (c: LiveChange) => void, onStatus: (online: boolean) => void): () => void
@@ -64,7 +69,17 @@ async function getJson<T>(url: string): Promise<T> {
 async function post(url: string, body: unknown): Promise<'ok' | 'conflict'> {
   const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
   if (res.status === 409) return 'conflict'
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`)
+  if (!res.ok) {
+    const body = await res.text()
+    let message = body
+    try {
+      const parsed = JSON.parse(body) as { error?: unknown }
+      if (typeof parsed.error === 'string') message = parsed.error
+    } catch {
+      // Some servers return plain text instead of JSON.
+    }
+    throw new Error(message || String(res.status))
+  }
   return 'ok'
 }
 
@@ -76,6 +91,7 @@ export function httpApi(base = ''): Api {
         ...(text ? { text } : {}), ...(provider ? { provider } : {}),
         ...(pick?.model ? { model: pick.model } : {}), ...(pick?.effort !== undefined ? { effort: pick.effort } : {}),
       }),
+    withdrawRequest: (project, goalId, assignmentId, requestId) => post(`${base}/api/request/withdraw`, { project, goalId, assignmentId, requestId }),
     emergencyStop: (project, goalId, assignmentId) => post(`${base}/api/emergency-stop`, { project, goalId, assignmentId }),
     agentsConfig: () => getJson(`${base}/api/agents-config`),
     async saveAgentsConfig(config, revision) {

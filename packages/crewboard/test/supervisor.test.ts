@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -8,7 +8,7 @@ import type { NewEvent } from '../src/model/types.js'
 import { createEventStore } from '../src/store/event-store.js'
 import { createInbox } from '../src/store/inbox.js'
 import { runsDir } from '../src/store/paths.js'
-import { createSupervisor, gitWorktree } from '../src/supervisor.js'
+import { createSupervisor, gitWorktree, withSetup } from '../src/supervisor.js'
 import { createPool } from '../src/workers/pool.js'
 import { createFakeBackend } from './fake-backend.js'
 import type { ProjectContext } from '../src/app.js'
@@ -70,6 +70,57 @@ describe('supervisor', () => {
     await expect(commands.assign({ project: root, goalId: 'g', title: 'b', criteria: [], resultKind: 'local', preset })).rejects.toThrow(/disabled/)
   })
 
+  it.each([
+    ['local', 'network'],
+    ['answer', undefined],
+  ] as const)('ac1/a %s assignment from a preset with network access launches with access %s', async (resultKind, access) => {
+    const home = await mkdtemp(join(tmpdir(), 'cb-access-'))
+    await writeFile(join(home, 'agents.json'), JSON.stringify({ presets: { net: { agent: 'codex', access: 'network' } } }))
+    const agents = createAgents({ CREWBOARD_HOME: home })
+    const { store, sup, fake, root } = await setup(undefined, undefined, agents)
+    fake.setFallback({ hold: true })
+    await goal(store)
+    const ctx: ProjectContext = {
+      repo: root, store, agents, supervisor: sup, inbox: createInbox(store), steps: createStepsReader(store, async () => fake.backend),
+      exclusive: (fn) => fn(ctx), register: async () => {}, tickOnce: () => sup.tick(),
+    }
+    await createLeadCommands(async () => ctx, () => new Date(), agents).assign({ project: root, goalId: 'g', title: 'a', criteria: [], resultKind, preset: 'net' })
+    expect(fake.launches.at(-1)?.access).toBe(access)
+  })
+
+  it.each([
+    ['touch prepared', 'ran', undefined],
+    ['echo broken lockfile >&2; exit 3', 'failed', /worktree setup failed.*broken lockfile/],
+  ] as const)('ws1/branch work waits for the owner setup command `%s` on the host, then %s', async (command, outcome, reason) => {
+    const home = await mkdtemp(join(tmpdir(), 'cb-setup-'))
+    const fake = createFakeBackend()
+    const root = await gitRepo()
+    await writeFile(join(home, 'agents.json'), JSON.stringify({ projects: { [root]: { setup: command } } }))
+    const agents = createAgents({ CREWBOARD_HOME: home })
+    const store = createEventStore(root)
+    const pool = createPool({ backendFor: async () => fake.backend, runsDir: runsDir(root), repo: root })
+    const sup = createSupervisor({ repo: root, store, pool, now: () => new Date(), worktree: withSetup(gitWorktree, async (repo) => agents.setupFor?.(repo)), agents })
+    fake.setFallback({ hold: true })
+    await goal(store)
+    await store.append('g', assign('a', { resultKind: 'branch' }))
+    await sup.tick()
+    expect(fake.launches).toHaveLength(0)
+    expect((await store.read('g')).find((e) => e.type === 'progress')).toMatchObject({ code: 'worktree_setup', detail: command })
+    for (let i = 0; i < 100 && !(await typesOf(store, 'a')).includes('run_started'); i++) {
+      await new Promise((r) => setTimeout(r, 50))
+      await sup.tick()
+    }
+    const ended = (await store.read('g')).find((e) => e.type === 'run_ended')
+    if (outcome === 'ran') {
+      expect(fake.launches).toHaveLength(1)
+      await expect(access(join(fake.launches[0]?.cwd ?? '', 'prepared'))).resolves.toBeUndefined()
+      expect(ended).toBeUndefined()
+    } else {
+      expect(fake.launches).toHaveLength(0)
+      expect(ended).toMatchObject({ outcome: 'failed', reason: expect.stringMatching(reason ?? /./) })
+    }
+  })
+
   it.each([undefined, 'medium'])('resets the same agent effort to %s and leaves accepted queued work unstarted', async (defaultEffort) => {
     const home = await mkdtemp(join(tmpdir(), 'cb-handoff-'))
     const agents = createAgents({ CREWBOARD_HOME: home })
@@ -88,10 +139,10 @@ describe('supervisor', () => {
     }
     await request('claude')
     expect(fake.launches).toHaveLength(0)
-    expect((await store.read('g')).at(-1)).toMatchObject({ type: 'reassigned', provider: 'claude' })
+    expect((await store.read('g')).findLast((e) => e.type === 'reassigned')).toMatchObject({ provider: 'claude', resolvedModel: 'sonnet' })
     await request('codex', 'high')
     await request('codex', null)
-    expect((await store.read('g')).at(-1)).not.toHaveProperty('effort')
+    expect((await store.read('g')).findLast((e) => e.type === 'reassigned')).not.toHaveProperty('effort')
     expect(fake.launches).toHaveLength(0)
     await store.append('g', { type: 'unblocked', goalId: 'g', assignmentId: 'a', actor: 'lead' })
     await sup.tick()

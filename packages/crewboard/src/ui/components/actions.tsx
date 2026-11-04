@@ -1,81 +1,90 @@
-import { type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react'
+import { type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type Ref, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { availableActions } from '../../model/project.js'
 import type { AssignmentView, ProviderId, RequestAction } from '../../model/types.js'
-import type { Api, HandoffPick } from '../api.js'
+import type { Api, DiscussResult, HandoffPick, SendResult } from '../api.js'
 import { ArrowClockwise, ArrowsLeftRight, ArrowUUpLeft, CaretRight, ChatsCircle, Copy, HourglassMedium, Info, NotePencil, Octagon, Play, Stop, XCircle } from '../icons.js'
 import { T } from '../text.js'
+import { useDraft } from '../drafts.js'
 import { Handoff } from './handoff.js'
-import { requestText } from './request-line.js'
+import { requestContent, requestText } from './request-line.js'
 
 export type ActionMode = 'idle' | 'clarify' | 'reopen' | 'revive' | 'handoff'
 const NEEDS_TEXT: ReadonlySet<RequestAction> = new Set(['clarify', 'reopen', 'revive'])
 const ORDER: RequestAction[] = ['clarify', 'handoff', 'start_now', 'reopen', 'revive', 'stop', 'cancel', 'discuss']
 const ICON: Record<RequestAction, typeof Stop> = { clarify: NotePencil, handoff: ArrowsLeftRight, start_now: Play, reopen: ArrowUUpLeft, revive: ArrowClockwise, stop: Stop, cancel: XCircle, discuss: ChatsCircle }
-const HOLD_MS = 1200
-const COPIED_MS = 1600
+export type ActionHandle = { click: (action: RequestAction) => void }
+const SHORTCUT: Partial<Record<RequestAction, string>> = { clarify: 'U', stop: 'S', handoff: 'P', discuss: 'C' }
+const HOLD_MS = 1000
 
 /** The requests the owner may send on a node; each goes to the lead, which decides. */
 export function Actions(props: {
+  draftKey?: string
+  actionRef?: Ref<ActionHandle>
   loadModels?: Api['models']
   node: AssignmentView
   leadOnline: boolean
   mode: ActionMode
   onMode: (mode: ActionMode) => void
-  onRequest: (action: RequestAction, text?: string, provider?: ProviderId, pick?: HandoffPick) => Promise<unknown>
-  onEmergencyStop: () => Promise<unknown>
-  onDiscuss: () => Promise<unknown>
+  onRequest: (action: RequestAction, text?: string, provider?: ProviderId, pick?: HandoffPick) => Promise<SendResult>
+  onWithdraw: () => Promise<SendResult>
+  onEmergencyStop: () => Promise<SendResult>
+  onDiscuss: () => Promise<DiscussResult>
 }) {
   const { node, mode, onMode } = props
-  const [text, setText] = useState('')
+  const [text, setText] = useDraft(JSON.stringify([props.draftKey ?? node.id, mode]))
   const [sending, setSending] = useState(false)
-  const [failed, setFailed] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const [failed, setFailed] = useState<string>()
+  const [discussion, setDiscussion] = useState<DiscussResult>()
+  const busy = useRef(false)
   const rows = useRef<Partial<Record<RequestAction, HTMLButtonElement | null>>>({})
   const field = useRef<HTMLTextAreaElement>(null)
-  const timer = useRef<ReturnType<typeof setTimeout>>()
   const actions = availableActions(node)
   const asks = ORDER.filter((a) => actions.includes(a))
   const canStopNow = actions.includes('emergency_stop')
   const pending = node.request?.state === 'pending' ? node.request : undefined
   const handoff = node.pendingRun ?? node
 
-  useEffect(() => () => clearTimeout(timer.current), [])
   useEffect(() => {
     if (NEEDS_TEXT.has(mode as RequestAction)) field.current?.focus()
   }, [mode])
 
   /** Runs a send once at a time; true when it went through. */
-  const run = async (fn: () => Promise<unknown>): Promise<boolean> => {
-    if (sending) return false
+  const run = async (fn: () => Promise<SendResult>): Promise<boolean> => {
+    if (busy.current) return false
+    busy.current = true
     setSending(true)
-    setFailed(false)
+    setFailed(undefined)
     try {
-      await fn()
-      setText('')
+      const result = await fn()
+      if (result.refreshFailed) setFailed(T.refreshFailed)
       onMode('idle')
       return true
-    } catch {
-      setFailed(true)
+    } catch (error) {
+      setFailed(error instanceof Error ? error.message : T.requestFailed)
       return false
     } finally {
+      busy.current = false
       setSending(false)
     }
   }
   const discuss = () =>
     run(async () => {
-      await props.onDiscuss()
-      setCopied(true)
-      clearTimeout(timer.current)
-      timer.current = setTimeout(() => setCopied(false), COPIED_MS)
+      const result = await props.onDiscuss()
+      setDiscussion(result)
+      return result
     })
   const click = (a: RequestAction) => {
+    if (busy.current || !asks.includes(a)) return
     if (a === 'discuss') return void discuss()
     if (a === 'handoff' || NEEDS_TEXT.has(a)) return onMode(mode === a ? 'idle' : (a as ActionMode))
     void run(() => props.onRequest(a))
   }
+  useImperativeHandle(props.actionRef, () => ({ click }))
   const send = () => {
     const body = text.trim()
-    if (body && mode !== 'idle' && mode !== 'handoff') void run(() => props.onRequest(mode, body))
+    if (body && mode !== 'idle' && mode !== 'handoff') void run(() => props.onRequest(mode, body)).then((ok) => {
+      if (ok) setText('')
+    })
   }
   const fieldKeys = (e: ReactKeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -93,9 +102,16 @@ export function Actions(props: {
       {pending && (
         <div className="na-pending" role="status">
           <HourglassMedium size={16} aria-hidden="true" />
-          <span>{requestText(pending)}</span>
+          <div>
+            <p>{props.leadOnline ? requestText(pending) : T.requestOffline}</p>
+            {!props.leadOnline && <p>{requestContent(pending)}</p>}
+            {pending.ts && <time dateTime={pending.ts}>{new Date(pending.ts).toLocaleString(T.locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })}</time>}
+            {!props.leadOnline && <p className="hint-line">{T.leadAwayHint}</p>}
+            <button type="button" className="jump press" disabled={sending} onClick={() => void run(props.onWithdraw)}>{T.withdrawRequest}</button>
+          </div>
         </div>
       )}
+      {!pending && !props.leadOnline && <p className="hint-line">{T.leadAwayHint}</p>}
       {asks.length > 0 && (
         <>
           <div className="na-cap">
@@ -122,6 +138,8 @@ export function Actions(props: {
                     }}
                     disabled={sending && !expandable}
                     aria-expanded={expandable ? open : undefined}
+                    aria-keyshortcuts={SHORTCUT[a]}
+                    title={SHORTCUT[a] ? `${T.actionTitle[a]} (${SHORTCUT[a]})` : undefined}
                     onClick={() => click(a)}
                   >
                     <span className="na-ic">
@@ -129,14 +147,7 @@ export function Actions(props: {
                     </span>
                     <span>
                       <span className="na-tt">{T.actionTitle[a]}</span>
-                      {a === 'discuss' ? (
-                        <span className="na-sub na-state" data-done={copied}>
-                          <span aria-hidden={copied}>{T.actionEffect[a]}</span>
-                          <span aria-hidden={!copied}>{T.discussDone}</span>
-                        </span>
-                      ) : (
-                        <span className="na-sub">{T.actionEffect[a]}</span>
-                      )}
+                      <span className="na-sub">{a === 'handoff' && node.status === 'queued' ? T.handoffQueuedEffect : T.actionEffect[a]}</span>
                     </span>
                     {expandable ? <CaretRight size={13} className="na-chev" aria-hidden="true" /> : a === 'discuss' ? <Copy size={13} className="na-chev flat" aria-hidden="true" /> : <span />}
                   </button>
@@ -159,16 +170,26 @@ export function Actions(props: {
           </div>
         </>
       )}
+      {discussion && (
+        <div className="na-discussion">
+          <p className="hint-line">{T.discussNotified}</p>
+          {discussion.copied ? <p className="hint-line">{T.discussCopied}</p> : (
+            <label>
+              <span className="hint-line">{T.discussManual}</span>
+              <textarea className="na-ta" aria-label={T.discussMessage} readOnly value={discussion.prompt} />
+            </label>
+          )}
+        </div>
+      )}
       {canStopNow && (
         <>
           {asks.length > 0 && <hr className="na-hr" />}
           <HoldStop onHold={() => run(props.onEmergencyStop)} />
-          {!props.leadOnline && <p className="hint-line">{T.leadAwayHint}</p>}
         </>
       )}
       {failed && (
         <p className="fail" role="alert">
-          {T.requestFailed}
+          {failed}
         </p>
       )}
     </section>
@@ -189,7 +210,7 @@ const isMac = () => typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(n
 
 /** The emergency stop: irreversible and without the lead, so it needs a deliberate hold, by pointer or by Space/Enter. */
 function HoldStop(props: { onHold: () => Promise<boolean> }) {
-  const [phase, setPhase] = useState<'idle' | 'holding' | 'stopped'>('idle')
+  const [phase, setPhase] = useState<'idle' | 'holding' | 'stopping' | 'stopped'>('idle')
   const timer = useRef<ReturnType<typeof setTimeout>>()
   const stopped = useRef(false)
   useEffect(() => () => clearTimeout(timer.current), [])
@@ -200,11 +221,10 @@ function HoldStop(props: { onHold: () => Promise<boolean> }) {
     timer.current = setTimeout(() => {
       timer.current = undefined
       stopped.current = true
-      setPhase('stopped')
+      setPhase('stopping')
       void props.onHold().then((ok) => {
-        if (ok) return
-        stopped.current = false
-        setPhase('idle')
+        stopped.current = ok
+        setPhase(ok ? 'stopped' : 'idle')
       })
     }, HOLD_MS)
   }
@@ -221,7 +241,8 @@ function HoldStop(props: { onHold: () => Promise<boolean> }) {
       type="button"
       className="na-hold"
       data-phase={phase}
-      aria-label={T.holdStopLabel}
+      disabled={phase === 'stopping' || done}
+      aria-label={done ? T.holdStopped : phase === 'stopping' ? T.holdStopping : T.holdStopLabel}
       onPointerDown={(e) => {
         try {
           e.currentTarget.setPointerCapture(e.pointerId)
@@ -247,8 +268,9 @@ function HoldStop(props: { onHold: () => Promise<boolean> }) {
         <Octagon size={15} aria-hidden="true" />
       </span>
       <span>
-        <span className="na-tt">{done ? T.holdStopped : T.emergencyStop}</span>
+        <span className="na-tt">{done ? T.holdStopped : phase === 'stopping' ? T.holdStopping : T.emergencyStop}</span>
         <span className="na-sub">{done ? T.holdStoppedHint : T.holdStopHint}</span>
+        {!done && <span className="na-sub">{T.holdStopBranch}</span>}
       </span>
     </button>
   )

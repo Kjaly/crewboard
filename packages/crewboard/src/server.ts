@@ -30,6 +30,7 @@ export type Api = {
   steps: (project: string, runId: string, since: number) => Promise<RunSteps | undefined>
   answer: (body: Record<string, unknown>) => Promise<void>
   request: (body: Record<string, unknown>) => Promise<{ requestId: string }>
+  withdrawRequest: (body: Record<string, unknown>) => Promise<void>
   emergencyStop: (body: Record<string, unknown>) => Promise<void>
   /** Maps a thrown error to an HTTP status: 409 for a moved-on state, 400 otherwise. */
   statusOf: (error: unknown) => number
@@ -175,10 +176,14 @@ export function createHttpServer(api: Api, opts: { now?: () => number; mcpIdleMs
     if (url.pathname === '/api/agents') return json(res, 200, await api.agents())
     if (url.pathname === '/api/doctor') return json(res, 200, await api.doctor())
     if (url.pathname === '/api/usage') return json(res, 200, await api.usage())
-    if (req.method === 'POST' && (url.pathname === '/api/answer' || url.pathname === '/api/request' || url.pathname === '/api/emergency-stop')) {
+    if (req.method === 'POST' && (url.pathname === '/api/answer' || url.pathname === '/api/request' || url.pathname === '/api/request/withdraw' || url.pathname === '/api/emergency-stop')) {
       if (refuseForeignPost(req, res)) return
       const body = ((await readBody(req)) ?? {}) as Record<string, unknown>
       if (url.pathname === '/api/request') return json(res, 200, await api.request(body))
+      if (url.pathname === '/api/request/withdraw') {
+        await api.withdrawRequest(body)
+        return res.writeHead(204).end()
+      }
       await (url.pathname === '/api/answer' ? api.answer(body) : api.emergencyStop(body))
       return res.writeHead(204).end()
     }

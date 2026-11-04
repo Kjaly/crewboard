@@ -22,6 +22,13 @@ export const en: Strings = {
     failed: (t) => `Run failed: ${t}`,
     closed: (t) => `Closed: ${t}`,
     cancelled: (t) => `Cancelled: ${t}`,
+    ownerRequested: (t) => `You asked: ${t}`,
+    requestAccepted: 'The lead accepted',
+    requestDeclined: (reason) => `The lead declined: ${reason}`,
+    requestSucceeded: 'Completed',
+    requestFailed: (reason) => `Failed: ${reason}`,
+    requestWithdrawn: 'You withdrew the request',
+    reassigned: (from, to, model) => `Handoff: ${from} → ${to} · ${model}`,
     adopted: 'A new lead took over the goal',
   },
   doing: (d) => {
@@ -30,7 +37,7 @@ export const en: Strings = {
       case 'done': return 'Done'
       case 'cancelled': return `Cancelled: ${d.code ? en.system(d.code, d.detail) : d.reason}`.trim()
       case 'system': return en.system(d.code, d.detail)
-      case 'abandoned': return 'Abandoned: the owner no longer leads this work'
+      case 'abandoned': return 'Without a lead: the owner no longer leads this work'
       case 'paused': return 'Paused: the lead is offline'
       case 'waiting_owner': return 'Waiting for your answer'
       case 'returned': return `Returned: ${d.note}`
@@ -56,6 +63,7 @@ export const en: Strings = {
       case 'split_truncated': return `The split was cut short: ${detail} parts beyond the limit were dropped`
       case 'split_registry': return `Agent tags in the split were ignored, the agent registry cannot be read: ${detail}`
       case 'launch_registry': return `Queued work waits for the agent registry to be fixed: ${detail}`
+      case 'worktree_setup': return `Preparing the worktree: ${detail}`
     }
   },
   appTitle: 'Crewboard',
@@ -90,10 +98,17 @@ export const en: Strings = {
   running: (n) => `${n} running`,
   queued: (n) => `${n} queued`,
   finished: (n) => `${n} finished`,
+  askButtonLabel: (n) => `Waiting for you: ${n}`,
   askButton: 'Waiting for you',
   theme: 'Switch theme',
   offline: 'No connection to the server. Reconnecting…',
   loading: 'Loading…',
+  loadFailed: 'Could not load the data.',
+  retry: 'Retry',
+  announceQuestion: (title: string) => `${title}: a new question for you`,
+  announceRequestDeclined: 'The lead declined the request',
+  announceRequestFailed: 'The request could not be completed',
+  announceFinished: (title: string) => `${title}: finished`,
   projects: 'Projects',
   goals: 'Goals',
   tree: 'Assignments',
@@ -143,11 +158,14 @@ export const en: Strings = {
   },
   copy: 'Copy',
   copied: 'Copied',
-  question: { via: 'The lead could not decide alone', own: 'Your own answer', send: 'Answer', placeholder: 'Write an answer for the worker', failed: 'The answer was not sent. Check the connection and try again.' },
-  status: { queued: 'Queued', running: 'Running', waiting_answer: 'Waiting for the lead', waiting_owner: 'Waiting for you', reported: 'Reported', done: 'Done', cancelled: 'Cancelled', abandoned: 'Abandoned', paused: 'Paused' },
+  question: { via: 'The lead could not decide alone', own: 'Your own answer', send: 'Answer', placeholder: 'Write an answer for the worker', failed: 'The answer was not sent. Try again.', conflict: 'This question has already been answered. Your text is saved.', optionHint: 'Clicking an option sends your answer immediately' },
+  status: { queued: 'Queued', running: 'Running', waiting_answer: 'Waiting for the lead', waiting_owner: 'Waiting for you', reported: 'Reported', done: 'Done', cancelled: 'Cancelled', abandoned: 'Without a lead', paused: 'Paused' },
   actionTitle: { clarify: 'Clarify the task', stop: 'Stop', handoff: 'Hand over to another agent', start_now: 'Start sooner', cancel: 'Cancel', reopen: 'Reopen', revive: 'Bring back', discuss: "Discuss in the lead's chat" },
-  actionEffect: { clarify: 'An instruction to the worker along the way', stop: 'This assignment and everything under it', handoff: 'The work starts over with the chosen one', start_now: 'The assignment starts out of turn', cancel: 'The assignment will not be done', reopen: 'The finished assignment goes back to work', revive: 'The cancelled assignment goes back to work', discuss: 'Copies a link to the assignment' },
-  discussDone: 'Copied, paste it into the chat',
+  actionEffect: { clarify: 'An instruction to the worker along the way', stop: 'This assignment and everything under it', handoff: 'The current run stops; the chosen agent continues in the same working folder', start_now: 'The assignment starts out of turn', cancel: 'The assignment will not be done', reopen: 'The finished assignment goes back to work', revive: 'The cancelled assignment goes back to work', discuss: 'Copies a message for the lead' },
+  handoffQueuedEffect: 'The chosen agent starts the assignment when its turn comes',
+  discussNotified: 'Lead notified',
+  discussManual: 'Clipboard unavailable. Copy the message manually',
+  discussMessage: 'Message for the lead',
   askLead: 'Ask the lead',
   askLeadInfoLabel: 'How requests work',
   askLeadInfo: 'These are requests, not commands. The lead decides each one and explains its decision; the answer appears here.',
@@ -177,7 +195,9 @@ export const en: Strings = {
   settings: {
     hint: 'Defaults apply to future runs. Runs already started keep their model and effort.',
     agents: 'Agents', presets: 'Presets', agent: 'Agent', enabled: 'Enabled', disabled: 'disabled',
-    agentDefault: 'Agent default', note: 'Note for the lead', presetName: 'New preset name', addPreset: 'Add preset',
+    agentDefault: 'Agent default', note: 'Note for the lead',
+    access: 'Access', accessSandbox: 'Sandbox', accessNetwork: 'Sandbox + network', accessFull: 'No sandbox',
+    accessHint: 'How far a Codex worker reaches beyond its folder. Network lets it install packages and use local servers; no sandbox lifts every limit. Answers and decisions stay read-only.', presetName: 'New preset name', addPreset: 'Add preset',
     presetsHint: 'A named choice of agent, model and effort for the lead. Turn a preset off to hide it from assignments.',
     save: 'Save changes', saving: 'Saving…', saved: 'Settings saved.', reload: 'Reload',
     conflict: 'The file changed on disk. Settings reloaded; apply your changes again.',
@@ -187,29 +207,38 @@ export const en: Strings = {
   effortNone: 'This agent takes no effort: it works with its model settings',
   effort: { none: 'No reasoning', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Maximum' },
   holdStopLabel: 'Emergency stop: press and hold',
-  holdStopHint: 'Hold: at once, without the lead',
+  holdStopHint: 'Hold for 1 s (or Space/Enter)',
+  holdStopBranch: 'Stops the entire branch, without the lead’s decision',
+  holdStopping: 'Stopping…',
   holdStopped: 'Stopped',
-  holdStoppedHint: 'The run was interrupted, the lead gets an event',
+  holdStoppedHint: 'The branch stopped; the lead gets an event',
   actionVerb: { clarify: 'clarify', stop: 'stop', handoff: 'hand over', start_now: 'start sooner', cancel: 'cancel', reopen: 'reopen', revive: 'bring back', discuss: 'discuss' },
   emergencyStop: 'Emergency stop',
-  leadAwayHint: 'The lead is offline: there may be no answer to a request; the emergency stop works now.',
+  leadAwayHint: 'The lead is offline. Return to the lead’s chat to continue the conversation.',
   actions: 'Actions',
   actionText: 'What to tell the lead',
   actionSend: 'Send',
   handoffTo: 'Hand over to',
   handoffCurrent: 'now',
   handoffSame: 'Pick another model or effort',
+  requestOffline: 'Request saved; the lead is offline',
+  withdrawRequest: 'Withdraw request',
+  withdrawConflict: 'The request has already been decided or withdrawn. The state has been refreshed.',
   requestPending: (verb) => `Requested: ${verb}. The lead is deciding`,
   requestDeclined: (reason) => `The lead declined: ${reason}`,
-  requestFailed: 'The request was not sent. Check the connection and try again.',
-  discussCopied: 'Message for the lead copied',
+  requestFailed: 'The request was not sent. Try again.',
+  requestConflict: 'This assignment already has a request in progress. Your text is saved.',
+  stopConflict: 'The branch state changed. The stop is not confirmed.',
+  refreshFailed: 'Sent, but the screen could not refresh. Reload the page; do not send again.',
+  discussCopied: 'Copied',
   discussPrompt: (title, goalId, id) => `Let's discuss the assignment "${title}" (${goalId}/${id}): `,
   feed: {
+    loadFailed: 'Could not load feed steps.',
     label: 'Run feed',
     expand: 'Expand the feed',
     collapse: 'Collapse the feed',
     steps: (n) => `${n} ${s(n, 'step', 'steps')}`,
-    silent: (min) => `silent for ${min} min`,
+    silent: (min) => `No new events for ${min} min`,
     context: (pct) => `Context ${pct}% used`,
     fold: {
       commands: (n) => `${n} ${s(n, 'command', 'commands')}`,

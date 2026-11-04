@@ -67,7 +67,7 @@ export function createLeadCommands(projectOf: (path: string) => Promise<ProjectC
         const assignmentId = `a-${id(3)}`
         await ctx.store.append(i.goalId, {
           type: 'assigned', goalId: i.goalId, assignmentId, actor: 'lead', parentId, title: i.title, criteria: i.criteria, resultKind: i.resultKind, provider, after: i.after ?? [],
-          ...(model ? { model } : {}), ...(effort !== undefined ? { effort } : {}), ...(i.quote ? { quote: i.quote } : {}),
+          ...(model ? { model } : {}), ...(effort !== undefined ? { effort } : {}), ...(preset?.access ? { access: preset.access } : {}), ...(i.quote ? { quote: i.quote } : {}),
         })
         await ctx.supervisor.tick()
         return { assignmentId }

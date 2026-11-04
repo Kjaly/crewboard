@@ -2,6 +2,34 @@
 
 All notable changes to Crewboard are documented here. This changelog follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-11-04
+
+Researched and built through Crewboard: four Codex researchers reviewed the screen from different sides, Codex workers built the fixes in their branches, and Claude Code led, reviewed and merged.
+
+### Added
+
+- **Sandbox access per Codex preset.** A preset takes `access`: `network` lets the worker reach the network and loopback (installs, Storybook, local databases), `full` runs it without the sandbox. Read-only answers stay read-only whatever the preset says. The settings tab picks it for Codex presets.
+- **A setup command per project, run by the host.** `projects` in `agents.json` maps a repository's absolute path to a `setup` command (for example `pnpm install`). Crewboard runs it in each new worktree before the worker starts, outside the worker's sandbox, and the screen says the copy is being prepared. If it fails, the lead hears why once, and the next launch tries again.
+- **The whole life of an owner request.** You can withdraw a request until the lead decides. If an accepted request fails, you see it and the lead gets it in the inbox. The assignment panel lists past requests, decisions, outcomes and handovers. When the lead is not connected, the screen says the request is saved.
+- **Announcements for screen readers**: a new question, finished work, and a decision on your request.
+- **Hints for keyboard shortcuts**, shown in the interface and given to assistive technology.
+
+### Changed
+
+- **Actions confirm only what happened.** Stop reads "Stopping…" until the server confirms. Discuss reports separately whether the lead was notified and whether the text was copied. If copying fails, it offers the text to copy by hand. A conflict keeps your text and says what changed. Server errors are shown as the server wrote them.
+- **Shortcuts do what clicks do.** "Waiting for you" opens the question from any tab.
+- **The question comes first** in the context panel, and all answer options carry the same weight.
+- **Higher contrast**: secondary text is at least 4.5:1, and counts on orange in the dark theme are 7:1. Orange marks only what needs your attention. The active tab has a marker.
+- **The mobile panel is a dialog**: focus stays inside, Esc closes it, and focus returns where you were.
+
+### Fixed
+
+- Drafts survive refreshes and switching between assignments.
+- A selected assignment that finishes stays in the tree.
+- The live feed does not collapse while you read it.
+- Analytics and History show an error with **Retry** instead of an empty page.
+- The screen keeps refreshing when one of its requests fails.
+
 ## [1.3.0] - 2026-11-03
 
 Researched and built through Crewboard: Codex researchers compared the code, the provider APIs and eleven other tools; Codex workers built it in their branches; Claude Code led, reviewed and merged.

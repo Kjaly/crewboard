@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { access } from 'node:fs/promises'
+import { access, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { buildTree, flatten, isSettled, isTerminal } from './model/project.js'
@@ -28,6 +28,62 @@ export const gitWorktree: WorktreeFn = async (repo, assignmentId, title) => {
   const exists = await access(path).then(() => true, () => false)
   if (!exists) await run('git', ['-C', repo, 'worktree', 'add', '-q', '-b', `crewboard/${assignmentId}-${slug(title)}`, path])
   return path
+}
+
+/** ws1: the worktree's setup command is still running on the host; the work stays queued. `started`: this call began it. */
+export class WorktreePreparing extends Error {
+  constructor(
+    readonly command: string,
+    readonly started: boolean,
+  ) {
+    super(`preparing the worktree: ${command}`)
+    this.name = 'WorktreePreparing'
+  }
+}
+
+const SETUP_TIMEOUT_MS = 15 * 60_000
+
+const runSetup = async (command: string, cwd: string): Promise<void> => {
+  try {
+    await run('/bin/sh', ['-c', command], { cwd, timeout: SETUP_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 })
+  } catch (error) {
+    const e = error as { stderr?: string; stdout?: string; message?: string; killed?: boolean }
+    const output = (e.stderr?.trim() || e.stdout?.trim() || e.message || String(error)).slice(-600)
+    throw new Error(`worktree setup failed (${command}): ${e.killed ? 'timed out' : output}`)
+  }
+}
+
+/**
+ * ws1: run the owner's setup command on the host, outside any worker sandbox, in a new worktree before its first
+ * run. It runs in the background so the lead is never blocked; `<worktree>.setup` records the command that
+ * succeeded, so a changed command runs again and a reused worktree does not.
+ */
+export function withSetup(worktree: WorktreeFn, setupOf: (repo: string) => Promise<string | undefined>): WorktreeFn {
+  const jobs = new Map<string, { done: boolean; error?: Error }>()
+  return async (repo, assignmentId, title) => {
+    const path = await worktree(repo, assignmentId, title)
+    const command = (await setupOf(repo))?.trim()
+    if (!command) return path
+    const marker = `${path}.setup`
+    if ((await readFile(marker, 'utf8').catch(() => undefined)) === command) return path
+    const job = jobs.get(path)
+    if (!job) {
+      const started: { done: boolean; error?: Error } = { done: false }
+      jobs.set(path, started)
+      void runSetup(command, path)
+        .then(() => writeFile(marker, command))
+        .then(
+          () => { started.done = true },
+          (error: unknown) => { started.done = true; started.error = error instanceof Error ? error : new Error(String(error)) },
+        )
+      throw new WorktreePreparing(command, true)
+    }
+    if (!job.done) throw new WorktreePreparing(command, false)
+    // A failure is reported once; the next launch (a steer or a reopen) runs the command again.
+    jobs.delete(path)
+    if (job.error) throw job.error
+    return path
+  }
 }
 
 type Live = { goalId: string; node: AssignmentView; own: GoalEvent[] }
@@ -84,8 +140,16 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
       validateEffort(registered, effort, model)
       cwd = await cwdOf()
       // An answer or a decision changes no files: the backend enforces it where it can, the prompt says it everywhere.
-      runId = await o.pool.launch({ agent, cwd, prompt, model, ...(effort !== undefined ? { effort } : {}), readOnly: node.resultKind === 'answer' || node.resultKind === 'decision' })
+      const readOnly = node.resultKind === 'answer' || node.resultKind === 'decision'
+      // ac1: the access the owner's preset granted belongs to the assignment and survives a handoff; read-only work keeps none.
+      const access = readOnly ? undefined : own.find((e): e is EventOf<'assigned'> => e.type === 'assigned')?.access
+      runId = await o.pool.launch({ agent, cwd, prompt, model, ...(effort !== undefined ? { effort } : {}), readOnly, ...(access ? { access } : {}) })
     } catch (error) {
+      // ws1: the worktree is still being prepared; the next tick tries again. The owner sees it once.
+      if (error instanceof WorktreePreparing) {
+        if (error.started) await append(goalId, { type: 'progress', goalId, assignmentId: node.id, actor: 'system', text: `Preparing the worktree: ${error.command}`, code: 'worktree_setup', detail: error.command })
+        return
+      }
       // A launch the backend refuses (no CLI, no key, policy) is a run that failed at once: recorded, told to the
       // lead through the inbox, and not retried by the next tick. The lead decides: steer to retry, or cancel.
       const failed = `not-started-${Date.now().toString(36)}`
@@ -271,7 +335,7 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
         await append(goalId, { type: 'run_ended', goalId, assignmentId, actor: 'system', runId: live.runId, outcome: 'cancelled', reason: 'handed over to another worker' })
       }
       const from = node.provider
-      await append(goalId, { type: 'reassigned', goalId, assignmentId, actor: 'lead', provider, ...(model ? { model } : {}), ...(effort !== undefined ? { effort } : {}) })
+      await append(goalId, { type: 'reassigned', goalId, assignmentId, actor: 'lead', provider, resolvedModel: model ?? agent.model, ...(model ? { model } : {}), ...(effort !== undefined ? { effort } : {}) })
       if (node.status === 'queued') return
       const now = [model, effort].filter(Boolean).join(', ')
       await this_.deliver(goalId, assignmentId, from === provider ? `Continue this work where it stopped${now ? `, now with ${now}` : ''}.` : `This work was handed to you from ${from}. Continue where it stopped.`)

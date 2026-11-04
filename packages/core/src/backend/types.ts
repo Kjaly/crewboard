@@ -5,7 +5,10 @@ import type { RawEvent } from '../runs/raw-event.js'
  * `readOnly`: the worker may read `cwd` but not change it (a draft, dr2); only a backend with `readOnlyLaunch` honours it.
  * `effort` (ef1): the CLI's effort level; absent — the CLI's default. dsh and Devin take none and ignore it.
  */
-export type LaunchInput = { agent: string; promptFile: string; cwd: string; model?: string; effort?: string; readOnly?: boolean }
+/** How far a worker's sandbox reaches beyond `cwd` (ac1): `network` adds the network, `full` lifts the sandbox. Owner-chosen. */
+export const WORKER_ACCESS = ['network', 'full'] as const
+export type WorkerAccess = (typeof WORKER_ACCESS)[number]
+export type LaunchInput = { agent: string; promptFile: string; cwd: string; model?: string; effort?: string; readOnly?: boolean; access?: WorkerAccess }
 
 export type RunUsage = {
   sessionId?: string

@@ -87,6 +87,7 @@ export function fakeApi(init: { projects?: ProjectSummary[]; tree?: AssignmentVi
       await new Promise((r) => setTimeout(r, 20))
       return 'ok'
     },
+    async withdrawRequest() { return 'ok' },
     async emergencyStop(_p, _g, id) {
       state.stops.push(id)
       return 'ok'

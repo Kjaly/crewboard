@@ -21,11 +21,11 @@ async function setup() {
 describe('provider usage', () => {
   it('reads the Codex plan limits from the newest session and the Claude limits the status line logged', async () => {
     const { sessions, env } = await setup()
-    const limits = { primary: { used_percent: 13, window_minutes: 10080, resets_at: 1794261121 }, secondary: null, credits: { has_credits: true, unlimited: false, balance: '23174.86' }, plan_type: 'pro', rate_limit_reached_type: null }
+    const limits = { primary: { used_percent: 13, window_minutes: 10080, resets_at: 4102444800 }, secondary: null, credits: { has_credits: true, unlimited: false, balance: '23174.86' }, plan_type: 'pro', rate_limit_reached_type: null }
     await writeFile(join(sessions, 'rollout-a.jsonl'), `{"type":"session_meta"}\n${JSON.stringify({ timestamp: '2026-11-03T11:17:12.689Z', payload: { type: 'token_count', rate_limits: limits } })}\n`)
-    await writeFile(env.CREWBOARD_CLAUDE_LIMITS!, `${JSON.stringify({ ts: '2026-11-03T10:00:00Z', five_hour: 12, seven_day: 40, five_hour_resets_at: '2026-11-03T15:00:00Z', seven_day_resets_at: 1794261121 })}\n`)
+    await writeFile(env.CREWBOARD_CLAUDE_LIMITS!, `${JSON.stringify({ ts: '2026-11-03T10:00:00Z', five_hour: 12, seven_day: 40, five_hour_resets_at: '2100-01-01T05:00:00Z', seven_day_resets_at: 4102444800 })}\n`)
     const [claude, codex] = await readUsage({ env, agents: [...BUILTIN_AGENTS].filter((a) => a.id !== 'deepseek'), claudeCredentials: signedOut })
-    expect(claude).toMatchObject({ id: 'claude', state: 'ok', windows: [{ minutes: 300, usedPercent: 12, resetsAt: '2026-11-03T15:00:00.000Z' }, { minutes: 10080, usedPercent: 40 }] })
+    expect(claude).toMatchObject({ id: 'claude', state: 'ok', windows: [{ minutes: 300, usedPercent: 12, resetsAt: '2100-01-01T05:00:00.000Z' }, { minutes: 10080, usedPercent: 40 }] })
     expect(codex).toMatchObject({ id: 'codex', state: 'ok', plan: 'pro', windows: [{ minutes: 10080, usedPercent: 13 }], balances: [{ currency: 'credits', amount: 23174.86 }], at: '2026-11-03T11:17:12.689Z' })
   })
 
@@ -86,13 +86,13 @@ describe('provider usage', () => {
 describe('crewboard statusline', () => {
   it('logs the limits Claude Code sends once per change, and the panel reads them back', async () => {
     const { env, dir } = await setup()
-    const payload = JSON.stringify({ model: { display_name: 'Opus' }, rate_limits: { five_hour: { used_percentage: 21.4, resets_at: 1794261121 }, seven_day: { used_percentage: 55, resets_at: '2026-11-07T09:00:00Z' } } })
+    const payload = JSON.stringify({ model: { display_name: 'Opus' }, rate_limits: { five_hour: { used_percentage: 21.4, resets_at: 4102444800 }, seven_day: { used_percentage: 55, resets_at: '2100-01-07T09:00:00Z' } } })
     expect(await statusline(payload, env, dir)).toBe('Opus · 5h 21% · week 55%')
     await statusline(payload, env, dir)
     expect((await readFile(env.CREWBOARD_CLAUDE_LIMITS!, 'utf8')).trim().split('\n')).toHaveLength(1)
     // An unwritable log never breaks Claude Code's status line.
     expect(await statusline(payload, { ...env, CREWBOARD_CLAUDE_LIMITS: '/dev/null/limits.jsonl' }, dir)).toBe('Opus · 5h 21% · week 55%')
     const [claude] = await readUsage({ env, agents: [...BUILTIN_AGENTS].filter((a) => a.id === 'claude'), home: dir, claudeCredentials: signedOut })
-    expect(claude).toMatchObject({ state: 'ok', windows: [{ minutes: 300, usedPercent: 21.4 }, { minutes: 10080, usedPercent: 55, resetsAt: '2026-11-07T09:00:00.000Z' }] })
+    expect(claude).toMatchObject({ state: 'ok', windows: [{ minutes: 300, usedPercent: 21.4 }, { minutes: 10080, usedPercent: 55, resetsAt: '2100-01-07T09:00:00.000Z' }] })
   })
 })

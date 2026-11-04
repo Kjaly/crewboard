@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CaretRight } from '../icons.js'
 import type { AssignmentView, Status } from '../../model/types.js'
 import { T } from '../text.js'
@@ -22,9 +22,24 @@ export function visibleOrder(root: AssignmentView, open: ReadonlySet<string>): A
   return out
 }
 
-export function Tree(props: { api: Api; project: string; root: AssignmentView; selectedId: string; onSelect: (id: string) => void; open: ReadonlySet<string>; onToggle: (id: string) => void; onShortcut?: (key: string) => void; leadClient?: string }) {
+export function Tree(props: { api: Api; project: string; root: AssignmentView; selectedId: string; onSelect: (id: string) => void; onNavigate?: (id: string) => void; open: ReadonlySet<string>; onToggle: (id: string) => void; onShortcut?: (key: string) => void; leadClient?: string }) {
   const { selectedId, onSelect, open, onToggle } = props
   const box = useRef<HTMLDivElement>(null)
+  const [focusedId, setFocusedId] = useState<string>()
+  const [reading, setReading] = useState<{ selection: string; ids: ReadonlySet<string> }>({ selection: selectedId, ids: new Set() })
+  const retainFeed = (id: string) => setReading((have) => {
+    if (have.selection === selectedId && have.ids.has(id)) return have
+    return { selection: selectedId, ids: new Set([...(have.selection === selectedId ? have.ids : []), id]) }
+  })
+  const shown = new Set(open)
+  const reveal = (n: AssignmentView): boolean => {
+    const children = n.children.map((child) => ({ child, pinned: reveal(child) }))
+    if (children.some(({ child, pinned }) => pinned && FINISHED.has(child.status))) shown.add(n.id)
+    return children.some(({ pinned }) => pinned) || n.id === selectedId || n.id === focusedId || (reading.selection === selectedId && reading.ids.has(n.id))
+  }
+  reveal(props.root)
+  const order = visibleOrder(props.root, shown)
+  const tabId = order.some((n) => n.id === selectedId) ? selectedId : props.root.id
   // A feed stays after its run ends (folded to a summary), so remember which runs were seen running.
   const fed = useRef(new Map<string, string>())
   // Arrow keys move the selection only while the tree has focus; focus follows the selected row.
@@ -36,12 +51,11 @@ export function Tree(props: { api: Api; project: string; root: AssignmentView; s
       return props.onShortcut?.(shortcut)
     }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
-    const order = visibleOrder(props.root, open)
     const i = order.findIndex((n) => n.id === selectedId)
     const next = order[Math.max(0, Math.min(order.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)))]
     if (!next) return
     e.preventDefault()
-    onSelect(next.id)
+    ;(props.onNavigate ?? onSelect)(next.id)
   }
   useEffect(() => {
     const el = box.current
@@ -55,7 +69,8 @@ export function Tree(props: { api: Api; project: string; root: AssignmentView; s
       role="treeitem"
       data-id={n.id}
       aria-selected={selectedId === n.id}
-      tabIndex={selectedId === n.id ? 0 : -1}
+      tabIndex={tabId === n.id ? 0 : -1}
+      onFocus={() => setFocusedId(n.id)}
       className={`n press ${n.parentId === null ? 'root' : ''} ${n.status === 'waiting_owner' ? 'ask' : ''} ${FINISHED.has(n.status) ? (n.status === 'done' ? 'done' : 'cancel') : ''}`}
       onClick={() => onSelect(n.id)}
     >
@@ -71,36 +86,38 @@ export function Tree(props: { api: Api; project: string; root: AssignmentView; s
     if (n.runId && n.runOpen) fed.current.set(n.id, n.runId)
     const runId = n.runId
     if (!runId || fed.current.get(n.id) !== runId) return null
-    return <RunFeed key={runId} api={props.api} project={props.project} assignmentId={n.id} runId={runId} running={n.runOpen === true} />
+    return <RunFeed key={runId} api={props.api} project={props.project} assignmentId={n.id} runId={runId} running={n.runOpen === true} onRead={() => retainFeed(n.id)} />
   }
   const branch = (n: AssignmentView): React.ReactNode => {
     const kids = [...n.children].sort((a, b) => ORDER[a.status] - ORDER[b.status])
     const active = kids.filter((k) => !FINISHED.has(k.status))
     const finished = kids.filter((k) => FINISHED.has(k.status))
-    const isOpen = open.has(n.id)
+    const isOpen = shown.has(n.id)
     return (
       <div key={n.id}>
         {row(n)}
         {feed(n)}
         {kids.length > 0 && (
           <div className="kids">
-            {active.map(branch)}
-            {finished.length > 0 && (
-              <>
-                <button type="button" className="fold press" aria-expanded={isOpen} onClick={() => onToggle(n.id)}>
+            {[
+              ...active.map(branch),
+              finished.length > 0 ? (
+                <button key="finished" type="button" className="fold press" aria-expanded={isOpen} onClick={() => onToggle(n.id)}>
                   <CaretRight size={12} aria-hidden="true" />
                   {T.finishedGroup(finished.length)}
                 </button>
-                {isOpen && finished.map(branch)}
-              </>
-            )}
+              ) : null,
+              ...(isOpen ? finished.map(branch) : []),
+            ]}
           </div>
         )}
       </div>
     )
   }
   return (
-    <div className="tree" role="tree" aria-label={T.tree} ref={box} onKeyDown={onKeyDown}>
+    <div className="tree" role="tree" aria-label={T.tree} ref={box} onKeyDown={onKeyDown} onBlur={(e) => {
+      if (!e.currentTarget.contains(e.relatedTarget)) setFocusedId(undefined)
+    }}>
       {branch(props.root)}
     </div>
   )

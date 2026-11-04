@@ -1,16 +1,19 @@
 import { z } from 'zod'
+import type { WorkerAccess } from '@crewboard/core'
 
 /** An agent's id from the registry (src/workers/agents.ts). Journals keep it in the `provider` field. */
 export type ProviderId = string
 export const RESULT_KINDS = ['local', 'branch', 'answer', 'decision'] as const
 export type ResultKind = (typeof RESULT_KINDS)[number]
+/** The screen bundles this file without core's runtime: the list is repeated here and checked against core's type. */
+const WORKER_ACCESS = ['network', 'full'] as const satisfies readonly WorkerAccess[]
 /** Never stored: always derived from the journal (model/project.ts). `paused` belongs to a goal's root alone. */
 export type Status = 'queued' | 'running' | 'waiting_answer' | 'waiting_owner' | 'reported' | 'done' | 'cancelled' | 'abandoned' | 'paused'
 export type Actor = 'lead' | 'owner' | 'worker' | 'system'
 export const REQUEST_ACTIONS = ['clarify', 'stop', 'handoff', 'start_now', 'cancel', 'reopen', 'revive', 'discuss'] as const
 export type RequestAction = (typeof REQUEST_ACTIONS)[number]
 /** Texts Crewboard itself writes into a journal. Stored as a code, so the screen words them in the owner's language. */
-export const SYSTEM_TEXTS = ['emergency_stop', 'owner_stop', 'run_failed', 'parent_cancelled', 'no_report', 'split', 'split_truncated', 'split_registry', 'launch_registry'] as const
+export const SYSTEM_TEXTS = ['emergency_stop', 'owner_stop', 'run_failed', 'parent_cancelled', 'no_report', 'split', 'split_truncated', 'split_registry', 'launch_registry', 'worktree_setup'] as const
 export type SystemText = (typeof SYSTEM_TEXTS)[number]
 
 const base = {
@@ -34,6 +37,7 @@ export const goalEventSchema = z.discriminatedUnion('type', [
     provider: z.string().min(1),
     model: text.optional(),
     effort: text.optional(),
+    access: z.enum(WORKER_ACCESS).optional(),
     quote: text.optional(),
     after: z.array(z.string()),
   }),
@@ -59,7 +63,10 @@ export const goalEventSchema = z.discriminatedUnion('type', [
   z.object({ ...base, type: z.literal('adopted'), note: text.optional(), client: text.optional() }),
   z.object({ ...base, type: z.literal('owner_requested'), requestId: text, action: z.enum(REQUEST_ACTIONS), text: text.optional(), provider: z.string().min(1).optional(), model: text.optional(), effort: text.nullable().optional() }),
   z.object({ ...base, type: z.literal('request_decided'), requestId: text, decision: z.enum(['accepted', 'declined']), reason: text.optional() }),
-  z.object({ ...base, type: z.literal('reassigned'), provider: z.string().min(1), model: text.optional(), effort: text.optional() }),
+  z.object({ ...base, type: z.literal('request_completed'), requestId: text, outcome: z.enum(['succeeded', 'failed']), reason: text.optional() }),
+  z.object({ ...base, type: z.literal('request_withdrawn'), requestId: text }),
+  // model remains an assignment override; resolvedModel is the handoff-time snapshot for history.
+  z.object({ ...base, type: z.literal('reassigned'), provider: z.string().min(1), model: text.optional(), resolvedModel: text.optional(), effort: text.optional() }),
   z.object({ ...base, type: z.literal('unblocked') }),
   z.object({ ...base, type: z.literal('reopened'), note: text }),
 ])
@@ -94,8 +101,8 @@ export type AssignmentView = {
   runOpen?: boolean
   agent?: string
   cwd?: string
-  /** The owner's latest request while it waits for the lead, or after the lead declined it. */
-  request?: { id: string; action: RequestAction; text?: string; provider?: ProviderId; model?: string; effort?: string | null; state: 'pending' | 'declined'; reason?: string }
+  /** The owner's latest request while pending, declined, or failed during execution. */
+  request?: { id: string; action: RequestAction; text?: string; provider?: ProviderId; model?: string; effort?: string | null; state: 'pending' | 'declined' | 'failed'; ts?: string; reason?: string }
   /** Every change of worker, oldest first: the work's continuity across providers. */
   handoffs: Array<{ from: ProviderId; to: ProviderId }>
   /** An ancestor is finished (done, cancelled, abandoned): the work cannot be brought back from here. */

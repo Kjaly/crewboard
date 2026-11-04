@@ -9,7 +9,7 @@ import { Avatar, StatusBadge } from './badges.js'
 const time = (iso: string) => (iso ? new Date(iso).toLocaleString(T.locale, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) : '')
 
 /** The conversation with the lead as a ribbon; assignments appear as cards where they were handed out. */
-export function HistoryView(props: { history: GoalHistory | undefined; tree: AssignmentView; onOpenNode: (id: string) => void; focusAssignment?: string; onFocused: () => void }) {
+export function HistoryView(props: { failed?: boolean; onRetry?: () => void; history: GoalHistory | undefined; tree: AssignmentView; onOpenNode: (id: string) => void; focusAssignment?: string; onFocused: () => void }) {
   const { history, tree } = props
   const box = useRef<HTMLDivElement>(null)
   const byId = new Map(flatten(tree).map((n) => [n.id, n]))
@@ -27,6 +27,7 @@ export function HistoryView(props: { history: GoalHistory | undefined; tree: Ass
     return () => clearTimeout(off)
   }, [props.focusAssignment, history, props.onFocused])
 
+  if (props.failed) return <div role="alert"><p>{T.loadFailed}</p><button type="button" className="btn press" onClick={props.onRetry}>{T.retry}</button></div>
   if (!history) return <p className="hint">{T.loading}</p>
   if (!history.available) {
     const quotes = flatten(tree).filter((n) => n.quote)

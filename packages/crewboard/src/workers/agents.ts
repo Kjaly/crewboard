@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
-import { type Backend, EFFORT_LEVELS } from '@crewboard/core'
+import { type Backend, EFFORT_LEVELS, WORKER_ACCESS } from '@crewboard/core'
 import { writeJsonAtomic, writeTextAtomic } from '../store/atomic.js'
 import { ConflictError } from '../owner.js'
 import { crewboardHome } from '../store/paths.js'
@@ -78,7 +78,8 @@ export const BUILTIN_AGENTS: readonly AgentEntry[] = [
   entry('deepseek', 'DeepSeek', 'dsh', 'deepseek-flash'),
 ]
 
-const presetSchema = z.object({ agent: z.string().min(1), model: z.string().min(1).optional(), effort: z.string().min(1).optional(), note: z.string().optional() }).strict()
+/** `access` (ac1): how far the worker's sandbox reaches; only the owner sets it, the lead picks the preset. */
+const presetSchema = z.object({ agent: z.string().min(1), model: z.string().min(1).optional(), effort: z.string().min(1).optional(), access: z.enum(WORKER_ACCESS).optional(), note: z.string().optional() }).strict()
 export type AgentPreset = z.infer<typeof presetSchema>
 export const BUILTIN_PRESETS: Readonly<Record<string, AgentPreset>> = {
   cheap: { agent: 'deepseek' },
@@ -103,6 +104,11 @@ export const agentsConfigSchema = z.object({
     }).strict(),
   ).default({}),
   presets: z.record(z.string().regex(/^[a-z0-9][a-z0-9._-]*$/i), z.union([presetSchema, z.literal(false)])).optional(),
+  /**
+   * ws1: per repository (absolute path), a shell command Crewboard runs on the host in each new branch worktree before
+   * its worker starts, e.g. `pnpm install --frozen-lockfile --prefer-offline`. Owner-only: a repository cannot set it.
+   */
+  projects: z.record(z.string().refine(isAbsolute, 'a project is an absolute repository path'), z.object({ setup: z.string().trim().min(1).optional() }).strict()).optional(),
 }).strict()
 export type AgentsConfig = z.infer<typeof agentsConfigSchema>
 export type AgentsConfigView = { revision: string; config: AgentsConfig; builtinPresets: Readonly<Record<string, AgentPreset>>; agents: Array<AgentEntry & { efforts: readonly string[] }>; presets: Record<string, AgentPreset | false> }
@@ -124,6 +130,8 @@ export type Agents = {
   get(id: string): Promise<AgentEntry | undefined>
   all(): Promise<AgentEntry[]>
   presets(): Promise<Record<string, AgentPreset>>
+  /** ws1: the owner's setup command for a repository's new worktrees, if any. */
+  setupFor?(repo: string): Promise<string | undefined>
   /** The id core's backends run: `<run>/<model>`; a dsh model may itself be `<provider>/<model>`. */
   coreId(agent: AgentEntry, model?: string): string
 }
@@ -214,6 +222,7 @@ export function createAgents(env: NodeJS.ProcessEnv): Agents & { config(): Promi
     list: async () => (await all()).filter((a) => a.enabled),
     get: async (id) => (await all()).find((a) => a.id === id && a.enabled),
     presets: async () => Object.fromEntries(Object.entries((await config()).presets).filter((e): e is [string, AgentPreset] => e[1] !== false)),
+    setupFor: async (repo) => (await config()).config.projects?.[repo]?.setup,
     coreId,
   }
 }

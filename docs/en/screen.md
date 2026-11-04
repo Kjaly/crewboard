@@ -71,6 +71,8 @@ Under **Ask the lead**, each action is a row with what it does. They are request
 | Bring back | it was cancelled or abandoned, and its parent is not finished |
 | Discuss in the lead's chat | always |
 
+Before the lead decides, use **Withdraw request** in the waiting line to take the request back. The line shows its content and sending time; when the lead is offline, the request stays saved and the screen points you back to the lead’s chat. The context history keeps requests, decisions, execution results or failure reasons, and withdrawals. Handoffs show who passed work to whom and the model. Failures and withdrawals also reach the lead’s inbox.
+
 **Clarify the task**, **Reopen** and **Bring back** open a text field in place: **⌘/Ctrl Enter** sends, **Esc** closes.
 
 **Hand over to another agent** lists the agent doing the work first, marked **now**, to move it to another model or effort, then every other agent from the [registry](workers.md#your-agents), each with its logo and a chip showing the model and effort it will get. The chip opens a card next to it: the agent's models (the default marked, keys **1–9**, or any other model by name) and its effort levels as a stepped meter, or a note when the agent takes no effort. **Reset** restores the initial picker values. **Default** in the effort section removes the assignment override and uses the agent default, or the CLI default when the agent has none. This works for the same agent too. An accepted handoff of queued work changes the assignment without launching it; dependencies stay in place.

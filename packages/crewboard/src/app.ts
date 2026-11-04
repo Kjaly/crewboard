@@ -14,13 +14,13 @@ import { type AgentReadiness, checkAgents } from './doctor.js'
 import { type ProviderUsage, readUsage } from './usage.js'
 import { type Exec, nodeExec } from '@crewboard/core'
 import { BadRequestError, ConflictError, answerAsOwner, goalTree, nodeEvents, summarize } from './owner.js'
-import { emergencyStop, requestAsOwner } from './requests.js'
+import { emergencyStop, requestAsOwner, withdrawRequest } from './requests.js'
 import { createHttpServer } from './server.js'
 import { type EventStore, createEventStore } from './store/event-store.js'
 import { createInbox } from './store/inbox.js'
 import { runsDir } from './store/paths.js'
 import { createRegistry } from './store/registry.js'
-import { type Supervisor, createSupervisor, gitWorktree } from './supervisor.js'
+import { type Supervisor, createSupervisor, gitWorktree, withSetup } from './supervisor.js'
 import { type BackendFor, createPool } from './workers/pool.js'
 import { createStepsReader } from './workers/steps.js'
 
@@ -106,7 +106,7 @@ export function createApp(o: { env: NodeJS.ProcessEnv; backendFor: (repo: string
         repo,
         store,
         inbox: createInbox(store, clock),
-        supervisor: createSupervisor({ repo, store, pool, now, worktree: gitWorktree, agents }),
+        supervisor: createSupervisor({ repo, store, pool, now, worktree: withSetup(gitWorktree, async (r) => agents.setupFor?.(r)), agents }),
         agents,
         steps: createStepsReader(store, o.backendFor(repo)),
         exclusive(fn) {
@@ -223,6 +223,10 @@ export function createApp(o: { env: NodeJS.ProcessEnv; backendFor: (repo: string
         ...(body.model !== undefined ? { model: str(body.model, 'model') } : {}),
         ...(body.effort !== undefined ? { effort: body.effort === null ? null : str(body.effort, 'effort') } : {}),
       }, now())
+    },
+    async withdrawRequest(body) {
+      const ctx = await projectOf(str(body.project, 'project'))
+      await withdrawRequest(ctx, { goalId: str(body.goalId, 'goalId'), assignmentId: str(body.assignmentId, 'assignmentId'), requestId: str(body.requestId, 'requestId') }, now())
     },
     async emergencyStop(body) {
       const ctx = await projectOf(str(body.project, 'project'))

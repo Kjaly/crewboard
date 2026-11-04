@@ -155,7 +155,7 @@ export function createCliBackend(o: CliBackendOptions): RunBackend {
   return {
     id: o.kind,
     readOnlyLaunch: o.readOnlyLaunch ?? true,
-    async launch({ agent, promptFile, cwd, model: configuredModel, effort: configuredEffort, readOnly }: LaunchInput) {
+    async launch({ agent, promptFile, cwd, model: configuredModel, effort: configuredEffort, readOnly, access }: LaunchInput) {
       const runId = `run_${o.kind}-${Date.now().toString(36)}${suffix()}`
       const runDir = dirOf(runId)
       await mkdir(join(runDir, 'mailbox'), { recursive: true })
@@ -184,6 +184,7 @@ export function createCliBackend(o: CliBackendOptions): RunBackend {
         ...(model ? { model } : {}),
         ...(effort ? { effort } : {}),
         ...(readOnly ? { readOnly: true } : {}),
+        ...(access && !readOnly ? { access } : {}),
         ...guard,
         ...(orchestratorCommits(await readFile(promptFile, 'utf8').catch(() => '')) ? { commitRequired: false } : {}),
       }

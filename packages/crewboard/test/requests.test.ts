@@ -1,8 +1,22 @@
-import { writeFile } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import type { ProjectContext } from '../src/app.js'
+import { createLeadCommands } from '../src/lead/commands.js'
+import { flatten } from '../src/model/project.js'
+import { ConflictError, goalTree } from '../src/owner.js'
+import * as requests from '../src/requests.js'
+import { createEventStore } from '../src/store/event-store.js'
+import { createInbox } from '../src/store/inbox.js'
+import { runsDir } from '../src/store/paths.js'
+import { createSupervisor } from '../src/supervisor.js'
+import { builtinAgents } from '../src/workers/agents.js'
+import { createPool } from '../src/workers/pool.js'
+import { createStepsReader } from '../src/workers/steps.js'
+import { createFakeBackend } from './fake-backend.js'
 import { afterEach, describe, expect, it } from 'vitest'
 import { LEAD_OFFLINE_MS } from '../src/model/thresholds.js'
-import type { AssignmentView, GoalEvent } from '../src/model/types.js'
+import type { AssignmentView, GoalEvent, RequestAction } from '../src/model/types.js'
 import { startApp } from './helpers.js'
 
 const running: Array<{ close(): Promise<void> }> = []
@@ -168,5 +182,80 @@ describe('owner requests decided by the lead', () => {
     await fetch(`${t.server.url}/api/lead/wait?project=${encodeURIComponent(t.project)}&timeoutMs=1`)
     const projects = (await (await fetch(`${t.server.url}/api/projects`)).json()) as Array<{ goals: Array<{ leadOnline: boolean }> }>
     expect(projects[0]!.goals[0]!.leadOnline).toBe(true)
+  })
+})
+
+/** The request lifecycle without HTTP: a real journal, projection, inbox and supervisor. */
+async function localRequest(action: Exclude<RequestAction, 'discuss'> = 'clarify') {
+  const repo = await mkdtemp(join(tmpdir(), 'cb-request-'))
+  const store = createEventStore(repo)
+  const fake = createFakeBackend()
+  fake.setFallback({ hold: true })
+  const backendFor = async () => fake.backend
+  const pool = createPool({ backendFor, runsDir: runsDir(repo), repo })
+  const supervisor = createSupervisor({ repo, store, pool, now: () => new Date(), worktree: async () => repo })
+  let chain: Promise<unknown> = Promise.resolve()
+  const ctx: ProjectContext = {
+    repo, store, supervisor, agents: builtinAgents, inbox: createInbox(store), steps: createStepsReader(store, backendFor),
+    exclusive(fn) {
+      const next = chain.then(() => fn(ctx))
+      chain = next.catch(() => undefined)
+      return next
+    },
+    register: async () => {}, tickOnce: () => supervisor.tick(),
+  }
+  const commands = createLeadCommands(async () => ctx, () => new Date())
+  const { goalId } = await commands.startGoal({ project: repo, title: 'Request lifecycle', criteria: [] })
+  const { assignmentId: blocker } = await commands.assign({ project: repo, goalId, title: 'Blocker', criteria: [], resultKind: 'local', provider: 'codex' })
+  const { assignmentId } = await commands.assign({ project: repo, goalId, title: 'Work', criteria: [], resultKind: 'local', provider: 'codex', ...(action === 'start_now' || action === 'cancel' ? { after: [blocker] } : {}) })
+  const at = { goalId, assignmentId }
+  if (action === 'reopen') await commands.close({ project: repo, ...at, summary: 'Done' })
+  if (action === 'revive') await commands.cancel({ project: repo, ...at, reason: 'Stopped' })
+  const { requestId } = await requests.requestAsOwner(ctx, { ...at, action, text: 'Keep the handle', ...(action === 'handoff' ? { provider: 'claude', model: 'opus' } : {}) }, new Date())
+  const decide = (decision: 'accepted' | 'declined' = 'accepted') => commands.decideRequest({ project: repo, ...at, requestId, decision, reason: 'Keep working' })
+  const withdraw = () => requests.withdrawRequest(ctx, { ...at, requestId }, new Date())
+  const node = async () => flatten(await goalTree(ctx, goalId, new Date())).find((n) => n.id === assignmentId)!
+  return { ctx, fake, at, requestId, decide, withdraw, node }
+}
+
+describe('request lifecycle without HTTP', () => {
+  it.each(['clarify', 'stop', 'cancel', 'handoff', 'start_now', 'reopen', 'revive'] as const)('records a failed accepted %s for the owner and the lead', async (action) => {
+    const t = await localRequest(action)
+    if (action === 'clarify') t.fake.backend.steer = async () => { throw new Error('Worker unavailable; Bearer secret') }
+    else if (action === 'stop') t.fake.backend.cancel = async () => { throw new Error('Worker unavailable') }
+    else if (action === 'cancel') t.ctx.supervisor.cancelTree = async () => { throw new Error('Worker unavailable') }
+    else t.fake.script({ refuse: 'Worker unavailable' })
+    await expect(t.decide()).rejects.toThrow(/Worker unavailable/)
+    const events = await t.ctx.store.read(t.at.goalId)
+    expect(events).toContainEqual(expect.objectContaining({ type: 'request_decided', requestId: t.requestId, decision: 'accepted' }))
+    expect(events).toContainEqual(expect.objectContaining({ type: 'request_completed', requestId: t.requestId, outcome: 'failed', reason: expect.stringContaining('Worker unavailable') }))
+    expect((await t.node()).request).toMatchObject({ id: t.requestId, state: 'failed', reason: action === 'clarify' ? 'Worker unavailable; Bearer [redacted]' : 'Worker unavailable' })
+    expect(await t.ctx.inbox.pending()).toContainEqual(expect.objectContaining({ type: 'request_completed', requestId: t.requestId, outcome: 'failed' }))
+  })
+
+  it.each(['pending', 'accepted', 'recovered', 'declined'] as const)('allows withdrawal only before a decision (%s)', async (state) => {
+    const t = await localRequest()
+    if (state === 'recovered') t.fake.finish((await t.node()).runId!, { fail: 'old run failed' })
+    if (state !== 'pending') await t.decide(state === 'recovered' ? 'accepted' : state)
+    if (state === 'accepted' || state === 'recovered') {
+      expect(await t.ctx.store.read(t.at.goalId)).toContainEqual(expect.objectContaining({ type: 'request_completed', requestId: t.requestId, outcome: 'succeeded' }))
+    }
+    if (state === 'pending') {
+      await t.withdraw()
+      expect((await t.node()).request).toBeUndefined()
+      expect(await t.ctx.inbox.pending()).toContainEqual(expect.objectContaining({ type: 'request_withdrawn', requestId: t.requestId, actor: 'owner' }))
+      await expect(t.withdraw()).rejects.toBeInstanceOf(ConflictError)
+    } else {
+      await expect(t.withdraw()).rejects.toBeInstanceOf(ConflictError)
+      expect((await t.ctx.store.read(t.at.goalId)).some((e) => e.type === 'request_withdrawn')).toBe(false)
+    }
+  })
+
+  it.each(['accepted', 'declined'] as const)('refuses a %s decision after withdrawal without applying the action', async (decision) => {
+    const t = await localRequest()
+    await t.withdraw()
+    const before = await t.ctx.store.read(t.at.goalId)
+    await expect(t.decide(decision)).rejects.toThrow(/withdrawn/)
+    expect(await t.ctx.store.read(t.at.goalId)).toEqual(before)
   })
 })

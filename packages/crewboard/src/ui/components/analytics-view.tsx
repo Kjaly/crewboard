@@ -11,8 +11,9 @@ const ms = (iso: string) => new Date(iso).getTime()
 const clock = (t: number) => new Date(t).toLocaleTimeString(T.locale, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
 
 /** Provider lanes over the goal's time and what the runs cost; for looking back, not for steering. */
-export function AnalyticsView(props: { analytics: GoalAnalytics | undefined }) {
+export function AnalyticsView(props: { analytics: GoalAnalytics | undefined; failed?: boolean; onRetry?: () => void }) {
   const a = props.analytics
+  if (props.failed) return <div role="alert"><p>{T.loadFailed}</p><button type="button" className="btn press" onClick={props.onRetry}>{T.retry}</button></div>
   if (!a) return <p className="hint">{T.loading}</p>
   const from = ms(a.from)
   const span = Math.max(ms(a.to) - from, 60_000)
