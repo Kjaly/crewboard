@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest'
 import { opencodeTurnState, parseClaudeLine, parseCodexLine, parseCursorLine, parseGeminiOutput, parseGrokLine, parseOpencodeLine } from '../src/runs/cli-parse.js'
 
 describe('parseClaudeLine', () => {
+  it.each([
+    [{ result: 'plain answer' }, 'plain answer'],
+    [{ result: 'prose', structured_output: { answer: 'Готово' } }, '{"answer":"Готово"}'],
+    [{ result: '', structured_output: { handback: '<crewboard-question>Как?</crewboard-question>', result: null } }, '{"handback":"<crewboard-question>Как?</crewboard-question>","result":null}'],
+    [{ result: 'declined', is_error: true, structured_output: { stale: true } }, undefined],
+    [{ usage: {} }, undefined],
+  ])('reads the final response from %j', (fields, expected) => {
+    const parsed = parseClaudeLine(JSON.stringify({ type: 'result', subtype: 'success', ...fields }), new Map())
+    expect(parsed.finalText).toBe(expected)
+  })
+
   it('maps init, text, tool use/result, rate limits and results', () => {
     const tools = new Map<string, string>()
     expect(parseClaudeLine('{"type":"system","subtype":"init","session_id":"s-1"}', tools)).toEqual({ events: [], sessionId: 's-1' })
@@ -48,6 +59,12 @@ describe('parseClaudeLine', () => {
 })
 
 describe('parseCodexLine', () => {
+  it('keeps the complete final message separately from narration deltas', () => {
+    const text = JSON.stringify({ handback: '<crewboard-report>Готово</crewboard-report>', result: { count: 3 } })
+    expect(parseCodexLine(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } })).finalText).toBe(text)
+    expect(parseCodexLine(JSON.stringify({ type: 'item.started', item: { type: 'agent_message', text } })).finalText).toBeUndefined()
+  })
+
   it('maps threads, commands, file changes, messages and usage', () => {
     expect(parseCodexLine('{"type":"thread.started","thread_id":"th-9"}')).toEqual({ events: [], sessionId: 'th-9' })
     expect(parseCodexLine(`{"type":"item.started","item":{"id":"i1","type":"command_execution","command":"/bin/zsh -lc 'cat b.txt'"}}`).events).toEqual([

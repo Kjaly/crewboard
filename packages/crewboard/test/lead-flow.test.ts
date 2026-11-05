@@ -4,10 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '../src/app.js'
 import type { AssignmentView, GoalEvent } from '../src/model/types.js'
 import { createFakeBackend } from './fake-backend.js'
+import { createLeadMcp } from '../src/lead/mcp.js'
 
 async function gitRepo(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'cb-lead-'))
@@ -42,6 +44,90 @@ async function start() {
 }
 
 describe('lead over MCP', () => {
+  it('rejects reviews of missing or unreported work', async () => {
+    const { call, project } = await start()
+    const { goalId } = (await call('crewboard_start_goal', { project, title: 'Goal', criteria: [] })).json() as { goalId: string }
+    const review = { project, goalId, title: 'Review', criteria: [], resultKind: 'answer', provider: 'codex' }
+    expect((await call('crewboard_assign', { ...review, reviewOf: 'missing' })).isError).toBe(true)
+    const { assignmentId } = (await call('crewboard_assign', { ...review, title: 'Work', resultKind: 'branch' })).json() as { assignmentId: string }
+    expect((await call('crewboard_assign', { ...review, reviewOf: assignmentId })).isError).toBe(true)
+  })
+  it('reviews a branch version, detects later commits and returns findings', async () => {
+    const { app, fake, call, project } = await start()
+    const finding = { severity: 'high', file: 'README.md', line: 1, problem: 'Missing text', scenario: 'A reader opens it' }
+    fake.script({ final: '<crewboard-report>Work complete</crewboard-report>' }, { final: `<crewboard-report>${JSON.stringify({ verdict: 'changes', findings: [finding] })}</crewboard-report>` }, { hold: true })
+    const { goalId } = (await call('crewboard_start_goal', { project, title: 'Goal', criteria: [] })).json() as { goalId: string }
+    const { assignmentId } = (await call('crewboard_assign', { project, goalId, title: 'Work', criteria: ['Readable'], resultKind: 'branch', provider: 'codex' })).json() as { assignmentId: string }
+    await app.tick(); await app.tick()
+    const workCwd = fake.runs[0]!.cwd
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: workCwd, encoding: 'utf8' }).trim()
+    const review = await call('crewboard_assign', { project, goalId, title: 'Review', criteria: [], resultKind: 'answer', provider: 'codex', reviewOf: assignmentId })
+    expect(review.isError, review.text).toBe(false)
+    const { assignmentId: reviewId } = review.json() as { assignmentId: string }
+    await app.tick(); await app.tick()
+    expect(fake.runs[1]).toMatchObject({ cwd: workCwd, readOnly: true })
+    expect(fake.runs[1]!.prompt).toContain(head)
+    expect(fake.runs[1]!.prompt).toContain('Readable')
+    let tree = (await call('crewboard_status', { project, goalId })).json() as AssignmentView
+    // A review gets the findings schema by default, and its checked result is what the lead reads.
+    expect(tree.children.find((n) => n.id === reviewId)).toMatchObject({ result: { verdict: 'changes' } })
+    expect(tree.children.find((n) => n.id === assignmentId)?.reviews?.[0]).toMatchObject({ id: reviewId, commit: head, verdict: 'changes', stale: false, findings: [finding] })
+    await writeFile(join(workCwd, 'README.md'), 'changed')
+    execFileSync('git', ['add', 'README.md'], { cwd: workCwd })
+    execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'fix'], { cwd: workCwd })
+    tree = (await call('crewboard_status', { project, goalId })).json() as AssignmentView
+    expect(tree.children.find((n) => n.id === assignmentId)?.reviews?.[0]?.stale).toBe(true)
+    expect((await call('crewboard_return', { project, goalId, assignmentId, reviewId })).isError).toBe(false)
+    expect(fake.runs[2]!.prompt).toContain('Missing text')
+  })
+  it('accepts a schema over MCP and exposes the checked result in inbox and status', async () => {
+    const fake = createFakeBackend()
+    const app = createApp({ env: { ...process.env, CREWBOARD_NO_CATALOG: '1', CREWBOARD_HOME: await mkdtemp(join(tmpdir(), 'cb-schema-home-')) }, backendFor: () => async () => fake.backend })
+    const mcp = createLeadMcp(app.commands)
+    const client = new Client({ name: 'test-lead', version: '1.0.0' })
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair()
+    await mcp.connect(serverTransport)
+    await client.connect(clientTransport)
+    closers.push(() => mcp.close(), () => client.close())
+    const project = await gitRepo()
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const response = await client.callTool({ name, arguments: args }) as { isError?: boolean; content: Array<{ text: string }> }
+      return { isError: response.isError === true, json: () => JSON.parse(response.content[0]!.text) as unknown }
+    }
+    const { goalId } = (await call('crewboard_start_goal', { project, title: 'Review', criteria: [] })).json() as { goalId: string }
+    const schema = { type: 'object', properties: { verdict: { const: 'pass' } }, required: ['verdict'], additionalProperties: false }
+    fake.script({ final: '{"handback":"<crewboard-report>Checked</crewboard-report>","result":{"verdict":"pass"}}' })
+    const base = { project, goalId, title: 'Review files', criteria: [], resultKind: 'answer', provider: 'codex' }
+    expect((await call('crewboard_assign', { ...base, schema: { type: 'invalid' } })).isError).toBe(true)
+    const assigned = await call('crewboard_assign', { ...base, schema })
+    expect(assigned.isError).toBe(false)
+    const { assignmentId } = assigned.json() as { assignmentId: string }
+    await app.tick()
+    await app.tick()
+    const events = (await call('crewboard_inbox', { project })).json() as GoalEvent[]
+    expect(events.find((e) => e.type === 'reported' && e.assignmentId === assignmentId)).toMatchObject({ result: { verdict: 'pass' } })
+    const status = (await call('crewboard_status', { project, goalId })).json() as AssignmentView
+    expect(status.children.find((n) => n.id === assignmentId)).toMatchObject({ schema, result: { verdict: 'pass' } })
+  })
+
+  it('rejects invalid dependencies and reports a later cancellation once', async () => {
+    const { app, call, project } = await start()
+    const { goalId } = (await call('crewboard_start_goal', { project, title: 'Goal', criteria: [] })).json() as { goalId: string }
+    const base = { project, goalId, title: 'Work', criteria: [], resultKind: 'local', provider: 'codex' }
+    expect((await call('crewboard_assign', { ...base, after: ['missing'] })).isError).toBe(true)
+    const { assignmentId } = (await call('crewboard_assign', base)).json() as { assignmentId: string }
+    const { assignmentId: waiting } = (await call('crewboard_assign', { ...base, after: [assignmentId] })).json() as { assignmentId: string }
+    // Every accepted edge points to an earlier assignment, so a new assignment cannot create a cycle.
+    const tree = (await call('crewboard_status', { project, goalId })).json() as AssignmentView
+    expect(tree.children.find((n) => n.id === waiting)?.after).toEqual([assignmentId])
+    await call('crewboard_cancel', { project, goalId, assignmentId, reason: 'cancelled' })
+    expect((await call('crewboard_assign', { ...base, after: [assignmentId] })).isError).toBe(true)
+    await app.tick()
+    await app.tick()
+    const events = (await call('crewboard_inbox', { project })).json() as GoalEvent[]
+    expect(events.filter((e) => e.type === 'progress' && e.code === 'blocked_dependency' && e.assignmentId === waiting)).toHaveLength(1)
+    expect(((await call('crewboard_inbox', { project })).json() as GoalEvent[]).filter((e) => e.type === 'progress' && e.code === 'blocked_dependency')).toHaveLength(0)
+  })
   it('lists goals and starts work with a named branch and writable root', async () => {
     const { app, call, project, fake } = await start()
     const { goalId } = (await call('crewboard_start_goal', { project, title: 'Goal', criteria: [] })).json() as { goalId: string }
@@ -213,4 +299,3 @@ describe('lead over MCP', () => {
     expect(text).not.toContain(`crewboard${'-app'}`)
   })
 })
-

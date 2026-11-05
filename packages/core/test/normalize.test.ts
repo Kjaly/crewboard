@@ -9,6 +9,23 @@ const fixture = async (name: string) =>
 
 describe('normalize', () => {
   it.each([
+    ['one message', ['Готово\n']],
+    ['streamed chunks', ['Го', 'тово\n']],
+    ['narration before the final message', ['Проверяю.\n', 'Готово\n']],
+    ['an empty update after the final message', ['Проверяю.\n', 'Готово\n', '']],
+  ])('shows a recorded result once after %s', (_name, chunks) => {
+    const raw = [...chunks.map((data) => ({ ts: 't1', type: 'answer_delta', data })), { ts: 't2', type: 'result', data: 'Готово' }]
+    const feed = normalize(raw)
+    expect(feed).toHaveLength(1)
+    expect(feed[0]?.display?.match(/Готово/g)).toHaveLength(1)
+    expect(raw.at(-1)?.data).toBe('Готово')
+  })
+
+  it('keeps a distinct final answer', () => {
+    expect(normalize([{ ts: 't1', type: 'answer_delta', data: 'Проверяю' }, { ts: 't2', type: 'result', data: 'Готово' }]).map((e) => e.kind)).toEqual(['message', 'final'])
+  })
+
+  it.each([
     ['/bin/zsh -lc "git -C /Users/x/repo/.crewboard/worktrees/a grep -n -E \'Fernet|AESGCM\'"', "git grep -n -E 'Fernet|AESGCM'"],
     ['git -C /Users/x/repo commit -m x', 'git -C <repo> commit -m x'],
     ['cd /Users/x/repo/.crewboard/worktrees/a/ && ls', 'cd . && ls'],

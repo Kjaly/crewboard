@@ -252,3 +252,5 @@ With `<crewboard-split>`, a worker turns its task into up to 8 child assignments
 ## When a run fails to start
 
 A missing CLI, a missing key or a refused model fails the run at once. Crewboard records it, shows **Run failed: …** with the reason on the node, tells the lead, and does not retry on its own. The lead can clarify (which relaunches) or cancel.
+
+Split parts inherit the parent’s actual model, effort, access and writable roots. Use `[agent]` for an agent’s defaults or `[preset:name]` for a lead preset; preset access cannot exceed the parent’s access. Unknown names are recorded in the journal and fall back to the parent.

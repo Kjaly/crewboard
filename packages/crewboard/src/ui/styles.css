@@ -69,6 +69,7 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 .n .t{font-weight:500;min-width:0;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-height:1.35}
 .n .doing{grid-column:2/4;font-size:12.5px;color:var(--text-2);display:flex;gap:6px;align-items:center;min-width:0}
 .n .doing span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.n .node-source{grid-column:2/4;display:flex;flex-wrap:wrap;gap:2px 10px;color:var(--text-3);font-size:11.5px;min-width:0;overflow-wrap:anywhere}
 .n.root .t{font-weight:600;font-size:15px}
 .n.ask{box-shadow:inset 2px 0 0 var(--accent)}
 .n.ask .doing{color:var(--accent-text)}
@@ -90,6 +91,7 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 .st{display:inline-flex;align-items:center;gap:6px;font-size:12px;white-space:nowrap;color:var(--text-3)}
 .st i{font-size:14px}
 .st.running{color:var(--text-2)} .st.ask{color:var(--accent-text)} .st.done{color:var(--ok)}
+.st.stale{color:var(--accent-text)} .st.failed{color:var(--danger)}
 .live{width:7px;height:7px;border-radius:50%;background:var(--ok);position:relative;flex:none}
 .live::after{content:"";position:absolute;inset:-3px;border-radius:50%;border:1.5px solid var(--ok);opacity:0;animation:ping 1.8s var(--ease-out) infinite}
 @keyframes ping{0%{transform:scale(.6);opacity:.7}100%{transform:scale(1.6);opacity:0}}
@@ -102,9 +104,19 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 .meta{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px;color:var(--text-2);align-items:center}
 .meta b{font-weight:500;color:var(--text)}
 .meta>span{display:inline-flex;align-items:center;gap:6px}
+.external-details{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;margin:0;font-size:12.5px}
+.external-details dt{color:var(--text-3)}
+.external-details dd{margin:0;overflow-wrap:anywhere}
 .crumbs{display:flex;flex-wrap:wrap;gap:4px;align-items:center;font-size:12px;color:var(--text-3)}
 .crumbs button{color:var(--text-2);text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:3px}
 .sec h4{margin:0 0 8px;font-size:12px;font-weight:500;color:var(--text-3)}
+.report{min-width:0;font-size:13px}
+.report p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.report p+p,.report-error,.report-json{margin-top:10px}
+.report-error b{font-weight:500;color:var(--danger)}
+.report-json summary{cursor:pointer;color:var(--text-2);padding:4px 0}
+.report-json summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+.report-json pre{margin:6px 0 0;padding:10px;max-height:360px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:var(--r);white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
 .quote{border-left:2px solid var(--line-strong);padding:2px 0 2px 12px}
 .quote .who{font-size:12px;color:var(--text-3);margin-bottom:3px;display:flex;align-items:center;gap:6px}
 .quote p{margin:0}

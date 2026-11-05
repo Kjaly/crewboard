@@ -6,6 +6,8 @@ export type TurnUsage = { input: number; output: number; cacheRead: number; cach
 
 export type Parsed = {
   events: Array<[string, unknown]>
+  /** Claude's result, or a Codex message candidate; the runner publishes Codex's last one at turn end. */
+  finalText?: string
   sessionId?: string
   /** Claude's `init` event: `apiKeySource: 'none'` means the session runs on the user's Claude plan, anything else on a key. */
   billing?: 'subscription' | 'api'
@@ -89,6 +91,10 @@ export function parseClaudeLine(line: string, tools: Map<string, string>): Parse
     // A failed turn is read from `is_error`, not from `subtype` or the exit code: a run that hit the usage limit ends
     // with `subtype: success`, `is_error: true`, the reason in `result` and exit code 0.
     const failed = o.is_error === true
+    if (!failed) {
+      if (o.structured_output !== undefined) out.finalText = JSON.stringify(o.structured_output)
+      else if (typeof o.result === 'string') out.finalText = o.result
+    }
     const error = !failed ? undefined : typeof o.result === 'string' && o.result.trim() ? o.result.trim() : Array.isArray(o.errors) && o.errors.length ? o.errors.map(String).join('; ') : String(o.subtype ?? 'error')
     out.turnEnd = {
       stopReason: String(o.subtype ?? 'success'),
@@ -306,6 +312,7 @@ export function parseCodexLine(line: string): Parsed {
       )
     } else if (item.type === 'agent_message' && done && typeof item.text === 'string') {
       out.events.push(['answer_delta', `${item.text}\n`])
+      out.finalText = item.text
     } else if (item.type === 'reasoning' && done) {
       // exec --json's reasoning.text is the public summary, never the raw reasoning stream.
       const summary = typeof item.text === 'string' ? item.text : typeof item.summary === 'string' ? item.summary : Array.isArray(item.summary) ? item.summary.map((part) => typeof obj(part).text === 'string' ? obj(part).text : '').join('\n') : ''

@@ -1,4 +1,9 @@
 import { basename } from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { reviewOf } from './model/review.js'
+
+const run = promisify(execFile)
 import type { ProjectContext } from './app.js'
 import { leadLabel } from './lead/clients.js'
 import { buildTree, flatten, statusBucket } from './model/project.js'
@@ -25,7 +30,23 @@ export async function goalTree(ctx: ProjectContext, goalId: string, now: Date): 
     if (error instanceof AgentsFileError) return []
     throw error
   })
-  return buildTree(await ctx.store.read(goalId), now, meta.leadLastSeen ? new Date(meta.leadLastSeen) : undefined, agents)
+  const events = await ctx.store.read(goalId)
+  const root = buildTree(events, now, meta.leadLastSeen ? new Date(meta.leadLastSeen) : undefined, agents)
+  const nodes = flatten(root)
+  for (const work of nodes.filter((n) => n.resultKind === 'branch')) {
+    const reviews = nodes.filter((n) => n.reviewOf === work.id)
+    if (!reviews.length) continue
+    const head = work.cwd ? await run('git', ['rev-parse', 'HEAD'], { cwd: work.cwd }).then((r) => r.stdout.trim(), () => undefined) : undefined
+    work.reviews = reviews.map((review) => {
+      const started = events.findLast((e) => e.type === 'run_started' && e.assignmentId === review.id)
+      const report = events.findLast((e) => e.type === 'reported' && e.assignmentId === review.id && (!started || e.seq > started.seq))
+      const result = report?.type === 'reported' ? reviewOf(report) : undefined
+      const commit = started?.type === 'run_started' ? started.reviewCommit : undefined
+      const base = started?.type === 'run_started' ? started.reviewBase : undefined
+      return { id: review.id, ...(commit ? { commit } : {}), ...(base ? { base } : {}), ...(result ?? {}), ...(commit && head ? { stale: commit !== head } : {}) }
+    })
+  }
+  return root
 }
 
 /** One project as the screen lists it: its goals with the root status and how many nodes sit in each state. */

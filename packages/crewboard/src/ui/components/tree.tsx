@@ -76,13 +76,21 @@ export function Tree(props: { api: Api; project: string; root: AssignmentView; s
     >
       <Avatar provider={n.provider} leadClient={props.leadClient} />
       <span className="t">{n.title}</span>
-      <StatusBadge status={n.status} />
+      <StatusBadge status={n.status} external={n.external} />
+      {n.external && (
+        <span className="node-source">
+          <span>{T.external.kind[n.external.kind]}</span>
+          {n.model && <span>{n.model}</span>}
+          {n.external.phase && <span>{n.external.phase}</span>}
+        </span>
+      )}
       <span className="doing">
         <span>{n.request ? requestText(n.request) : T.doing(n.doing)}</span>
       </span>
     </button>
   )
   const feed = (n: AssignmentView) => {
+    if (n.external) return null
     if (n.runId && n.runOpen) fed.current.set(n.id, n.runId)
     const runId = n.runId
     if (!runId || fed.current.get(n.id) !== runId) return null

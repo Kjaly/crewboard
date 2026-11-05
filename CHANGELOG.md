@@ -2,6 +2,29 @@
 
 All notable changes to Crewboard are documented here. This changelog follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-11-05
+
+Workers keep what they know, and the lead's own orchestration moves into Crewboard. Three Codex researchers measured what Crewboard does, what the worker CLIs offer and how leads work around it. Six Codex workers built the result in three chains. Claude Code led, resolved the merges, reviewed and checked the screen.
+
+### Added
+
+- **Structured results.** `crewboard_assign` takes a `schema` (JSON Schema of an object). Codex gets it through `--output-schema` and Claude through `--json-schema`; other agents get it in the prompt. The result is checked and stored apart from the summary, reaches the lead in the inbox and in `crewboard_status`, and is passed to the assignments that follow it and to a parent after a split. A missing or invalid result is reported as `schemaError`, never as silent success.
+- **Reviews tied to the work they review.** `reviewOf` on `crewboard_assign` names a reported branch assignment. The reviewer runs read-only in that copy, gets its criteria, report and commit range, and returns a verdict and findings against a default schema. The reviewed work shows its reviews with the commit, verdict, findings by severity and whether the branch has changed since. `crewboard_return` with `reviewId` sends the findings back; `crewboard_close` warns when the latest review is stale or asks for changes.
+- **Work the lead runs outside Crewboard on the screen.** `crewboard_track`, `crewboard_track_batch`, `crewboard_track_update` and `crewboard_track_finish` record Workflow runs, subagents and delegated work as nodes with their source, model, phase, progress and outcome. Crewboard never launches or stops them, and marks them stale when the lead stops updating them.
+- **Split parts can name a preset**: `- [preset:normal] Part | criterion`.
+
+### Changed
+
+- **A worker keeps its session** after a question, a return or the end of its split: Codex, Claude, OpenCode, Cursor and dsh continue the same CLI session when the agent and model are unchanged. If the session cannot be resumed, the worker starts a new one with the full prompt.
+- **A worker sees its context**: the goal and its criteria, the owner's words, the results and branches of the assignments it follows, and, for a split part, its parent's task and sibling parts. All of it is marked as data, not instructions.
+- **Split parts inherit** the parent's model, effort, access and writable roots. A named agent or preset brings its own model and effort, but never more access than the parent has.
+- `crewboard_assign` rejects unknown or cancelled assignments in `after`. When a dependency is cancelled later, the lead gets a `blocked_dependency` reminder.
+
+### Fixed
+
+- Clarifications sent while no run was open, including while a parent waited for its parts, were lost; they now arrive exactly once.
+- A queued clarification interrupted the worker's turn instead of waiting for it.
+
 ## [1.4.1] - 2026-11-05
 
 Fixes from a day of leading Studio work through Crewboard: Codex workers built them in their branches, Claude Code led, reviewed and merged.

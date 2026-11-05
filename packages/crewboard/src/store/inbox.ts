@@ -10,7 +10,7 @@ import { projectDir } from './paths.js'
  * escalated question. A completed run is already told by its result or question.
  */
 export function isLeadEvent(e: GoalEvent, workerParts: ReadonlySet<string> = new Set()): boolean {
-  if (e.type === 'progress' && (e.code === 'launch_registry' || e.code === 'goal_idle')) return true
+  if (e.type === 'progress' && (e.code === 'launch_registry' || e.code === 'goal_idle' || e.code === 'blocked_dependency')) return true
   if (e.type === 'question') return true
   // A split-off part reports to the worker that split it off, not to the lead.
   if (e.type === 'reported' && workerParts.has(e.assignmentId)) return false
@@ -30,7 +30,11 @@ function resolved(event: GoalEvent, later: GoalEvent[]): boolean {
     if (event.type === 'owner_requested') return (next.type === 'request_decided' || next.type === 'request_withdrawn') && next.requestId === event.requestId
     if (event.type === 'progress' && event.code === 'goal_idle') {
       return (next.assignmentId === event.goalId && (next.type === 'closed' || next.type === 'cancelled')) ||
-        (next.actor === 'lead' && ['assigned', 'answered', 'steered', 'returned', 'reassigned', 'reopened', 'unblocked', 'closed', 'cancelled'].includes(next.type))
+        (next.actor === 'lead' && ['assigned', 'external_tracked', 'answered', 'steered', 'returned', 'reassigned', 'reopened', 'unblocked', 'closed', 'cancelled'].includes(next.type))
+    }
+    if (event.type === 'progress' && event.code === 'blocked_dependency') {
+      return (next.assignmentId === event.goalId && (next.type === 'closed' || next.type === 'cancelled')) ||
+        (next.assignmentId === event.assignmentId && ['cancelled', 'closed', 'unblocked', 'run_started'].includes(next.type))
     }
     if (event.type === 'run_ended' && event.outcome === 'failed' && next.assignmentId === event.goalId && (next.type === 'closed' || next.type === 'cancelled')) return true
     if (next.assignmentId !== event.assignmentId) return false

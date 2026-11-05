@@ -58,6 +58,52 @@ describe('language', () => {
 describe('tree and context', () => {
   const items = () => screen.getAllByRole('treeitem').map((el) => el.getAttribute('data-id'))
 
+  it('shows external work, stale updates and outcomes without offering worker controls in either language', async () => {
+    const tree = node('g', 'running', { parentId: null, title: 'External work', provider: 'lead', resultKind: 'goal' }, [
+      node('workflow', 'running', { title: 'Research', model: 'research-model', doing: { kind: 'text', text: 'Reading sources' },
+        external: { kind: 'workflow', externalId: 'workflow-42', phase: 'Analysis', stale: false },
+      }),
+      node('agent', 'waiting_answer', { title: 'Review', doing: { kind: 'text', text: 'Checking changes' },
+        external: { kind: 'agent', externalId: 'agent-7', stale: true },
+      }),
+      node('delegate', 'done', { title: 'Implementation', doing: { kind: 'text', text: 'Changes committed' },
+        external: { kind: 'delegate', outcome: 'success', stale: false },
+      }),
+      node('other', 'done', { title: 'Validation', doing: { kind: 'text', text: 'Build failed' },
+        external: { kind: 'other', outcome: 'failure', stale: false },
+      }),
+    ])
+    const { api } = fakeApi({ tree })
+    render(<App api={api} />)
+    await screen.findByRole('tree')
+    await userEvent.click(screen.getByRole('button', { name: 'Завершено 2' }))
+    for (const [index, copy] of [
+      { context: 'Контекст поручения', source: 'Источник', id: 'Внешний ID', agent: 'Субагент', delegate: 'Делегирование', other: 'Внешний запуск', stale: 'Данные устарели', running: 'Идёт', success: 'Успешно', failure: 'Не удалось', actions: 'Действия', discuss: /Обсудить в чате ведущего/, controls: /Уточнить задачу|Передать другому агенту|Остановить|аварийной остановки|Начать раньше|Переоткрыть|Вернуть в работу|Отменить/, hint: 'Crewboard не управляет этим запуском: уточнение, передача и аварийная остановка недоступны. Обсудите изменения с ведущим.' },
+      { context: 'Assignment context', source: 'Source', id: 'External ID', agent: 'Subagent', delegate: 'Delegation', other: 'External run', stale: 'Updates are stale', running: 'Running', success: 'Succeeded', failure: 'Failed', actions: 'Actions', discuss: /Discuss in the lead/, controls: /Clarify|Hand off|Stop|emergency stop|Start sooner|Reopen|Revive|Cancel/i, hint: 'Crewboard does not control this run: clarification, handoff and emergency stop are unavailable. Discuss changes with the lead.' },
+    ].entries()) {
+      const research = screen.getByRole('treeitem', { name: /Research/ })
+      for (const text of ['Workflow', 'research-model', 'Analysis', 'Reading sources']) expect(within(research).getByText(text)).toBeTruthy()
+      const review = screen.getByRole('treeitem', { name: /Review/ })
+      expect(within(review).getByText(copy.agent)).toBeTruthy()
+      expect(within(review).getByText(copy.stale)).toBeTruthy()
+      expect(within(review).queryByText(copy.running)).toBeNull()
+      const implementation = screen.getByRole('treeitem', { name: /Implementation/ })
+      for (const text of [copy.delegate, copy.success, 'Changes committed']) expect(within(implementation).getByText(text)).toBeTruthy()
+      const validation = screen.getByRole('treeitem', { name: /Validation/ })
+      for (const text of [copy.other, copy.failure, 'Build failed']) expect(within(validation).getByText(text)).toBeTruthy()
+      await userEvent.click(research)
+      const panel = screen.getByRole('complementary', { name: copy.context })
+      for (const text of [copy.source, 'Workflow', copy.id, 'workflow-42', copy.hint]) expect(within(panel).getByText(text)).toBeTruthy()
+      const actions = within(panel).getByRole('region', { name: copy.actions })
+      expect(within(actions).getByRole('button', { name: copy.discuss })).toBeTruthy()
+      expect(within(actions).queryByRole('button', { name: copy.controls })).toBeNull()
+      await userEvent.click(review)
+      expect(within(panel).getByText(copy.stale)).toBeTruthy()
+      expect(within(panel).getByText('agent-7')).toBeTruthy()
+      if (index === 0) await userEvent.click(screen.getByRole('button', { name: 'Switch to English' }))
+    }
+  })
+
   it('puts what waits for you first and folds finished work', async () => {
     const { api } = fakeApi()
     render(<App api={api} />)

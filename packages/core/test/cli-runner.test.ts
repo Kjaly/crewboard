@@ -9,7 +9,7 @@ import { nodeExec } from '../src/exec.js'
 import { createCliBackend } from '../src/runs/cli-backend.js'
 import { type CliRunnerArgs, runCliRun } from '../src/runs/cli-runner.js'
 import { normalize } from '../src/runs/normalize.js'
-import { readSteer, steerMailName, writeSteer } from '../src/runs/steers.js'
+import { readSteer, steerIdOfMail, steerMailName, writeSteer } from '../src/runs/steers.js'
 import { readRunEvents } from '../src/dsh/runner.js'
 import { makeRepo } from './git-helpers.js'
 
@@ -79,6 +79,30 @@ const steer = async (runDir: string, file: string, text: string, mode: 'auto' | 
   await writeSteer(runDir, { id: STEER, createdAt: at, mode, preview: text, file, state: 'queued', timestamps: { queued: at } })
   await mail(runDir, steerMailName(STEER), text)
 }
+
+describe('resuming a previous session', () => {
+  it('restarts with the full prompt when the previous Codex session is missing', async () => {
+    const { runDir, args, argv } = await prepare('codex', 'continuation')
+    const fullPrompt = join(runDir, 'full.md')
+    const fake = join(runDir, 'missing.mjs')
+    await writeFile(fullPrompt, 'full context')
+    await writeFile(fake, `import { appendFileSync } from 'node:fs';
+if (process.argv.includes('resume')) { appendFileSync(process.env.FAKE_CLI_LOG, JSON.stringify(process.argv.slice(2)) + '\\n'); console.error('No rollout found for thread'); process.exit(1) }
+await import(${JSON.stringify(FAKE_CODEX)});`)
+    const state = await runCliRun({ ...args, commandArgs: [fake], previousSessionId: 'missing', fallbackPromptFile: fullPrompt })
+    expect(state.status).toBe('completed')
+    expect(await argv()).toHaveLength(2)
+  })
+
+  it.each(['codex', 'claude'] as const)('passes the previous session to %s with its access settings', async (kind) => {
+    const { args, argv } = await prepare(kind, 'continue')
+    await runCliRun({ ...args, previousSessionId: 'previous-1', access: 'network', writableRoots: ['/tmp/extra-root'] })
+    const flags = (await argv())[0]!
+    if (kind === 'codex') {
+      expect(flags).toEqual(expect.arrayContaining(['resume', 'previous-1', 'sandbox_mode="workspace-write"', 'sandbox_workspace_write.network_access=true', '--add-dir', '/tmp/extra-root']))
+    } else expect(flags).toEqual(expect.arrayContaining(['--resume', 'previous-1']))
+  })
+})
 
 describe('runCliRun: claude', () => {
   it('runs one turn and records session, tools and money', async () => {
@@ -363,6 +387,26 @@ describe('cli backends', () => {
     expect((await b.forAgent('codex/gpt-5.6-terra')).id).toBe('codex')
     expect(await resolveProfile({}, home, 'codex/gpt-5.6-sol')).toEqual({ id: 'codex/gpt-5.6-sol', backend: 'codex-cli', model: 'gpt-5.6-sol', enabled: true })
     expect(await resolveProfile({}, home, 'claude/opus')).toMatchObject({ backend: 'claude-code', model: 'opus' })
+  })
+
+  it('preserves a direct queue steer for the runner', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'orch-direct-queue-'))
+    const promptFile = join(root, 'prompt.md')
+    await writeFile(promptFile, 'SLOW first')
+    let args!: CliRunnerArgs
+    const backend = createCliBackend({ kind: 'codex', runsRoot: root, command: process.execPath, commandArgs: [FAKE_CODEX], startRunner: async (a) => { args = a } })
+    const runId = await backend.launch({ agent: 'codex/gpt-5.6-sol', promptFile, cwd: root })
+    const steerFile = join(root, 'steer.md')
+    await writeFile(steerFile, 'queued direction')
+    await backend.steer(runId, steerFile, 'queue')
+    const mailName = (await readdir(join(args.runDir, 'mailbox')))[0]!
+    expect((await readSteer(args.runDir, steerIdOfMail(mailName)!))?.mode).toBe('queue')
+    const state = await runCliRun(args)
+    const events = await readRunEvents(args.runDir)
+    expect(state.status).toBe('completed')
+    expect(state.usage.calls).toBe(2)
+    expect((await readSteer(args.runDir, steerIdOfMail(mailName)!))?.state).toBe('acknowledged')
+    expect(events.findIndex((e) => e.type === 'turn_ended')).toBeLessThan(events.findLastIndex((e) => e.type === 'turn_started'))
   })
 
   it('launches through the backend and reports usage', async () => {

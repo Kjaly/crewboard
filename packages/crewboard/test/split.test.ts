@@ -8,13 +8,14 @@ import { runsDir } from '../src/store/paths.js'
 import { createSupervisor, gitWorktree } from '../src/supervisor.js'
 import { createPool } from '../src/workers/pool.js'
 import { createFakeBackend } from './fake-backend.js'
+import { builtinAgents } from '../src/workers/agents.js'
 import { gitRepo } from './helpers.js'
 
 async function setup() {
   const fake = createFakeBackend()
   const root = await gitRepo()
   const store = createEventStore(root)
-  const sup = createSupervisor({ repo: root, store, pool: createPool({ backendFor: async () => fake.backend, runsDir: runsDir(root) }), now: () => new Date(), worktree: gitWorktree })
+  const sup = createSupervisor({ repo: root, store, pool: createPool({ backendFor: async () => fake.backend, runsDir: runsDir(root) }), now: () => new Date(), worktree: gitWorktree, agents: { ...builtinAgents, presets: async () => ({ ...await builtinAgents.presets(), wide: { agent: 'codex', model: 'gpt-6.1-sol', effort: 'medium', access: 'full' } }) } })
   await store.writeMeta({ goalId: 'g', title: 'Кухня', createdAt: new Date().toISOString(), leadLastSeen: new Date().toISOString() })
   await store.append('g', { type: 'goal_started', goalId: 'g', assignmentId: 'g', actor: 'lead', title: 'Кухня', criteria: [] })
   const parent: NewEvent = { type: 'assigned', goalId: 'g', assignmentId: 'p', actor: 'lead', parentId: 'g', title: 'Кухня целиком', criteria: [], resultKind: 'local', provider: 'claude', after: [] }
@@ -26,6 +27,16 @@ async function setup() {
 const split = (lines: string[]) => `Делю работу.\n<crewboard-split>\n${lines.join('\n')}\n</crewboard-split>`
 
 describe('worker split', () => {
+  it('inherits the running parent settings and caps preset access', async () => {
+    const { fake, store, sup, root } = await setup()
+    await store.append('g', { type: 'assigned', goalId: 'g', assignmentId: 'q', actor: 'lead', parentId: 'g', title: 'Parent', criteria: [], resultKind: 'local', provider: 'codex', model: 'gpt-6.1-terra', effort: 'high', access: 'network', writableRoots: [root], after: [] })
+    fake.script({ hold: true }, { final: split(['- Default', '- [preset:wide] Preset']) }, { hold: true }, { hold: true })
+    for (let i = 0; i < 3; i++) await sup.tick()
+    const children = (await store.read('g')).filter((e) => e.type === 'assigned' && e.parentId === 'q')
+    expect(children).toHaveLength(2)
+    expect(children[0]).toMatchObject({ model: 'gpt-6.1-terra', effort: 'high', access: 'network', writableRoots: [root] })
+    expect(children[1]).toMatchObject({ provider: 'codex', model: 'gpt-6.1-sol', effort: 'medium', access: 'network', writableRoots: [root] })
+  })
   it('creates child assignments under the worker, with the parent provider by default', async () => {
     const { fake, sup, tree } = await setup()
     fake.script({ final: split(['- [codex] Короб | панели', '- Инструкция']) }, { hold: true }, { hold: true })
@@ -50,6 +61,24 @@ describe('worker split', () => {
     expect(resumed.agent).toBe('claude/sonnet')
     expect(resumed.prompt).toContain('Короб готов')
     expect(resumed.prompt).toContain('Инструкция готова')
+  })
+
+  it('delivers a clarification recorded while waiting for split parts once', async () => {
+    const { fake, store, sup } = await setup()
+    fake.script({ final: split(['- Короб | панели', '- Инструкция | шаги']) }, { hold: true }, { hold: true }, { hold: true })
+    for (let i = 0; i < 3; i++) await sup.tick()
+    await store.append('g', { type: 'steered', goalId: 'g', assignmentId: 'p', actor: 'lead', text: 'уточнение владельца' })
+    expect(await sup.deliver('g', 'p', 'уточнение владельца')).toBe('recorded')
+    fake.finish(fake.runs[1]!.id, { final: '<crewboard-report>готово</crewboard-report>' })
+    fake.finish(fake.runs[2]!.id, { final: '<crewboard-report>готово</crewboard-report>' })
+    await sup.tick()
+    const prompt = fake.runs.at(-1)!.prompt
+    expect(prompt.match(/уточнение владельца/g)).toHaveLength(1)
+    expect(fake.runs[1]!.prompt).toContain('Кухня целиком')
+    expect(fake.runs[1]!.prompt).toContain('Инструкция')
+    expect(fake.runs[1]!.prompt).toContain('шаги')
+    await sup.tick()
+    expect(fake.runs).toHaveLength(4)
   })
 
   it('resumes the worker even when a child failed, telling it why', async () => {
@@ -121,4 +150,3 @@ describe('worker split', () => {
     expect(childRun.cwd).toBe(branchRun.cwd)
   })
 })
-

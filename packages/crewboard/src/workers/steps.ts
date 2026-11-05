@@ -5,6 +5,7 @@ import type { GoalEvent } from '../model/types.js'
 import type { EventStore } from '../store/event-store.js'
 import type { BackendFor } from './pool.js'
 import { runsDir } from '../store/paths.js'
+import { handbackEvents } from './protocol.js'
 
 export type Step = {
   i: number
@@ -138,7 +139,7 @@ export function createStepsReader(store: EventStore, backendFor: BackendFor) {
       if (!await runIsLocal(owner.repo, runId)) { cache.delete(runId); return undefined }
       const backend = await backendFor(owner.agent)
       const raw = await backend.events(runId)
-      const steps = stepsFromEvents(normalize(raw, { mergeToolResults: true, cwd: owner.cwd, repo: owner.repo }))
+      const steps = stepsFromEvents(normalize(handbackEvents(raw), { mergeToolResults: true, cwd: owner.cwd, repo: owner.repo }))
       // Replay unfinished calls and the streaming message, retaining their step indices.
       const open = steps.find((step) => step.status === 'running')
       const tail = steps.at(-1)

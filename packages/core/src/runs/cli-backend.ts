@@ -8,7 +8,7 @@ import { type RunState, TERMINAL_STATUSES } from '../plan/graph.js'
 import { type ClaudeAuth, type CliKind, type CliRunState, type CliRunnerArgs, readCliRunState, writeJsonAtomic } from './cli-runner.js'
 import { stateFailure } from './failure.js'
 import { startState } from './start-guard.js'
-import { steerMailName } from './steers.js'
+import { steerMailName, writeSteer } from './steers.js'
 import { orchestratorCommits } from '../orchestration/commit-owner.js'
 import { ANTHROPIC_POLICY_REVISION, AnthropicPolicyError, classifyAnthropicRoute, isIdentifiedAnthropicRoute } from '../routing/anthropic-policy.js'
 import type { Backend } from '../preflight/preflight.js'
@@ -155,7 +155,7 @@ export function createCliBackend(o: CliBackendOptions): RunBackend {
   return {
     id: o.kind,
     readOnlyLaunch: o.readOnlyLaunch ?? true,
-    async launch({ agent, promptFile, cwd, model: configuredModel, effort: configuredEffort, readOnly, access, writableRoots }: LaunchInput) {
+    async launch({ agent, promptFile, cwd, model: configuredModel, effort: configuredEffort, readOnly, access, writableRoots, previousSessionId, fallbackPromptFile, schema }: LaunchInput) {
       const runId = `run_${o.kind}-${Date.now().toString(36)}${suffix()}`
       const runDir = dirOf(runId)
       await mkdir(join(runDir, 'mailbox'), { recursive: true })
@@ -177,8 +177,11 @@ export function createCliBackend(o: CliBackendOptions): RunBackend {
         kind: o.kind,
         ...(claudeAuth ? { claudeAuth } : {}),
         runDir,
+        ...(previousSessionId ? { previousSessionId } : {}),
+        ...(fallbackPromptFile ? { fallbackPromptFile } : {}),
         cwd,
         promptFile,
+        ...(schema !== undefined ? { schema } : {}),
         command: o.command ?? o.kind,
         ...(o.commandArgs ? { commandArgs: o.commandArgs } : {}),
         ...(model ? { model } : {}),
@@ -204,9 +207,15 @@ export function createCliBackend(o: CliBackendOptions): RunBackend {
       if (failure) state.failure = failure
       return state
     },
-    async steer(runId, promptFile, _mode, steerId) {
+    async steer(runId, promptFile, mode, steerId) {
       await assertGuardedSteer(runId)
-      await writeFile(join(await mailbox(runId), steerMailName(steerId ?? suffix())), await readFile(promptFile, 'utf8'))
+      const text = await readFile(promptFile, 'utf8')
+      const id = steerId ?? suffix()
+      if (!steerId) {
+        const at = new Date().toISOString()
+        await writeSteer(dirOf(runId), { id, createdAt: at, mode: mode ?? 'auto', preview: text.slice(0, 200), file: promptFile, state: 'queued', timestamps: { queued: at } })
+      }
+      await writeFile(join(await mailbox(runId), steerMailName(id)), text)
     },
     async cancel(runId) {
       await writeFile(join(await mailbox(runId), 'cancel'), '')

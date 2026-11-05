@@ -3,14 +3,16 @@ import { realpath, stat } from 'node:fs/promises'
 import { isAbsolute, relative, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { randomBytes } from 'node:crypto'
-import { flatten } from '../model/project.js'
-import type { AssignmentView, EventOf, GoalEvent, NewEvent, ProviderId, ResultKind } from '../model/types.js'
+import { flatten, isTerminal } from '../model/project.js'
+import type { AssignmentView, EventOf, ExternalSource, GoalEvent, NewEvent, ProviderId, ResultKind } from '../model/types.js'
 import type { ProjectContext } from '../app.js'
 import { decideRequest } from '../requests.js'
 import { goalTree, summarize } from '../owner.js'
+import { REVIEW_RESULT_SCHEMA } from '../model/review.js'
 import { leadCall } from './call.js'
 import { type Agents, agentChoices, builtinAgents, validateEffort } from '../workers/agents.js'
 import type { ModelCatalog } from '../workers/catalog.js'
+import { compileResultSchema } from '../workers/result-schema.js'
 
 const run = promisify(execFile)
 
@@ -18,6 +20,8 @@ const id = (n: number) => randomBytes(n).toString('hex')
 const slug = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24)
 
 type Target = { project: string; goalId: string; assignmentId: string }
+export type ExternalNodeInput = ExternalSource & { title: string; model?: string; parentId?: string }
+type ExternalBatchNode = ExternalNodeInput & { key?: string; parentKey?: string }
 
 /** What a lead can do. The MCP tools call these; each resolves the project and records that the lead is alive. */
 export function createLeadCommands(projectOf: (path: string) => Promise<ProjectContext>, now: () => Date, agents: Agents = builtinAgents, catalog?: ModelCatalog) {
@@ -37,6 +41,59 @@ export function createLeadCommands(projectOf: (path: string) => Promise<ProjectC
     return found
   }
   const record = (ctx: ProjectContext, t: Target, e: DistributiveEvent) => ctx.store.append(t.goalId, { ...e, goalId: t.goalId, assignmentId: t.assignmentId, actor: 'lead' } as NewEvent)
+  const managedNode = async (ctx: ProjectContext, t: Target) => {
+    const found = await node(ctx, t)
+    if (found.external) throw new Error('Crewboard does not control external work; use crewboard_track_update or crewboard_track_finish')
+    return found
+  }
+  const trackBatch = async (i: { project: string; goalId: string; nodes: ExternalBatchNode[] }) =>
+    (await goalCtx(i.project, i.goalId)).exclusive(async (ctx) => {
+      if (!i.nodes.length || i.nodes.length > 100) throw new Error('track between 1 and 100 external nodes at a time')
+      const existing = new Map(flatten(await tree(ctx, i.goalId)).map((n) => [n.id, n]))
+      const staged = i.nodes.map((input) => ({ input, assignmentId: `a-${id(3)}`, parentId: input.parentId ?? i.goalId }))
+      const keys = new Map<string, (typeof staged)[number]>()
+      for (const item of staged) {
+        if (!item.input.title.trim()) throw new Error('an external node needs a title')
+        if (item.input.key !== undefined) {
+          if (!item.input.key || keys.has(item.input.key)) throw new Error(`duplicate or empty key: ${item.input.key}`)
+          keys.set(item.input.key, item)
+        }
+      }
+      const ordered: typeof staged = []
+      const visited = new Set<string>()
+      const visiting = new Set<string>()
+      const visit = (item: (typeof staged)[number]) => {
+        if (visited.has(item.assignmentId)) return
+        if (visiting.has(item.assignmentId)) throw new Error('external node parents contain a cycle')
+        visiting.add(item.assignmentId)
+        if (item.input.parentKey !== undefined) {
+          if (item.input.parentId !== undefined) throw new Error('choose parentId or parentKey')
+          const parent = keys.get(item.input.parentKey)
+          if (!parent) throw new Error(`unknown parentKey: ${item.input.parentKey}`)
+          visit(parent)
+          item.parentId = parent.assignmentId
+        } else {
+          const parentId = item.input.parentId ?? i.goalId
+          const parent = existing.get(parentId)
+          if (!parent) throw new Error(`assignment ${parentId} not found in goal ${i.goalId}`)
+          if (isTerminal(parent.status) || parent.underFinished) throw new Error(`cannot track work under finished assignment ${parentId}`)
+        }
+        visiting.delete(item.assignmentId)
+        visited.add(item.assignmentId)
+        ordered.push(item)
+      }
+      staged.forEach(visit)
+      // Validate the whole batch before writing, and write parents first so every published node is reachable.
+      for (const { input, assignmentId, parentId } of ordered) {
+        await ctx.store.append(i.goalId, {
+          type: 'external_tracked', goalId: i.goalId, assignmentId, parentId, actor: 'lead', title: input.title, kind: input.kind,
+          ...(input.model !== undefined ? { model: input.model } : {}),
+          ...(input.phase !== undefined ? { phase: input.phase } : {}),
+          ...(input.externalId !== undefined ? { externalId: input.externalId } : {}),
+        })
+      }
+      return { assignments: staged.map(({ input, assignmentId }) => ({ ...(input.key !== undefined ? { key: input.key } : {}), assignmentId })) }
+    })
   const lastQuestion = async (ctx: ProjectContext, t: Target) =>
     (await ctx.store.read(t.goalId)).findLast((e): e is EventOf<'question'> => e.type === 'question' && e.assignmentId === t.assignmentId)
 
@@ -55,7 +112,10 @@ export function createLeadCommands(projectOf: (path: string) => Promise<ProjectC
       await ctx.store.append(goalId, { type: 'goal_started', goalId, assignmentId: goalId, actor: 'lead', title: i.title, criteria: i.criteria, ...(i.quote ? { quote: i.quote } : {}), ...(lead ? { client: lead.client } : {}) })
       return { goalId }
     },
-    async assign(i: { project: string; goalId: string; parentId?: string; title: string; criteria: string[]; resultKind: ResultKind; provider?: ProviderId; preset?: string; model?: string; effort?: string; quote?: string; after?: string[]; branch?: string; writableRoots?: string[] }) {
+    async assign(i: { project: string; goalId: string; parentId?: string; title: string; criteria: string[]; resultKind: ResultKind; provider?: ProviderId; preset?: string; model?: string; effort?: string; quote?: string; after?: string[]; branch?: string; reviewOf?: string; writableRoots?: string[]; schema?: Record<string, unknown> }) {
+      if (i.schema !== undefined) compileResultSchema(i.schema)
+      // A review returns its verdict and findings in a checked shape unless the lead asks for its own.
+      const schema = i.schema ?? (i.reviewOf ? (REVIEW_RESULT_SCHEMA as unknown as Record<string, unknown>) : undefined)
       if (i.preset && i.provider) throw new Error('choose either preset or provider')
       const preset = i.preset ? (await agents.presets())[i.preset] : undefined
       if (i.preset && !preset) throw new Error(`unknown or disabled preset ${i.preset}`)
@@ -87,6 +147,22 @@ export function createLeadCommands(projectOf: (path: string) => Promise<ProjectC
         }
         const parentId = i.parentId ?? i.goalId
         await node(ctx, { project: i.project, goalId: i.goalId, assignmentId: parentId })
+        const existing = new Map(flatten(await tree(ctx, i.goalId)).map((n) => [n.id, n]))
+        if (i.reviewOf) {
+          const reviewed = existing.get(i.reviewOf)
+          if (i.resultKind !== 'answer') throw new Error('reviewOf requires resultKind answer')
+          if (!reviewed || reviewed.resultKind !== 'branch') throw new Error('reviewOf must name a branch assignment in this goal')
+          const events = await ctx.store.read(i.goalId)
+          const report = events.findLast((e) => e.assignmentId === i.reviewOf && e.type === 'reported')
+          const started = events.findLast((e) => e.assignmentId === i.reviewOf && e.type === 'run_started')
+          if (!report || (started && report.seq < started.seq) || reviewed.runOpen) throw new Error('reviewOf requires a reported branch assignment')
+          if (!agent.readOnly) throw new Error('reviewOf requires an agent that supports read-only work')
+        }
+        for (const dependency of i.after ?? []) {
+          const target = existing.get(dependency)
+          if (!target) throw new Error(`dependency ${dependency} not found in goal ${i.goalId}`)
+          if (target.status === 'cancelled') throw new Error(`dependency ${dependency} is cancelled`)
+        }
         const assignmentId = `a-${id(3)}`
         // Only an explicit name is recorded; without one the worktree takes its default `crewboard/<id>-<slug>`.
         const branch = i.resultKind === 'branch' ? i.branch : undefined
@@ -97,11 +173,30 @@ export function createLeadCommands(projectOf: (path: string) => Promise<ProjectC
         }
         await ctx.store.append(i.goalId, {
           type: 'assigned', goalId: i.goalId, assignmentId, actor: 'lead', parentId, title: i.title, criteria: i.criteria, resultKind: i.resultKind, provider, after: i.after ?? [],
-          ...(branch ? { branch } : {}), ...(roots.length ? { writableRoots: roots } : {}), ...(model ? { model } : {}), ...(effort !== undefined ? { effort } : {}), ...(preset?.access ? { access: preset.access } : {}), ...(i.quote ? { quote: i.quote } : {}),
+          ...(branch ? { branch } : {}), ...(i.reviewOf ? { reviewOf: i.reviewOf } : {}), ...(roots.length ? { writableRoots: roots } : {}), ...(model ? { model } : {}), ...(effort !== undefined ? { effort } : {}), ...(preset?.access ? { access: preset.access } : {}), ...(i.quote ? { quote: i.quote } : {}),
+          ...(schema !== undefined ? { schema } : {}),
         })
         setTimeout(() => { void ctx.tickOnce().catch((error: unknown) => console.error('[crewboard] tick:', error)) }, 0)
         return { assignmentId }
       })
+    },
+    async track(i: ExternalNodeInput & { project: string; goalId: string }) {
+      const result = await trackBatch({ project: i.project, goalId: i.goalId, nodes: [i] })
+      const first = result.assignments[0]
+      if (!first) throw new Error('external node was not recorded')
+      return { assignmentId: first.assignmentId }
+    },
+    trackBatch,
+    async trackUpdate(t: Target & { text: string; phase?: string }) {
+      return (await goalCtx(t.project, t.goalId)).exclusive(async (ctx) => {
+        const found = await node(ctx, t)
+        if (!found.external) throw new Error(`assignment ${t.assignmentId} is not external work`)
+        if (isTerminal(found.status) || found.underFinished) throw new Error(`assignment ${t.assignmentId} is finished`)
+        await record(ctx, t, { type: 'external_progress', text: t.text, ...(t.phase !== undefined ? { phase: t.phase } : {}) })
+      })
+    },
+    async trackFinish(t: Target & { outcome: 'success' | 'failure'; summary: string }) {
+      return (await goalCtx(t.project, t.goalId)).exclusive((ctx) => ctx.supervisor.finishExternal(t.goalId, t.assignmentId, t.outcome, t.summary))
     },
     /** Every event this session has not confirmed; calling again confirms the previous batch. */
     async inbox(i: { project: string }, session: string): Promise<GoalEvent[]> {
@@ -128,13 +223,14 @@ export function createLeadCommands(projectOf: (path: string) => Promise<ProjectC
     },
     async answer(t: Target & { text: string }) {
       return (await goalCtx(t.project, t.goalId)).exclusive(async (ctx) => {
-        await node(ctx, t)
+        await managedNode(ctx, t)
         await record(ctx, t, { type: 'answered', text: t.text })
         await ctx.supervisor.deliver(t.goalId, t.assignmentId, `Answer to your question: ${t.text}`)
       })
     },
     async escalate(t: Target & { why: string; text?: string; options?: string[] }) {
       return (await goalCtx(t.project, t.goalId)).exclusive(async (ctx) => {
+        await managedNode(ctx, t)
         const q = await lastQuestion(ctx, t)
         const text = t.text ?? q?.text
         if (!text) throw new Error(`assignment ${t.assignmentId} has no question to escalate; pass text`)
@@ -143,26 +239,37 @@ export function createLeadCommands(projectOf: (path: string) => Promise<ProjectC
     },
     async steer(t: Target & { text: string }) {
       return (await goalCtx(t.project, t.goalId)).exclusive(async (ctx) => {
-        await node(ctx, t)
+        await managedNode(ctx, t)
         await record(ctx, t, { type: 'steered', text: t.text })
         await ctx.supervisor.deliver(t.goalId, t.assignmentId, `Clarification from the lead: ${t.text}`)
       })
     },
-    async returnWork(t: Target & { note: string }) {
+    async returnWork(t: Target & { note?: string; reviewId?: string }) {
       return (await goalCtx(t.project, t.goalId)).exclusive(async (ctx) => {
-        await node(ctx, t)
-        await record(ctx, t, { type: 'returned', note: t.note })
-        await ctx.supervisor.deliver(t.goalId, t.assignmentId, `The lead returned the work with a note: ${t.note}`)
+        await managedNode(ctx, t)
+        const work = await node(ctx, t)
+        const review = t.reviewId ? work.reviews?.find((r) => r.id === t.reviewId) : undefined
+        if (t.reviewId && (!review || !review.findings || !review.verdict)) throw new Error('reviewId must name a completed review of this assignment with valid findings')
+        const note = [t.note, review ? `Review ${review.id} (${review.verdict}, commit ${review.commit}):\n${JSON.stringify(review.findings, null, 2)}` : undefined].filter(Boolean).join('\n\n')
+        if (!note) throw new Error('return requires note or reviewId')
+        await record(ctx, t, { type: 'returned', note })
+        await ctx.supervisor.deliver(t.goalId, t.assignmentId, `The lead returned the work with a note: ${note}`)
       })
     },
     async close(t: Target & { summary: string }) {
       return (await goalCtx(t.project, t.goalId)).exclusive(async (ctx) => {
-        await node(ctx, t)
+        const work = await managedNode(ctx, t)
+        const latest = work.reviews?.filter((r) => r.verdict).at(-1)
+        const warnings = latest && (latest.stale || latest.verdict === 'changes') ? [`Latest review ${latest.id} ${latest.stale ? 'is stale' : 'requests changes'}`] : []
         await ctx.supervisor.close(t.goalId, t.assignmentId, t.summary)
+        return { warnings }
       })
     },
     async cancel(t: Target & { reason: string }) {
-      return (await goalCtx(t.project, t.goalId)).exclusive((ctx) => ctx.supervisor.cancelTree(t.goalId, t.assignmentId, t.reason))
+      return (await goalCtx(t.project, t.goalId)).exclusive(async (ctx) => {
+        await managedNode(ctx, t)
+        await ctx.supervisor.cancelTree(t.goalId, t.assignmentId, t.reason)
+      })
     },
     async decideRequest(t: Target & { requestId: string; decision: 'accepted' | 'declined'; reason?: string }) {
       const ctx = await goalCtx(t.project, t.goalId)

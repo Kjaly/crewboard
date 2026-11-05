@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { type LaunchInput, type NormEvent, type RawEvent, type Run, type RunBackend, cliModel, normalize, publicText, usageForRun } from '@crewboard/core'
 import { failureText } from './failure.js'
 import type { RunCost } from '../model/types.js'
+import { handbackEvents, workerResponsePrompt, workerResponseSchema } from './protocol.js'
 
 /** dsh streams its last answer as `answer_delta` chunks and sends no `result`: the last turn's chunks, joined. */
 function streamedAnswer(raw: RawEvent[]): string | undefined {
@@ -25,16 +26,21 @@ export function createPool(o: { backendFor: BackendFor; runsDir: string; repo?: 
     return file
   }
   return {
-    async launch(input: Omit<LaunchInput, 'promptFile'> & { prompt: string }): Promise<string> {
+    async launch(input: Omit<LaunchInput, 'promptFile' | 'fallbackPromptFile'> & { prompt: string; fallbackPrompt?: string }): Promise<string> {
       const backend = await o.backendFor(input.agent)
       // A backend that cannot launch read-only is still told so in the prompt.
       const readOnly = input.readOnly === true && backend.readOnlyLaunch === true
-      return backend.launch({ agent: input.agent, cwd: input.cwd, promptFile: await writePrompt(input.prompt), ...(input.model !== undefined ? { model: input.model } : {}), ...(input.effort !== undefined ? { effort: input.effort } : {}), ...(readOnly ? { readOnly: true } : {}), ...(input.access && !input.readOnly ? { access: input.access } : {}), ...(input.writableRoots && !input.readOnly ? { writableRoots: input.writableRoots } : {}) })
+      const schema = input.schema !== undefined ? workerResponseSchema(input.schema) : undefined
+      const prompt = (text: string) => writePrompt(schema ? workerResponsePrompt(text, schema) : text)
+      return backend.launch({ agent: input.agent, cwd: input.cwd, promptFile: await prompt(input.prompt), ...(schema ? { schema } : {}), ...(input.previousSessionId ? { previousSessionId: input.previousSessionId } : {}), ...(input.fallbackPrompt ? { fallbackPromptFile: await prompt(input.fallbackPrompt) } : {}), ...(input.model !== undefined ? { model: input.model } : {}), ...(input.effort !== undefined ? { effort: input.effort } : {}), ...(readOnly ? { readOnly: true } : {}), ...(input.access && !input.readOnly ? { access: input.access } : {}), ...(input.writableRoots && !input.readOnly ? { writableRoots: input.writableRoots } : {}) })
+    },
+    async sessionId(agent: string, runId: string): Promise<string | undefined> {
+      return (await (await o.backendFor(agent)).usage?.(runId))?.sessionId
     },
     async poll(agent: string, runId: string, sinceIndex: number, meta?: { startedAt: string; cwd: string }): Promise<PollResult> {
       const backend = await o.backendFor(agent)
       const [raw, state] = await Promise.all([backend.events(runId), backend.status(runId)])
-      const events = normalize(raw, { cwd: meta?.cwd, repo: o.repo })
+      const events = normalize(handbackEvents(raw), { cwd: meta?.cwd, repo: o.repo })
       // Read narration from the whole feed: later commands and merged streaming chunks must not lose its intent.
       const narration = events.findLast((e) => e.kind === 'message' || e.kind === 'thought')?.text
       const result: PollResult = { events: events.slice(sinceIndex), nextIndex: events.length, terminal: state.terminal, failed: state.terminal && state.status !== 'completed', ...(narration ? { narration } : {}) }

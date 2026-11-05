@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { buildTree, flatten, isSettled, isTerminal } from './model/project.js'
 import { randomBytes } from 'node:crypto'
+import { checkResult } from './workers/result-schema.js'
 import { MAX_SPLIT, PROGRESS_EVERY_MS } from './model/thresholds.js'
 import type { AssignmentView, EventOf, GoalEvent, NewEvent, ProviderId, ResultKind, SystemText } from './model/types.js'
 import type { EventStore } from './store/event-store.js'
@@ -12,7 +13,7 @@ import type { Pool } from './workers/pool.js'
 import { parseOutcome, workerPrompt } from './workers/protocol.js'
 import { failureText } from './workers/failure.js'
 import { readable } from './workers/steps.js'
-import { type Agents, AgentsFileError, builtinAgents, validateEffort } from './workers/agents.js'
+import { type AgentPreset, type Agents, AgentsFileError, builtinAgents, validateEffort } from './workers/agents.js'
 
 const run = promisify(execFile)
 
@@ -104,6 +105,25 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
   const agents = o.agents ?? builtinAgents
   const cursors = new Map<string, number>()
   const append = (goalId: string, e: NewEvent) => o.store.append(goalId, e)
+  const reportText = (report: EventOf<'reported'> | undefined): string => report
+    ? [report.summary, report.detail, ...(report.result !== undefined ? [JSON.stringify({ result: report.result })] : []), ...(report.schemaError !== undefined ? [JSON.stringify({ schemaError: report.schemaError })] : [])].filter(Boolean).join('\n\n')
+    : ''
+
+  const dependenciesOf = async (goalId: string, node: AssignmentView): Promise<string> => {
+    if (!node.after.length) return ''
+    const events = await o.store.read(goalId)
+    return `Results of assignments this work follows:\n${node.after.map((id) => {
+      const own = events.filter((e) => e.assignmentId === id)
+      const title = lastOf(own, 'assigned')?.title ?? id
+      const closed = lastOf(own, 'closed')
+      const cancelled = lastOf(own, 'cancelled')
+      const since = Math.max(lastOf(own, 'run_started')?.seq ?? 0, lastOf(own, 'reopened')?.seq ?? 0)
+      const reported = lastOf(own, 'reported')
+      const report = reported && reported.seq > since ? reported : undefined
+      const status = closed && closed.seq > since ? `Accepted: ${closed.summary}` : cancelled && cancelled.seq > since ? `Cancelled: ${cancelled.reason}` : 'Not accepted yet'
+      return `- ${title} (${id}): ${status}\n${reportText(report)}`
+    }).join('\n\n')}`
+  }
 
   const chainOf = (byId: Map<string, AssignmentView>, node: AssignmentView): string[] => {
     const chain: string[] = []
@@ -111,7 +131,29 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
     return chain
   }
 
-  const launch = async (goalId: string, node: AssignmentView, own: GoalEvent[], cwdOf: () => Promise<string>, chain: string[], resumeNote?: string) => {
+  // Bound each item and the whole context; JSON keeps outside text visibly separate from the protocol.
+  const bounded = (text: string, max = 1200) => text.length > max ? `${text.slice(0, max)}… [truncated]` : text
+  const contextOf = (node: AssignmentView, events: GoalEvent[], byId: Map<string, AssignmentView>): string => {
+    const goal = events.find((e): e is EventOf<'goal_started'> => e.type === 'goal_started')
+    const assigned = events.find((e): e is EventOf<'assigned'> => e.type === 'assigned' && e.assignmentId === node.id)
+    const parent = node.parentId ? byId.get(node.parentId) : undefined
+    const split = assigned?.actor === 'worker' && parent
+    const dependencies = node.after.map((id) => {
+      const dep = byId.get(id)
+      if (dep?.status !== 'done') return undefined
+      const summary = events.findLast((e): e is EventOf<'closed'> => e.type === 'closed' && e.assignmentId === id)?.summary
+      return { title: bounded(dep.title), ...(summary ? { summary: bounded(summary) } : {}), ...(dep.branch ? { branch: bounded(dep.branch) } : {}) }
+    }).filter((dep) => dep !== undefined)
+    const data = {
+      goal: goal ? { title: bounded(goal.title), criteria: goal.criteria.map((c) => bounded(c)), ...(goal.quote ? { ownerQuote: bounded(goal.quote) } : {}) } : undefined,
+      ...(assigned?.quote ? { assignmentOwnerQuote: bounded(assigned.quote) } : {}),
+      dependencies,
+      ...(split ? { parent: { title: bounded(parent.title), criteria: parent.criteria.map((c) => bounded(c)) }, siblings: [...byId.values()].filter((v) => v.parentId === parent.id && v.id !== node.id).map((v) => ({ title: bounded(v.title), criteria: v.criteria.map((c) => bounded(c)) })) } : {}),
+    }
+    return bounded(JSON.stringify(data, null, 2), 12000)
+  }
+
+  const launch = async (goalId: string, node: AssignmentView, own: GoalEvent[], cwdOf: () => Promise<string>, chain: string[], resumeNote?: string, newMessage?: string) => {
     // Keep the work queued and tell the lead once per goal, including across server restarts.
     const registered = await agents.get(node.provider).catch((error: unknown) => error as Error)
     if (registered instanceof AgentsFileError) {
@@ -131,21 +173,59 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
     const effort = choices?.effort ?? entry?.effort
     const snapshot = { ...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}) }
     const agent = entry ? agents.coreId(entry, model) : node.provider
-    const prompt = workerPrompt({ title: node.title, criteria: node.criteria, resultKind: node.resultKind as ResultKind, chain, ...(resumeNote ? { resumeNote } : {}) })
+    const { events, byId } = await load(goalId)
+    // Structured results of finished dependencies (and split parts) the schema-aware worker builds on.
+    const dependencies = await dependenciesOf(goalId, node)
+    const ended = lastOf(own, 'run_ended')?.seq ?? 0
+    const pending = own.filter((e): e is EventOf<'steered'> => e.type === 'steered' && e.seq > ended)
+    // The current delivery may already be represented in the continuation text. Earlier identical events still count.
+    const current = pending.findLastIndex((e) => e.text.length > 0 && resumeNote?.includes(e.text))
+    if (current >= 0) pending.splice(current, 1)
+    const clarifications = pending.length ? `Clarifications recorded while no run was open:\n${pending.map((e) => `- ${e.text}`).join('\n')}` : ''
+    const note = [dependencies, resumeNote, clarifications].filter(Boolean).join('\n\n')
+    let prompt = workerPrompt({ title: node.title, criteria: node.criteria, resultKind: node.resultKind as ResultKind, chain, context: contextOf(node, events, byId), ...(note ? { resumeNote: note } : {}) })
+    const previous = lastOf(own, 'run_started')
+    const supported = ['codex', 'claude', 'opencode', 'cursor', 'dsh'].some((kind) => agent === kind || agent.startsWith(`${kind}/`))
+    const previousSessionId = newMessage && supported && previous?.agent === agent && previous.model === model ? await o.pool.sessionId(agent, previous.runId).catch(() => undefined) : undefined
+    // A resumed session already holds the task and context: it gets only what is new, clarifications included.
+    const continuation = `${[dependencies, newMessage ?? '', clarifications].filter(Boolean).join('\n\n')}\n\nEnd your response with a <crewboard-report>, <crewboard-question>, or <crewboard-split> block.`
     let runId: string
     let cwd = o.repo
+    let baseCommit: string | undefined
+    let baseBranch: string | undefined
+    let reviewCommit: string | undefined
+    let reviewBase: string | undefined
     try {
       if (registered instanceof Error) throw registered
       if (!registered) throw new Error(`agent ${node.provider} is not in the registry`)
       validateEffort(registered, effort, model)
+      if (node.resultKind === 'branch' && !own.some((e) => e.type === 'run_started' && e.baseCommit)) {
+        baseBranch = await run('git', ['symbolic-ref', '-q', 'HEAD'], { cwd: o.repo }).then((r) => r.stdout.trim(), () => undefined)
+      }
       cwd = await cwdOf()
+      if (node.resultKind === 'branch' && !own.some((e) => e.type === 'run_started' && e.baseCommit)) {
+        baseCommit = (await run('git', ['rev-parse', 'HEAD'], { cwd })).stdout.trim()
+      }
+      if (node.reviewOf) {
+        const reviewed = byId.get(node.reviewOf)
+        const workRun = events.find((e): e is EventOf<'run_started'> => e.type === 'run_started' && e.assignmentId === node.reviewOf && !!e.baseCommit)
+        const report = events.findLast((e): e is EventOf<'reported'> => e.type === 'reported' && e.assignmentId === node.reviewOf)
+        if (!reviewed?.cwd || !report || reviewed.runOpen) throw new Error('reviewed work is no longer reported or its copy is unavailable')
+        cwd = reviewed.cwd
+        const origin = workRun?.baseCommit ?? (await run('git', ['reflog', 'show', '--reverse', '--format=%H', 'HEAD'], { cwd })).stdout.trim().split('\n')[0]
+        if (!origin) throw new Error('reviewed work base is unavailable')
+        reviewCommit = (await run('git', ['rev-parse', 'HEAD'], { cwd })).stdout.trim()
+        const source = workRun?.baseBranch ?? origin
+        reviewBase = (await run('git', ['merge-base', source, reviewCommit], { cwd })).stdout.trim()
+        prompt += `\n## Review\nReview the committed range ${reviewBase}..${reviewCommit}. Reviewed assignment: ${JSON.stringify({ title: reviewed.title, criteria: reviewed.criteria, report: report.summary, detail: report.detail })}.\n${node.schema ? 'Give your verdict ("approve" or "changes") and findings in the result object; use an empty findings array if there are none.' : 'Return a JSON object inside the crewboard-report block: {"verdict":"approve"|"changes","findings":[{"severity":"...","file":"...","line":1,"problem":"...","scenario":"..."}]}. Use an empty findings array if there are none.'}\n`
+      }
       // An answer or a decision changes no files: the backend enforces it where it can, the prompt says it everywhere.
       const readOnly = node.resultKind === 'answer' || node.resultKind === 'decision'
       // ac1: the access the owner's preset granted belongs to the assignment and survives a handoff; read-only work keeps none.
       const assigned = own.find((e): e is EventOf<'assigned'> => e.type === 'assigned')
       const access = readOnly ? undefined : assigned?.access
       const writableRoots = readOnly ? undefined : assigned?.writableRoots
-      runId = await o.pool.launch({ agent, cwd, prompt, model, ...(effort !== undefined ? { effort } : {}), readOnly, ...(access ? { access } : {}), ...(writableRoots ? { writableRoots } : {}) })
+      runId = await o.pool.launch({ agent, cwd, prompt: previousSessionId ? continuation : prompt, ...(previousSessionId ? { previousSessionId, fallbackPrompt: prompt } : {}), model, ...(effort !== undefined ? { effort } : {}), readOnly, ...(access ? { access } : {}), ...(writableRoots ? { writableRoots } : {}), ...(node.schema ? { schema: node.schema } : {}) })
     } catch (error) {
       // ws1: the worktree is still being prepared; the next tick tries again. The owner sees it once.
       if (error instanceof WorktreePreparing) {
@@ -160,7 +240,7 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
       await append(goalId, { type: 'run_ended', goalId, assignmentId: node.id, actor: 'system', runId: failed, outcome: 'failed', reason })
       return
     }
-    await append(goalId, { type: 'run_started', goalId, assignmentId: node.id, actor: 'system', runId, agent, cwd, ...snapshot })
+    await append(goalId, { type: 'run_started', goalId, assignmentId: node.id, actor: 'system', runId, agent, cwd, ...snapshot, ...(baseCommit ? { baseCommit } : {}), ...(baseBranch ? { baseBranch } : {}), ...(reviewCommit ? { reviewCommit, reviewBase } : {}), ...(previousSessionId ? { resumed: true } : {}) })
   }
 
   const readRun = async ({ goalId, node, own }: Live, started: EventOf<'run_started'>) => {
@@ -195,18 +275,29 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
         })
       ).map((a) => a.id),
     )
-    const outcome = parseOutcome(r.finalText ?? '', known)
+    const presets: Record<string, AgentPreset> = await agents.presets().catch((error: unknown) => { registryError = error instanceof Error ? error.message : String(error); return {} })
+    const outcome = parseOutcome(r.finalText ?? '', known, new Set(Object.keys(presets)))
     if (outcome.kind === 'question') await append(goalId, { type: 'question', goalId, assignmentId: node.id, actor: 'worker', text: outcome.text, options: outcome.options })
-    else await append(goalId, { type: 'reported', goalId, assignmentId: node.id, actor: 'worker', summary: outcome.summary, ...(outcome.kind === 'report' && (node.resultKind === 'answer' || node.resultKind === 'decision') && outcome.detail ? { detail: outcome.detail } : {}), ...(outcome.kind === 'split' ? { split: true } : {}), ...(outcome.code ? { code: outcome.code } : {}) })
+    else await append(goalId, { type: 'reported', goalId, assignmentId: node.id, actor: 'worker', summary: outcome.summary, ...(outcome.kind === 'report' && (node.resultKind === 'answer' || node.resultKind === 'decision') && outcome.detail ? { detail: outcome.detail } : {}), ...(outcome.kind === 'report' && node.schema ? checkResult(node.schema, outcome) : {}), ...(outcome.kind === 'split' ? { split: true } : {}), ...(outcome.code ? { code: outcome.code } : {}) })
     if (outcome.kind === 'split') {
       // What the split could not honour is said in the journal, not dropped silently.
       const dropped = outcome.parts.length - MAX_SPLIT
       if (dropped > 0) await append(goalId, { type: 'progress', goalId, assignmentId: node.id, actor: 'system', text: `Split into ${outcome.parts.length} parts; only the first ${MAX_SPLIT} were created, ${dropped} dropped`, code: 'split_truncated', detail: String(dropped) })
       if (registryError) await append(goalId, { type: 'progress', goalId, assignmentId: node.id, actor: 'system', text: `Agent tags in the split were ignored, the agent registry cannot be read: ${registryError}`, code: 'split_registry', detail: registryError })
+      const unknown = [...(r.finalText ?? '').matchAll(/^\s*-\s+\[((?:preset:)?[a-z0-9][a-z0-9._-]*)\]/gim)].map((m) => m[1]!).filter((name) => name.startsWith('preset:') ? !presets[name.slice(7)] : !known.has(name) && !presets[name])
+      if (unknown.length && !registryError) await append(goalId, { type: 'progress', goalId, assignmentId: node.id, actor: 'system', text: `Unknown split agent or preset: ${unknown.join(', ')}`, code: 'split_registry', detail: unknown.join(', ') })
+      const assigned = own.find((e): e is EventOf<'assigned'> => e.type === 'assigned')
       for (const part of outcome.parts.slice(0, MAX_SPLIT)) {
+        const preset = part.preset ? presets[part.preset] : undefined
+        const explicit = !!part.provider || !!preset
+        const model = explicit ? preset?.model : started.model
+        const effort = explicit ? preset?.effort : started.effort
+        const access = preset?.access === 'network' && assigned?.access === 'full' ? 'network' : assigned?.access
         await append(goalId, {
           type: 'assigned', goalId, assignmentId: `a-${randomBytes(3).toString('hex')}`, actor: 'worker', parentId: node.id, title: part.title, criteria: part.criteria,
-          resultKind: node.resultKind === 'goal' ? 'local' : node.resultKind, provider: part.provider ?? (node.provider as ProviderId), after: [],
+          resultKind: node.resultKind === 'goal' ? 'local' : node.resultKind, provider: preset?.agent ?? part.provider ?? (node.provider as ProviderId), after: [],
+          ...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}), ...(access ? { access } : {}), ...(assigned?.writableRoots ? { writableRoots: assigned.writableRoots } : {}),
+          ...(node.schema ? { schema: node.schema } : {}),
         })
       }
     }
@@ -226,8 +317,8 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
       const closed = kidEvents.findLast((e): e is EventOf<'closed'> => e.type === 'closed')
       const cancelled = kidEvents.findLast((e): e is EventOf<'cancelled'> => e.type === 'cancelled')
       const reported = kidEvents.findLast((e): e is EventOf<'reported'> => e.type === 'reported')
-      if (v.status === 'reported') return `- ${v.title}: ${reported ? [reported.summary, reported.detail].filter(Boolean).join('\n\n') : 'reported'}`
-      return `- ${v.title}: ${v.status === 'done' ? (closed?.summary ?? 'done') : `not done (${cancelled?.reason ?? v.status})`}`
+      if (v.status === 'reported') return `- ${v.title}: ${reportText(reported) || 'reported'}`
+      return `- ${v.title}: ${v.status === 'done' ? [closed?.summary ?? 'done', reportText(reported)].filter(Boolean).join('\n\n') : `not done (${cancelled?.reason ?? v.status})`}`
     })
     await this_.deliver(goalId, node.id, `Your assignments have finished:\n${results.join('\n')}\n\nContinue your task with these results in mind.`)
   }
@@ -254,7 +345,7 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
     for (const meta of await o.store.listGoals()) {
       const { events, nodes, byId } = await load(meta.goalId)
       for (const node of nodes) {
-        if (node.parentId === null || isTerminal(node.status)) continue
+        if (node.parentId === null || node.external || isTerminal(node.status)) continue
         const own = events.filter((e) => e.assignmentId === node.id)
         const live = openRun(own)
         if (live) {
@@ -266,20 +357,24 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
           continue
         }
         const unblocked = own.some((e) => e.type === 'unblocked')
+        if (node.status === 'queued' && !unblocked) {
+          const cancelled = node.after.find((id) => byId.get(id)?.status === 'cancelled')
+          if (cancelled && !own.some((e) => e.type === 'progress' && e.code === 'blocked_dependency')) {
+            await append(meta.goalId, { type: 'progress', goalId: meta.goalId, assignmentId: node.id, actor: 'system', code: 'blocked_dependency', detail: cancelled, text: `Dependency ${cancelled} was cancelled; cancel this assignment or use start_now to run it.` })
+          }
+        }
         if (node.status === 'queued' && (unblocked || node.after.every((id) => byId.get(id)?.status === 'done'))) {
           // Parts of branch work run in the worker's own copy, so the worker builds on them.
           const parent = node.parentId ? byId.get(node.parentId) : undefined
           const inheritCwd = own.some((e) => e.type === 'assigned' && e.actor === 'worker') && parent?.resultKind === 'branch' && parent.cwd
           // Clarifications sent while the work waited in the queue were only journaled: its first run starts with them.
-          const waited = own.some((e) => e.type === 'run_started') ? [] : own.filter((e): e is EventOf<'steered'> => e.type === 'steered').map((e) => `- ${e.text}`)
-          const note = waited.length ? `Clarifications sent while this assignment waited:\n${waited.join('\n')}` : undefined
-          await launch(meta.goalId, node, own, () => (inheritCwd ? Promise.resolve(inheritCwd) : cwdFor(node)), chainOf(byId, node), note)
+          await launch(meta.goalId, node, own, () => (inheritCwd ? Promise.resolve(inheritCwd) : cwdFor(node)), chainOf(byId, node))
         }
       }
       // After this pass's results are in, workers whose split-off parts all finished continue.
       const fresh = await load(meta.goalId)
       for (const node of fresh.nodes) {
-        if (node.parentId === null || isTerminal(node.status)) continue
+        if (node.parentId === null || node.external || isTerminal(node.status)) continue
         const own = fresh.events.filter((e) => e.assignmentId === node.id)
         if (!openRun(own)) await resumeAfterSplit(meta.goalId, node, own, fresh.events, fresh.byId)
       }
@@ -305,6 +400,7 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
       const { events, byId } = await load(goalId)
       const node = byId.get(assignmentId)
       if (!node) throw new Error(`no assignment ${assignmentId} in goal ${goalId}`)
+      if (node.external) throw new Error('Crewboard cannot deliver messages to external work; use crewboard_track_update')
       if (isTerminal(node.status)) throw new Error(`assignment ${assignmentId} is ${node.status}; assign new work instead`)
       if (node.status === 'queued') return 'recorded'
       // A worker waiting on parts it split off resumes with their results; relaunching now would lose them.
@@ -324,9 +420,9 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
       }
       const question = lastOf(own, 'question')
       const report = lastOf(own, 'reported')
-      const before = question && question.seq > (report?.seq ?? 0) ? `You asked: ${question.text}` : report ? `Your previous report: ${report.summary}` : ''
+      const before = question && question.seq > (report?.seq ?? 0) ? `You asked: ${question.text}` : report ? `Your previous report: ${reportText(report)}` : ''
       const note = [before, text].filter(Boolean).join('\n\n')
-      await launch(goalId, node, own, () => (last?.cwd ? Promise.resolve(last.cwd) : cwdFor(node)), chainOf(byId, node), note)
+      await launch(goalId, node, own, () => (last?.cwd ? Promise.resolve(last.cwd) : cwdFor(node)), chainOf(byId, node), note, text)
       return 'relaunched'
     },
 
@@ -335,6 +431,7 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
       const { events, byId } = await load(goalId)
       const node = byId.get(assignmentId)
       if (!node) throw new Error(`no assignment ${assignmentId} in goal ${goalId}`)
+      if (node.external) throw new Error('Crewboard cannot reassign external work')
       const agent = await agents.get(provider)
       if (!agent) throw new Error(`agent ${provider} is not in the registry`)
       validateEffort(agent, effort ?? agent.effort, model)
@@ -351,13 +448,27 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
       await this_.deliver(goalId, assignmentId, from === provider ? `Continue this work where it stopped${now ? `, now with ${now}` : ''}.` : `This work was handed to you from ${from}. Continue where it stopped.`)
     },
 
+    /** Finishes a tracked operation without touching any runner or pretending to stop its external process. */
+    async finishExternal(goalId: string, assignmentId: string, outcome: 'success' | 'failure', summary: string): Promise<void> {
+      const { byId, nodes } = await load(goalId)
+      const top = byId.get(assignmentId)
+      if (!top?.external) throw new Error(`assignment ${assignmentId} is not external work`)
+      if (isTerminal(top.status) || top.underFinished) throw new Error(`assignment ${assignmentId} is finished`)
+      if (flatten(top).slice(1).some((n) => !isTerminal(n.status))) throw new Error('finish the open child assignments first')
+      await append(goalId, { type: 'external_finished', goalId, assignmentId, actor: 'lead', outcome, summary })
+      await notifyGoalIdle(goalId, assignmentId, nodes)
+    },
+
     /** Closes work the lead accepts. Runs still open on it or under it stop, so no worker keeps editing for nothing. */
     async close(goalId: string, assignmentId: string, summary: string): Promise<void> {
       const { events, byId, nodes } = await load(goalId)
       const top = byId.get(assignmentId)
       if (!top) throw new Error(`no assignment ${assignmentId} in goal ${goalId}`)
+      if (top.external) throw new Error('finish external work with crewboard_track_finish and an outcome')
       if (isTerminal(top.status)) throw new Error(`assignment ${assignmentId} is ${top.status} already`)
+      if (flatten(top).some((n) => n.external && !isTerminal(n.status))) throw new Error('finish the open external descendants before closing this assignment')
       for (const node of flatten(top)) {
+        if (node.external) continue
         const live = openRun(events.filter((e) => e.assignmentId === node.id))
         if (!live) continue
         await o.pool.cancel(live.agent, live.runId)
@@ -372,9 +483,10 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
       const { events, byId, nodes } = await load(goalId)
       const top = byId.get(assignmentId)
       if (!top) throw new Error(`no assignment ${assignmentId} in goal ${goalId}`)
+      if (top.external) throw new Error('Crewboard cannot stop external work; stop it at its source and use crewboard_track_finish')
       for (const node of flatten(top)) {
         if (isTerminal(node.status)) continue
-        const live = openRun(events.filter((e) => e.assignmentId === node.id))
+        const live = node.external ? undefined : openRun(events.filter((e) => e.assignmentId === node.id))
         if (live) {
           await o.pool.cancel(live.agent, live.runId)
           await append(goalId, { type: 'run_ended', goalId, assignmentId: node.id, actor: 'system', runId: live.runId, outcome: 'cancelled', reason })

@@ -64,6 +64,7 @@ export const en: Strings = {
       case 'split_registry': return `Agent tags in the split were ignored, the agent registry cannot be read: ${detail}`
       case 'launch_registry': return `Queued work waits for the agent registry to be fixed: ${detail}`
       case 'goal_idle': return 'All work is finished, waiting for the lead’s summary'
+      case 'blocked_dependency': return `Dependency ${detail} was cancelled; cancel this assignment or start it now`
       case 'worktree_setup': return `Preparing the worktree: ${detail}`
     }
   },
@@ -114,6 +115,16 @@ export const en: Strings = {
   goals: 'Goals',
   tree: 'Assignments',
   context: 'Assignment context',
+  external: {
+    kind: { workflow: 'Workflow', agent: 'Subagent', delegate: 'Delegation', other: 'External run' },
+    source: 'Source',
+    id: 'External ID',
+    phase: 'Phase / role',
+    stale: 'Updates are stale',
+    outcome: { success: 'Succeeded', failure: 'Failed' },
+    controls: 'Crewboard does not control this run: clarification, handoff and emergency stop are unavailable. Discuss changes with the lead.',
+    tracked: 'External run tracked',
+  },
   finishedGroup: (n) => `Finished ${n}`,
   usage: {
     title: 'Providers',
@@ -137,8 +148,11 @@ export const en: Strings = {
   },
   close: 'Close',
   origin: 'Where it came from',
+  originExternal: 'The lead runs this work outside Crewboard and records it here.',
   originByWorker: 'The worker split this part of the work off itself.',
   criteria: 'Done when',
+  result: 'Result',
+  schemaError: 'Schema error',
   inside: 'Assignments inside',
   history: 'History',
   workdir: 'Working folder',

@@ -50,7 +50,7 @@ export function createDshBackend(opts: DshBackendOptions): RunBackend {
   return {
     id: 'dsh',
 
-    async launch({ agent, promptFile, cwd, model: configuredModel }: LaunchInput) {
+    async launch({ agent, promptFile, cwd, model: configuredModel, previousSessionId, fallbackPromptFile }: LaunchInput) {
       const model = configuredModel ?? dshModel(agent)
       const policy = classifyAnthropicRoute({ backend: 'dsh', model, id: agent }, {})
       if (policy.applies && !policy.allowed) throw new AnthropicPolicyError(policy.code, policy.vars)
@@ -59,6 +59,8 @@ export function createDshBackend(opts: DshBackendOptions): RunBackend {
       await mkdir(join(runDir, 'mailbox'), { recursive: true })
       const args: RunnerArgs = {
         runDir,
+        ...(previousSessionId ? { previousSessionId } : {}),
+        ...(fallbackPromptFile ? { fallbackPromptFile } : {}),
         cwd,
         promptFile,
         command: opts.command ?? DEFAULT_DSH_COMMAND.command,

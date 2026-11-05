@@ -47,6 +47,109 @@ const statusOf = async (store: ReturnType<typeof createEventStore>, id: string) 
 const typesOf = async (store: ReturnType<typeof createEventStore>, id: string) => (await store.read('g')).filter((e) => e.assignmentId === id).map((e) => e.type)
 
 describe('supervisor', () => {
+  const resultSchema = { type: 'object', properties: { verdict: { type: 'string', enum: ['pass', 'fail'] } }, required: ['verdict'], additionalProperties: false }
+
+  it('keeps a validated result in the inbox and status and gives it to after dependants', async () => {
+    const { store, sup, fake } = await setup()
+    fake.script({ final: JSON.stringify({ handback: '<crewboard-report>Checked</crewboard-report>', result: { verdict: 'pass' } }) }, { hold: true })
+    await goal(store)
+    await store.append('g', assign('review', { schema: resultSchema }))
+    await store.append('g', assign('next', { after: ['review'] }))
+    await sup.tick()
+    expect(fake.launches[0]?.schema).toMatchObject({ properties: { result: { anyOf: [resultSchema, { type: 'null' }] } } })
+    await sup.tick()
+    expect((await createInbox(store).pending()).find((e) => e.type === 'reported')).toMatchObject({ summary: 'Checked', result: { verdict: 'pass' } })
+    expect(flatten(buildTree(await store.read('g'), new Date(), new Date())).find((n) => n.id === 'review')).toMatchObject({ schema: resultSchema, result: { verdict: 'pass' } })
+    expect(fake.runs).toHaveLength(1)
+    await sup.close('g', 'review', 'accepted')
+    await sup.tick()
+    expect(fake.runs[1]?.prompt).toContain('"verdict":"pass"')
+    expect(fake.runs[1]?.prompt).toContain('review')
+  })
+
+  it('does not expose a superseded result after reopening, including to forced after dependants', async () => {
+    const { store, sup, fake } = await setup()
+    fake.script({ final: '<crewboard-report>{"verdict":"pass"}</crewboard-report>' }, { hold: true }, { hold: true })
+    await goal(store)
+    await store.append('g', assign('review', { schema: resultSchema }))
+    await sup.tick()
+    await sup.tick()
+    await sup.close('g', 'review', 'accepted')
+    await store.append('g', { type: 'reopened', goalId: 'g', assignmentId: 'review', actor: 'lead', note: 'check again' })
+    expect(flatten(buildTree(await store.read('g'), new Date(), new Date())).find((n) => n.id === 'review')).not.toHaveProperty('result')
+    await sup.deliver('g', 'review', 'check again')
+    await store.append('g', assign('next', { after: ['review'] }))
+    await store.append('g', { type: 'unblocked', goalId: 'g', assignmentId: 'next', actor: 'lead' })
+    await sup.tick()
+    expect(fake.runs[2]?.prompt).not.toContain('"result":{"verdict":"pass"}')
+    expect(fake.runs[2]?.prompt).not.toContain('Accepted: accepted')
+  })
+
+  it.each([
+    ['missing', '<crewboard-report>done</crewboard-report>', /JSON|missing/i],
+    ['malformed', '<crewboard-report>{"verdict":</crewboard-report>', /JSON/i],
+    ['invalid', '{"handback":"<crewboard-report>done</crewboard-report>","result":{"verdict":"maybe"}}', /schema|allowed/i],
+    ['too large', JSON.stringify({ handback: '<crewboard-report>done</crewboard-report>', result: { verdict: 'pass', padding: 'я'.repeat(33_000) } }), /size|bytes|large|limit/i],
+  ])('reports an explicit error for a %s structured result', async (_name, final, error) => {
+    const { store, sup, fake } = await setup()
+    fake.script({ final })
+    await goal(store)
+    await store.append('g', assign('review', { schema: resultSchema }))
+    await store.append('g', assign('next', { after: ['review'] }))
+    await sup.tick()
+    await sup.tick()
+    const report = (await createInbox(store).pending()).find((e) => e.type === 'reported')
+    expect(report).toMatchObject({ schemaError: expect.stringMatching(error) })
+    expect(report).not.toHaveProperty('result')
+    expect(flatten(buildTree(await store.read('g'), new Date(), new Date())).find((n) => n.id === 'review')).toMatchObject({ schemaError: expect.stringMatching(error) })
+    await sup.close('g', 'review', 'accepted with known error')
+    fake.script({ hold: true })
+    await sup.tick()
+    expect(fake.runs[1]?.prompt).toContain('schemaError')
+  })
+
+  it.each([
+    ['valid', '{"verdict":"pass"}', '"verdict":"pass"'],
+    ['invalid', '{"verdict":"maybe"}', '"schemaError":'],
+  ])('accepts legacy control blocks with a schema and returns a %s child result to the parent', async (_name, result, expected) => {
+    const { store, sup, fake } = await setup()
+    fake.script({ final: '<crewboard-question>Need context?</crewboard-question>' }, { final: '<crewboard-split>\n- Child\n</crewboard-split>' }, { final: `<crewboard-report>${result}</crewboard-report>` }, { hold: true })
+    await goal(store)
+    await store.append('g', assign('parent', { schema: resultSchema }))
+    await sup.tick()
+    await sup.tick()
+    expect((await store.read('g')).filter((e) => e.type === 'reported')).toHaveLength(0)
+    await sup.deliver('g', 'parent', 'context')
+    await sup.tick()
+    const split = (await store.read('g')).find((e) => e.type === 'reported')
+    expect(split).toMatchObject({ split: true })
+    expect(split).not.toHaveProperty('schemaError')
+    await sup.tick()
+    await sup.tick()
+    expect(fake.runs.at(-1)?.prompt).toContain(expected)
+    const child = (await store.read('g')).find((e) => e.type === 'assigned' && e.actor === 'worker')
+    expect(child).toMatchObject({ schema: resultSchema })
+  })
+
+  it.each([
+    ['bad type', { type: 'nonsense' }, /schema/i],
+    ['bad keyword', { type: 'object', required: 'verdict' }, /schema/i],
+    ['non-object result', { type: 'string' }, /object/i],
+    ['async schema', { type: 'object', $async: true }, /async/i],
+    ['too large', { type: 'object', description: 'я'.repeat(9_000) }, /size|bytes|large|limit/i],
+    ['external ref', { type: 'object', properties: { verdict: { $ref: 'https://example.com/result.json' } } }, /schema|ref/i],
+  ])('rejects an invalid assignment schema before recording or launching it: %s', async (_name, schema, error) => {
+    const { root, store, sup, fake } = await setup()
+    await goal(store)
+    const ctx: ProjectContext = {
+      repo: root, store, agents: (await import('../src/workers/agents.js')).builtinAgents, supervisor: sup, inbox: createInbox(store), steps: createStepsReader(store, async () => fake.backend),
+      exclusive: (fn) => fn(ctx), register: async () => {}, tickOnce: () => sup.tick(),
+    }
+    await expect(createLeadCommands(async () => ctx, () => new Date()).assign({ project: root, goalId: 'g', title: 'Work', criteria: [], resultKind: 'answer', provider: 'codex', schema })).rejects.toThrow(error)
+    expect((await store.read('g')).filter((e) => e.type === 'assigned')).toHaveLength(0)
+    expect(fake.launches).toHaveLength(0)
+  })
+
   it('returns an assignment while its worktree is still being prepared', async () => {
     const { root, store, pool, fake } = await setup()
     await goal(store)
@@ -337,6 +440,19 @@ describe('supervisor', () => {
     expect(ended).toMatchObject({ outcome: 'failed', reason: expect.stringContaining('gone') })
   })
 
+  it('includes goal and completed dependency context in the first prompt', async () => {
+    const { store, sup, fake } = await setup()
+    fake.setFallback({ hold: true })
+    await store.writeMeta({ goalId: 'g', title: 'Goal', createdAt: new Date().toISOString() })
+    await store.append('g', { type: 'goal_started', goalId: 'g', assignmentId: 'g', actor: 'lead', title: 'Goal', criteria: ['goal criterion'], quote: 'owner goal words' })
+    await store.append('g', assign('a', { branch: 'feature/a' }))
+    await store.append('g', { type: 'closed', goalId: 'g', assignmentId: 'a', actor: 'lead', summary: 'dependency result' })
+    await store.append('g', assign('b', { after: ['a'], quote: 'owner assignment words' }))
+    await sup.tick()
+    const prompt = fake.runs[0]!.prompt
+    for (const text of ['goal criterion', 'owner goal words', 'owner assignment words', 'dependency result', 'feature/a']) expect(prompt).toContain(text)
+  })
+
   it('gives a queued assignment the clarifications sent while it waited', async () => {
     const { store, sup, fake } = await setup()
     fake.setFallback({ hold: true })
@@ -539,6 +655,22 @@ describe('supervisor', () => {
     expect(fake.runs[1]!.cwd).toBe(fake.runs[0]!.cwd)
     expect(fake.runs[1]!.prompt).toContain('Шторка?')
     expect(fake.runs[1]!.prompt).toContain('шторка снизу')
+  })
+
+  it('resumes the same agent after an answer but not after handoff', async () => {
+    const { store, sup, fake } = await setup()
+    fake.script({ final: '<crewboard-question>Question?</crewboard-question>', usage: { sessionId: 'session-1', calls: 1, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, reasoningTokens: 0 } }, { hold: true })
+    await goal(store)
+    await store.append('g', assign('a'))
+    await sup.tick()
+    await sup.tick()
+    // A clarification recorded while no run was open reaches the resumed session too.
+    await store.append('g', { type: 'steered', goalId: 'g', assignmentId: 'a', actor: 'lead', text: 'keep the old API' })
+    await sup.deliver('g', 'a', 'answer')
+    expect(fake.launches[1]).toMatchObject({ previousSessionId: 'session-1' })
+    expect(fake.runs[1]!.prompt).toContain('keep the old API')
+    await sup.reassign('g', 'a', 'codex')
+    expect(fake.launches[2]).not.toHaveProperty('previousSessionId')
   })
 
   it('cancels a subtree and stops its live runs', async () => {

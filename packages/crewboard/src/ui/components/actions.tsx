@@ -38,10 +38,10 @@ export function Actions(props: {
   const busy = useRef(false)
   const rows = useRef<Partial<Record<RequestAction, HTMLButtonElement | null>>>({})
   const field = useRef<HTMLTextAreaElement>(null)
-  const actions = availableActions(node)
+  const actions = availableActions(node).filter((action) => !node.external || action === 'discuss')
   const asks = ORDER.filter((a) => actions.includes(a))
   const canStopNow = actions.includes('emergency_stop')
-  const pending = node.request?.state === 'pending' ? node.request : undefined
+  const pending = !node.external && node.request?.state === 'pending' ? node.request : undefined
   const handoff = node.pendingRun ?? node
 
   useEffect(() => {
@@ -99,6 +99,7 @@ export function Actions(props: {
 
   return (
     <section className="na" aria-label={T.actions}>
+      {node.external && <p className="hint-line">{T.external.controls}</p>}
       {pending && (
         <div className="na-pending" role="status">
           <HourglassMedium size={16} aria-hidden="true" />

@@ -5,6 +5,14 @@ import type { WorkerAccess } from '@crewboard/core'
 export type ProviderId = string
 export const RESULT_KINDS = ['local', 'branch', 'answer', 'decision'] as const
 export type ResultKind = (typeof RESULT_KINDS)[number]
+export const EXTERNAL_KINDS = ['workflow', 'agent', 'delegate', 'other'] as const
+export const EXTERNAL_OUTCOMES = ['success', 'failure'] as const
+export const externalSourceSchema = z.object({
+  kind: z.enum(EXTERNAL_KINDS),
+  externalId: z.string().min(1).optional(),
+  phase: z.string().optional(),
+})
+export type ExternalSource = z.infer<typeof externalSourceSchema>
 /** The screen bundles this file without core's runtime: the list is repeated here and checked against core's type. */
 const WORKER_ACCESS = ['network', 'full'] as const satisfies readonly WorkerAccess[]
 /** Never stored: always derived from the journal (model/project.ts). `paused` belongs to a goal's root alone. */
@@ -13,7 +21,7 @@ export type Actor = 'lead' | 'owner' | 'worker' | 'system'
 export const REQUEST_ACTIONS = ['clarify', 'stop', 'handoff', 'start_now', 'cancel', 'reopen', 'revive', 'discuss'] as const
 export type RequestAction = (typeof REQUEST_ACTIONS)[number]
 /** Texts Crewboard itself writes into a journal. Stored as a code, so the screen words them in the owner's language. */
-export const SYSTEM_TEXTS = ['emergency_stop', 'owner_stop', 'run_failed', 'parent_cancelled', 'no_report', 'split', 'split_truncated', 'split_registry', 'launch_registry', 'worktree_setup', 'goal_idle'] as const
+export const SYSTEM_TEXTS = ['emergency_stop', 'owner_stop', 'run_failed', 'parent_cancelled', 'no_report', 'split', 'split_truncated', 'split_registry', 'launch_registry', 'worktree_setup', 'goal_idle', 'blocked_dependency'] as const
 export type SystemText = (typeof SYSTEM_TEXTS)[number]
 
 const base = {
@@ -24,9 +32,18 @@ const base = {
   actor: z.enum(['lead', 'owner', 'worker', 'system']),
 }
 const text = z.string()
+export const MAX_SCHEMA_BYTES = 16_384
+export const MAX_RESULT_BYTES = 65_536
+export type JsonObject = Record<string, unknown>
+/** Shared with the browser bundle: limits count serialized UTF-8 bytes, not JavaScript characters. */
+export const jsonBytes = (value: JsonObject): number => new TextEncoder().encode(JSON.stringify(value)).length
+const boundedObject = (limit: number) => z.record(z.string(), z.unknown()).refine((value) => jsonBytes(value) <= limit, `JSON exceeds the ${limit} byte size limit`)
 
 export const goalEventSchema = z.discriminatedUnion('type', [
   z.object({ ...base, type: z.literal('goal_started'), title: text, criteria: z.array(text), quote: text.optional(), client: text.optional() }),
+  z.object({ ...base, type: z.literal('external_tracked'), parentId: z.string().min(1), title: text.min(1), model: text.optional(), ...externalSourceSchema.shape }),
+  z.object({ ...base, type: z.literal('external_progress'), text, phase: text.optional() }),
+  z.object({ ...base, type: z.literal('external_finished'), outcome: z.enum(EXTERNAL_OUTCOMES), summary: text }),
   z.object({
     ...base,
     type: z.literal('assigned'),
@@ -39,17 +56,19 @@ export const goalEventSchema = z.discriminatedUnion('type', [
     effort: text.optional(),
     access: z.enum(WORKER_ACCESS).optional(),
     branch: text.optional(),
+    reviewOf: text.optional(),
     writableRoots: z.array(text).optional(),
     quote: text.optional(),
     after: z.array(z.string()),
+    schema: boundedObject(MAX_SCHEMA_BYTES).optional(),
   }),
-  z.object({ ...base, type: z.literal('run_started'), runId: text, agent: text, cwd: text, model: text.optional(), effort: text.optional() }),
+  z.object({ ...base, type: z.literal('run_started'), runId: text, agent: text, cwd: text, baseCommit: text.optional(), baseBranch: text.optional(), reviewCommit: text.optional(), reviewBase: text.optional(), model: text.optional(), effort: text.optional(), resumed: z.boolean().optional() }),
   z.object({ ...base, type: z.literal('progress'), text, code: z.enum(SYSTEM_TEXTS).optional(), detail: text.optional() }),
   z.object({ ...base, type: z.literal('question'), text, options: z.array(text) }),
   z.object({ ...base, type: z.literal('escalated'), text, options: z.array(text), why: text }),
   z.object({ ...base, type: z.literal('answered'), text }),
   z.object({ ...base, type: z.literal('steered'), text }),
-  z.object({ ...base, type: z.literal('reported'), summary: text, detail: text.max(30_000).optional(), split: z.boolean().optional(), code: z.enum(SYSTEM_TEXTS).optional() }),
+  z.object({ ...base, type: z.literal('reported'), summary: text, detail: text.max(30_000).optional(), result: boundedObject(MAX_RESULT_BYTES).optional(), schemaError: text.max(2000).optional(), split: z.boolean().optional(), code: z.enum(SYSTEM_TEXTS).optional() }),
   z.object({ ...base, type: z.literal('returned'), note: text }),
   z.object({
     ...base,
@@ -87,6 +106,8 @@ export type AssignmentView = {
   criteria: string[]
   resultKind: ResultKind | 'goal'
   provider: ProviderId | 'lead'
+  /** Work run by the lead outside Crewboard; stale work remains open until explicitly finished. */
+  external?: ExternalSource & { outcome?: (typeof EXTERNAL_OUTCOMES)[number]; stale: boolean }
   /** Current or last run's snapshot; before a run (and for legacy journals), assignment overrides or registry defaults. */
   model?: string
   effort?: string
@@ -96,7 +117,12 @@ export type AssignmentView = {
   pendingRun?: { model?: string; effort?: string }
   quote?: string
   branch?: string
+  reviewOf?: string
+  reviews?: Array<{ id: string; commit?: string; base?: string; verdict?: 'approve' | 'changes'; findings?: Array<{ severity: string; file: string; line: number; problem: string; scenario: string }>; stale?: boolean }>
   after: string[]
+  schema?: JsonObject
+  result?: JsonObject
+  schemaError?: string
   status: Status
   doing: Doing
   runId?: string

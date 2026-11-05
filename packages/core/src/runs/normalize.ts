@@ -339,8 +339,9 @@ export function normalize(events: RawEvent[], options: CommandPaths & { mergeToo
   const toolProblems = new Map<NormEvent, string>()
   // CLI processes can reuse item IDs after a new turn: a prior completion must not close a new call.
   let turnScope = 0
+  let lastAnswer: string | undefined
   for (const raw of events) {
-    if (raw.type === 'turn_started') turnScope += 1
+    if (raw.type === 'turn_started') { turnScope += 1; lastAnswer = undefined }
     const data = parseEventData(raw.data)
     if (raw.type === 'tool_completed') {
       const callId = callIdOf(data)
@@ -353,6 +354,14 @@ export function normalize(events: RawEvent[], options: CommandPaths & { mergeToo
       if (callId) toolProblems.set(n, `${turnScope}:${callId}`)
     }
     const prev = out.at(-1)
+    // A CLI records its last streamed answer as a result too. Keep that raw result for consumers, but
+    // do not repeat it on screen; a different result (e.g. Claude's structured output) is still shown.
+    if (n.kind === 'final' && prev?.kind === 'message' && lastAnswer !== undefined && n.display !== undefined && (n.display.trim() === lastAnswer.trim() || n.display.trim() === prev.display?.trim())) continue
+    if (raw.type === 'answer_delta') {
+      const text = publicText(raw.data)
+      if (text?.trim()) lastAnswer = text
+    }
+    else if (n.kind !== 'message') lastAnswer = undefined
     if (n.kind === 'message' && prev?.kind === 'message') {
       prev.text += n.text
       if (n.display !== undefined) prev.display = (prev.display ?? '') + n.display

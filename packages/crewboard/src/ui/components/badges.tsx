@@ -1,4 +1,4 @@
-import { CheckCircle, Clock, HandWaving, Pause, Prohibit, Question } from '../icons.js'
+import { CheckCircle, Clock, HandWaving, Pause, Prohibit, Question, Warning } from '../icons.js'
 import type { AssignmentView, Status } from '../../model/types.js'
 import { agentOf } from '../agents.js'
 import { leadLogo, logoOf } from '../logos.js'
@@ -30,7 +30,23 @@ export function Avatar(props: { provider: AssignmentView['provider']; leadClient
 const ICON: Partial<Record<Status, typeof Clock>> = { waiting_owner: HandWaving, waiting_answer: Question, reported: CheckCircle, done: CheckCircle, cancelled: Prohibit, abandoned: Prohibit, queued: Clock, paused: Pause }
 const TONE: Record<Status, string> = { running: 'running', waiting_owner: 'ask', waiting_answer: 'running', reported: 'running', done: 'done', cancelled: 'cancel', abandoned: 'cancel', queued: 'queued', paused: 'queued' }
 
-export function StatusBadge(props: { status: Status }) {
+export function StatusBadge(props: { status: Status; external?: AssignmentView['external'] }) {
+  if (props.external?.outcome) {
+    const outcome = props.external.outcome
+    const Icon = outcome === 'success' ? CheckCircle : Warning
+    return (
+      <span className={`st ${outcome === 'success' ? 'done' : 'failed'}`}>
+        <Icon size={14} aria-hidden="true" />
+        {T.external.outcome[outcome]}
+      </span>
+    )
+  }
+  if (props.external?.stale) return (
+    <span className="st stale">
+      <Clock size={14} aria-hidden="true" />
+      {T.external.stale}
+    </span>
+  )
   const Icon = ICON[props.status]
   return (
     <span className={`st ${TONE[props.status]}`}>

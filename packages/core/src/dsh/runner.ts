@@ -18,7 +18,7 @@ export type DshRunState = {
   reason?: FailureReason
   pid: number
 }
-export type RunnerArgs = { runDir: string; cwd: string; promptFile: string; model?: string; command: string; args: string[] }
+export type RunnerArgs = { runDir: string; cwd: string; promptFile: string; previousSessionId?: string; fallbackPromptFile?: string; model?: string; command: string; args: string[] }
 
 export const DEFAULT_DSH_COMMAND = { command: 'dsh', args: ['--profile', 'acp'] }
 const MAILBOX_POLL_MS = 250
@@ -127,7 +127,19 @@ export async function runDshRun(args: RunnerArgs, now: () => Date = () => new Da
 
   try {
     await conn.request('initialize', { protocolVersion: 1, clientCapabilities: {} })
-    const session = await conn.request<{ sessionId: string }>('session/new', { cwd: args.cwd, mcpServers: [] })
+    let resumed = false
+    let session: { sessionId: string }
+    if (args.previousSessionId) {
+      try {
+        await conn.request('session/resume', { sessionId: args.previousSessionId, cwd: args.cwd, mcpServers: [] })
+        session = { sessionId: args.previousSessionId }
+        resumed = true
+      } catch (error) {
+        if (!args.fallbackPromptFile) throw error
+        await emit('resume_failed', { reason: error instanceof Error ? error.message : String(error) })
+        session = await conn.request<{ sessionId: string }>('session/new', { cwd: args.cwd, mcpServers: [] })
+      }
+    } else session = await conn.request<{ sessionId: string }>('session/new', { cwd: args.cwd, mcpServers: [] })
     state.sessionId = session.sessionId
     await writeJsonAtomic(paths.state, state)
     if (args.model) {
@@ -137,7 +149,7 @@ export async function runDshRun(args: RunnerArgs, now: () => Date = () => new Da
 
     const queue: { text: string; id?: string }[] = []
     let cancelled = false
-    let next: { text: string; id?: string } | undefined = { text: await readFile(args.promptFile, 'utf8') }
+    let next: { text: string; id?: string } | undefined = { text: await readFile(args.previousSessionId && !resumed && args.fallbackPromptFile ? args.fallbackPromptFile : args.promptFile, 'utf8') }
     const drainMail = async (interrupt: boolean) => {
       for (const item of await takeMail(paths.mailbox)) {
         if (item.kind === 'cancel') {

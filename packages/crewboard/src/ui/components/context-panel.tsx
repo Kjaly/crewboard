@@ -1,6 +1,6 @@
 import { CaretRight, X } from '../icons.js'
 import { type ReactNode, useLayoutEffect, useRef } from 'react'
-import type { AssignmentView, GoalEvent } from '../../model/types.js'
+import type { AssignmentView, EventOf, GoalEvent } from '../../model/types.js'
 import { useModal } from '../use-modal.js'
 import { T, providerLabel } from '../text.js'
 import { Avatar, StatusBadge } from './badges.js'
@@ -11,6 +11,9 @@ const time = (iso: string) => new Date(iso).toLocaleTimeString(T.locale, { hour:
 const EVENT_TEXT: Partial<Record<GoalEvent['type'], (e: GoalEvent) => string>> = {
   goal_started: () => T.event.goal_started,
   assigned: () => T.event.assigned,
+  external_tracked: () => T.external.tracked,
+  external_progress: (e) => e.type === 'external_progress' ? e.text : '',
+  external_finished: (e) => e.type === 'external_finished' ? T.event.reported(e.summary) : '',
   run_started: () => T.event.run_started,
   progress: (e) => (e.type === 'progress' ? (e.code ? T.system(e.code, e.detail) : e.text) : ''),
   question: (e) => (e.type === 'question' ? T.event.question(e.text) : ''),
@@ -44,6 +47,7 @@ export function ContextPanel(props: {
   lead?: string
 }) {
   const { node, chain, events, onSelect } = props
+  const external = node.external
   const provider = node.runProvider ?? node.provider
   const giver = chain.at(-1)
   const aside = useRef<HTMLElement>(null)
@@ -58,6 +62,7 @@ export function ContextPanel(props: {
   useModal(aside, props.sheet && props.open, props.onClose)
   const modal = props.sheet && props.open ? { role: 'dialog', 'aria-modal': true as const } : {}
   const waiting = node.status === 'waiting_owner'
+  const report = events.findLast((e): e is EventOf<'reported'> => e.type === 'reported' && e.assignmentId === node.id)
   const worker = (
     <span>
       <Avatar provider={provider} leadClient={props.lead} /> <b>{providerLabel(provider)}</b> {node.parentId === null ? (props.lead ?? '') : (node.model ?? '')}
@@ -89,11 +94,22 @@ export function ContextPanel(props: {
           )}
         </div>
         <div className="meta">
-          <StatusBadge status={node.status} />
-          {!waiting && worker}
+          <StatusBadge status={node.status} external={external} />
+          {external ? node.model && <span>{node.model}</span> : !waiting && worker}
         </div>
+        {external && (
+          <section className="sec" aria-label={T.external.source}>
+            <dl className="external-details">
+              <dt>{T.external.source}</dt>
+              <dd>{T.external.kind[external.kind]}</dd>
+              {external.phase && <><dt>{T.external.phase}</dt><dd>{external.phase}</dd></>}
+              {external.externalId && <><dt>{T.external.id}</dt><dd className="mono">{external.externalId}</dd></>}
+            </dl>
+            <p>{T.doing(node.doing)}</p>
+          </section>
+        )}
         {waiting && props.question}
-        {waiting && <div className="meta">{worker}</div>}
+        {waiting && !external && <div className="meta">{worker}</div>}
         {chain.length > 0 && (
           <nav className="crumbs" aria-label={T.assignedBy}>
             {chain.map((c, i) => (
@@ -109,11 +125,30 @@ export function ContextPanel(props: {
         <RequestLine request={node.request} />
         {props.actions}
         {!waiting && props.question}
+        {report && (
+          <section className="sec report" aria-label={T.result}>
+            <h4>{T.result}</h4>
+            <p>{report.code ? T.system(report.code) : report.summary}</p>
+            {report.detail && <p>{report.detail}</p>}
+            {report.schemaError && (
+              <div className="report-error">
+                <b>{T.schemaError}</b>
+                <p>{report.schemaError}</p>
+              </div>
+            )}
+            {report.result !== undefined && (
+              <details key={`${node.id}:${report.seq}`} className="report-json">
+                <summary>JSON</summary>
+                <pre className="mono">{JSON.stringify(report.result, null, 2)}</pre>
+              </details>
+            )}
+          </section>
+        )}
         <section className="sec">
           <h4>{T.origin}</h4>
           <div className="quote">
-            <div className="who">{node.quote ? T.you : giver && chain.length > 1 ? providerLabel(giver.provider) : T.lead}</div>
-            <p>{node.quote ?? (chain.length > 1 ? T.originByWorker : '')}</p>
+            <div className="who">{node.quote ? T.you : !node.external && giver && chain.length > 1 ? providerLabel(giver.provider) : T.lead}</div>
+            <p>{node.quote ?? (node.external ? T.originExternal : chain.length > 1 ? T.originByWorker : '')}</p>
           </div>
           {props.onOpenHistory && (
             <button type="button" className="jump press" onClick={props.onOpenHistory}>
@@ -121,6 +156,20 @@ export function ContextPanel(props: {
             </button>
           )}
         </section>
+        {node.reviews && node.reviews.length > 0 && (
+          <section className="sec">
+            <h4>{T.locale.startsWith('ru') ? 'Ревью' : 'Reviews'}</h4>
+            {node.reviews.map((review) => (
+              <div key={review.id}>
+                <button type="button" className="jump press" onClick={() => onSelect(review.id)}>{review.id}</button>{' '}
+                <span className="mono">{review.commit?.slice(0, 12) ?? '…'}</span>{' · '}
+                {review.verdict ?? '…'}{' · '}
+                {review.stale === undefined ? '…' : review.stale ? (T.locale.startsWith('ru') ? 'устарело' : 'stale') : (T.locale.startsWith('ru') ? 'актуально' : 'current')}
+                {review.findings && <span> · {Object.entries(review.findings.reduce<Record<string, number>>((counts, finding) => { counts[finding.severity] = (counts[finding.severity] ?? 0) + 1; return counts }, {})).map(([severity, count]) => `${severity}: ${count}`).join(', ') || '0'}</span>}
+              </div>
+            ))}
+          </section>
+        )}
         {node.criteria.length > 0 && (
           <section className="sec">
             <h4>{T.criteria}</h4>
@@ -138,7 +187,7 @@ export function ContextPanel(props: {
               <button type="button" key={k.id} className={`n press ${k.status}`} onClick={() => onSelect(k.id)}>
                 <Avatar provider={k.provider} />
                 <span className="t">{k.title}</span>
-                <StatusBadge status={k.status} />
+                <StatusBadge status={k.status} external={k.external} />
               </button>
             ))}
           </section>

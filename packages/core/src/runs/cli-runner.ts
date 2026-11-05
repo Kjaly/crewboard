@@ -10,7 +10,7 @@ import { type BackgroundTask, type Parsed, type RateLimited, type TurnUsage, ope
 import { type FailureReason, failureTextOf } from './failure.js'
 import { uncommittedFiles } from './git-status.js'
 import { slotsDir } from '../slots/slots.js'
-import type { WorkerAccess } from '../backend/types.js'
+import type { LaunchInput, WorkerAccess } from '../backend/types.js'
 import { AnthropicPolicyError, assertAnthropicLaunchAllowed, classifyAnthropicRoute } from '../routing/anthropic-policy.js'
 import type { Backend } from '../preflight/preflight.js'
 
@@ -67,7 +67,7 @@ export type CliRunState = {
  */
 export type ClaudeAuth = 'native' | 'isolated'
 
-export type CliRunnerArgs = { kind: CliKind; claudeAuth?: ClaudeAuth; runDir: string; cwd: string; promptFile: string; model?: string; effort?: string; command: string; commandArgs?: string[]; background?: BackgroundTiming; readOnly?: boolean; access?: WorkerAccess; writableRoots?: string[]; commitRequired?: boolean; /** Non-secret: the resolved auth channel and policy revision, so a steer can tell a guarded run from an old child. */ authChannel?: string; policyRevision?: string }
+export type CliRunnerArgs = { kind: CliKind; claudeAuth?: ClaudeAuth; runDir: string; cwd: string; promptFile: string; previousSessionId?: string; fallbackPromptFile?: string; schema?: LaunchInput['schema']; model?: string; effort?: string; command: string; commandArgs?: string[]; background?: BackgroundTiming; readOnly?: boolean; access?: WorkerAccess; writableRoots?: string[]; commitRequired?: boolean; /** Non-secret: the resolved auth channel and policy revision, so a steer can tell a guarded run from an old child. */ authChannel?: string; policyRevision?: string }
 /** How long a Claude run stays open for the worker's own background work (bg1); tests shorten it. */
 export type BackgroundTiming = { limitMs?: number; wakeGraceMs?: number; noticeMs?: number }
 
@@ -196,7 +196,7 @@ async function driveClaude(args: CliRunnerArgs, s: Session, prompt: string, env:
     // Isolated only — `--bare` (docs/en/headless, 2026-09-28) never reads OAuth credentials or the system keychain,
     // so the run can only authenticate with the explicit ANTHROPIC_API_KEY the API-only policy configured, and it
     // keeps host hooks, plugins, MCP servers and CLAUDE.md out of the run. A native run keeps all of them.
-    [...(args.commandArgs ?? []), ...(isolated ? ['--bare'] : []), '-p', '--output-format', 'stream-json', '--input-format', 'stream-json', '--verbose', '--replay-user-messages', ...(args.readOnly ? ['--permission-mode', 'plan'] : ['--dangerously-skip-permissions']), ...(args.model ? ['--model', args.model] : []), ...(args.effort ? ['--effort', args.effort] : [])],
+    [...(args.commandArgs ?? []), ...(isolated ? ['--bare'] : []), ...(args.previousSessionId ? ['--resume', args.previousSessionId] : []), '-p', '--output-format', 'stream-json', '--input-format', 'stream-json', '--verbose', '--replay-user-messages', ...(args.schema !== undefined ? ['--json-schema', JSON.stringify(args.schema)] : []), ...(args.readOnly ? ['--permission-mode', 'plan'] : ['--dangerously-skip-permissions']), ...(args.model ? ['--model', args.model] : []), ...(args.effort ? ['--effort', args.effort] : [])],
     { cwd: args.cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: true, env },
   )
   s.worker(child.pid)
@@ -350,6 +350,7 @@ async function driveClaude(args: CliRunnerArgs, s: Session, prompt: string, env:
       }
     }
     if (!p.turnEnd) return
+    if (p.finalText !== undefined) void s.emit('result', p.finalText)
     ended += 1
     lastTurnOk = !p.turnEnd.failed
     lastTurnError = p.turnEnd.failed ? (p.turnEnd.error ?? 'turn failed') : undefined
@@ -390,7 +391,7 @@ async function driveClaude(args: CliRunnerArgs, s: Session, prompt: string, env:
 async function driveCodex(args: CliRunnerArgs, s: Session, prompt: string, env: NodeJS.ProcessEnv): Promise<number> {
   const queue: { text: string; id?: string }[] = []
   let next: { text: string; id?: string } | undefined = { text: prompt }
-  let thread: string | undefined
+  let thread: string | undefined = args.previousSessionId
   let turn = 0
   let code = 0
   let finishing = false
@@ -401,6 +402,7 @@ async function driveCodex(args: CliRunnerArgs, s: Session, prompt: string, env: 
     await s.emit('turn_started', { turn, text: next.text.trim().slice(0, 200), fullText: next.text })
     /** The current turn's answer, glued back from its `answer_delta` chunks (cm1): read once the turn ends. */
     let turnText = ''
+    let finalText: string | undefined
     const model = [...(args.model ? ['-m', args.model] : []), ...(args.effort ? ['-c', `model_reasoning_effort="${args.effort}"`] : []), '-c', 'model_reasoning_summary="concise"']
     // ac1: a read-only run stays read-only whatever access its preset grants.
     const sandbox = args.readOnly ? 'read-only' : args.access === 'full' ? 'danger-full-access' : 'workspace-write'
@@ -431,10 +433,11 @@ async function driveCodex(args: CliRunnerArgs, s: Session, prompt: string, env: 
       }
     }
     const writable = [...new Set(writableRoots)].flatMap((root) => ['--add-dir', root])
+    const schema = args.schema !== undefined ? ['--output-schema', join(args.runDir, 'output-schema.json')] : []
     // --add-dir belongs to exec; resume inherits its parent's options, but has no --add-dir of its own.
     const cli = thread
-      ? ['exec', ...writable, 'resume', '--json', '--skip-git-repo-check', '-c', `sandbox_mode="${sandbox}"`, ...network, ...model, thread, next.text]
-      : ['exec', ...writable, '--json', '--skip-git-repo-check', '-s', sandbox, ...network, ...model, next.text]
+      ? ['exec', ...writable, 'resume', '--json', '--skip-git-repo-check', '-c', `sandbox_mode="${sandbox}"`, ...network, ...model, ...schema, thread, next.text]
+      : ['exec', ...writable, '--json', '--skip-git-repo-check', '-s', sandbox, ...network, ...model, ...schema, next.text]
     const child = spawn(args.command, [...(args.commandArgs ?? []), ...cli], { cwd: args.cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: true, env })
     s.worker(child.pid)
     const steerId = next.id
@@ -452,6 +455,7 @@ async function driveCodex(args: CliRunnerArgs, s: Session, prompt: string, env: 
     const rl = createInterface({ input: child.stdout as NodeJS.ReadableStream })
     rl.on('line', (line) => {
       const p = parseCodexLine(line)
+      if (p.finalText !== undefined) finalText = p.finalText
       if (p.sessionId) {
         thread = p.sessionId
         threadReported = true
@@ -464,6 +468,10 @@ async function driveCodex(args: CliRunnerArgs, s: Session, prompt: string, env: 
       }
       s.onParsed(p)
       if (p.turnEnd) {
+        if (!p.turnEnd.failed && finalText !== undefined) {
+          void s.emit('result', finalText)
+          finalText = undefined
+        }
         void s.emit('turn_ended', { turn, stopReason: p.turnEnd.stopReason })
         if (p.turnEnd.failed) turnFailed = p.turnEnd.error ?? 'turn failed'
       }
@@ -653,7 +661,7 @@ const TURN_CLI_CONFIG: Partial<Record<CliKind, TurnCliConfig>> = { opencode: OPE
 async function driveTurnCli(args: CliRunnerArgs, s: Session, prompt: string, cfg: TurnCliConfig, env: NodeJS.ProcessEnv): Promise<number> {
   const queue: { text: string; id?: string }[] = []
   let next: { text: string; id?: string } | undefined = { text: prompt }
-  let session: string | undefined
+  let session: string | undefined = args.previousSessionId
   let turn = 0
   let code = 0
   let finishing = false
@@ -870,8 +878,17 @@ export async function runCliRun(args: CliRunnerArgs, now: () => Date = () => new
   let code: number
   try {
     const prompt = await readFile(args.promptFile, 'utf8')
+    if (args.kind === 'codex' && args.schema !== undefined) await writeJsonAtomic(join(args.runDir, 'output-schema.json'), args.schema)
     const turnCli = TURN_CLI_CONFIG[args.kind]
-    code = args.kind === 'claude' ? await driveClaude(args, s, prompt, env) : turnCli ? await driveTurnCli(args, s, prompt, turnCli, env) : await driveCodex(args, s, prompt, env)
+    const drive = (input: CliRunnerArgs, text: string) => input.kind === 'claude' ? driveClaude(input, s, text, env) : turnCli ? driveTurnCli(input, s, text, turnCli, env) : driveCodex(input, s, text, env)
+    code = await drive(args, prompt)
+    if (args.previousSessionId && args.fallbackPromptFile && s.failure && /(?:session|thread|conversation|chat|rollout).{0,100}(?:not found|does not exist|unknown|invalid)|(?:not found|unknown|invalid|no|cannot find|unable to find).{0,100}(?:session|thread|conversation|chat|rollout)/i.test(s.failure)) {
+      await s.emit('resume_failed', { reason: s.failure })
+      delete s.failure
+      delete s.reason
+      delete state.sessionId
+      code = await drive({ ...args, previousSessionId: undefined }, await readFile(args.fallbackPromptFile, 'utf8'))
+    }
   } catch (err) {
     s.failure = err instanceof Error ? err.message : String(err)
     // A policy refusal that raced the environment keeps the same typed setup failure, never auth_expired.

@@ -40,9 +40,10 @@ export function deriveStatus(own: GoalEvent[], ctx: StatusContext): Status {
   const reopened = lastOf(own, 'reopened')
   const closed = lastOf(own, 'closed')
   const cancelled = lastOf(own, 'cancelled')
-  const finishedAt = Math.max(seqOf(closed), seqOf(cancelled))
+  const externalFinished = lastOf(own, 'external_finished')
+  const finishedAt = Math.max(seqOf(closed), seqOf(cancelled), seqOf(externalFinished))
   if (finishedAt > seqOf(reopened)) {
-    if (cancelled && seqOf(cancelled) >= seqOf(closed)) return 'cancelled'
+    if (cancelled && seqOf(cancelled) === finishedAt) return 'cancelled'
     return 'done'
   }
   // A reported part follows its parent: the lead's close of the parent covers it, a cancelled parent abandons it.
@@ -52,6 +53,11 @@ export function deriveStatus(own: GoalEvent[], ctx: StatusContext): Status {
     return 'reported'
   }
   if (ctx.parentStatus && TERMINAL.has(ctx.parentStatus)) return 'abandoned'
+  const external = lastOf(own, 'external_tracked')
+  if (external) {
+    const updated = lastOf(own, 'external_progress') ?? external
+    return ctx.now.getTime() - new Date(updated.ts).getTime() > LEAD_SILENT_PAUSE_MS ? 'waiting_answer' : 'running'
+  }
   if (reopened && !ctx.isRoot) {
     // Brought back: until a new run starts the move is the lead's (relaunch), or the work is simply queued again.
     const startedAfter = own.some((e) => e.type === 'run_started' && e.seq > reopened.seq)
@@ -87,6 +93,8 @@ export function deriveStatus(own: GoalEvent[], ctx: StatusContext): Status {
 /** What a node is doing now, for the line under it. */
 export function doingOf(own: GoalEvent[], status: Status, titles: ReadonlyMap<string, string> = new Map()): Doing {
   if (status === 'done') {
+    const external = lastOf(own, 'external_finished')
+    if (external) return { kind: 'text', text: external.summary }
     const closed = lastOf(own, 'closed')
     if (closed?.code) return { kind: 'system', code: closed.code }
     return closed?.summary ? { kind: 'text', text: closed.summary } : { kind: 'done' }
@@ -99,6 +107,10 @@ export function doingOf(own: GoalEvent[], status: Status, titles: ReadonlyMap<st
   if (status === 'paused') return { kind: 'paused' }
   if (status === 'waiting_owner') return { kind: 'waiting_owner' }
   if (status === 'reported') return { kind: 'reported_to_parent' }
+  if (own.some((e) => e.type === 'external_tracked')) {
+    const progress = lastOf(own, 'external_progress')
+    return progress ? { kind: 'text', text: progress.text } : { kind: 'working' }
+  }
   const reopenedLast = lastOf(own, 'reopened')
   if (reopenedLast && reopenedLast.seq >= seqOf(lastOf(own, 'run_started'))) return { kind: 'returned', note: reopenedLast.note }
   if (status === 'waiting_answer') {
@@ -106,6 +118,8 @@ export function doingOf(own: GoalEvent[], status: Status, titles: ReadonlyMap<st
     if (question && seqOf(question) > seqOf(lastOf(own, 'answered'))) return { kind: 'asking', text: question.text }
   }
   if (status === 'queued') {
+    const blocked = own.findLast((e): e is EventOf<'progress'> => e.type === 'progress' && e.code === 'blocked_dependency')
+    if (blocked && !own.some((e) => e.type === 'unblocked' && e.seq > blocked.seq)) return { kind: 'system', code: 'blocked_dependency', ...(blocked.detail !== undefined ? { detail: blocked.detail } : {}) }
     const after = lastOf(own, 'assigned')?.after ?? []
     return after.length ? { kind: 'after', titles: after.map((id) => titles.get(id) ?? id) } : { kind: 'queued' }
   }
@@ -155,8 +169,9 @@ function handoffsOf(own: GoalEvent[]): { provider?: ProviderId; model?: string; 
   return { ...(provider ? { provider } : {}), ...(model ? { model } : {}), ...(effort !== undefined ? { effort } : {}), handoffs }
 }
 
-/** What the owner may ask for on a node. `emergency_stop` is offered on every live node: the owner can always stop work. */
+/** What the owner may ask for on a node. Emergency stop only controls runs managed by Crewboard. */
 export function availableActions(node: AssignmentView): Array<RequestAction | 'emergency_stop'> {
+  if (node.external) return ['discuss']
   if (node.parentId === null) return ['discuss']
   const live = node.status === 'running' || node.status === 'waiting_answer'
   // A waiting request leaves only discussion, but never hides the emergency stop.
@@ -190,7 +205,7 @@ export function buildTree(events: GoalEvent[], now: Date, leadLastSeen: Date | u
   const titles = new Map<string, string>([[start.assignmentId, start.title]])
   const kids = new Map<string, string[]>()
   for (const e of events) {
-    if (e.type !== 'assigned') continue
+    if (e.type !== 'assigned' && e.type !== 'external_tracked') continue
     titles.set(e.assignmentId, e.title)
     const list = kids.get(e.parentId)
     if (list) list.push(e.assignmentId)
@@ -201,14 +216,15 @@ export function buildTree(events: GoalEvent[], now: Date, leadLastSeen: Date | u
     const isRoot = id === start.assignmentId
     const status = deriveStatus(own, { parentStatus, isRoot, now, ...(leadLastSeen ? { leadLastSeen } : {}) })
     const a = isRoot ? undefined : lastOf(own, 'assigned')
+    const external = lastOf(own, 'external_tracked')
     const run = lastOf(own, 'run_started')
     const chain = handoffsOf(own)
     const view: AssignmentView = {
       id,
-      parentId: isRoot ? null : (a?.parentId ?? null),
+      parentId: isRoot ? null : (a?.parentId ?? external?.parentId ?? null),
       title: titles.get(id) ?? id,
       criteria: isRoot ? start.criteria : (a?.criteria ?? []),
-      resultKind: a?.resultKind ?? 'goal',
+      resultKind: a?.resultKind ?? (external ? 'answer' : 'goal'),
       provider: chain.provider ?? 'lead',
       handoffs: chain.handoffs,
       ...(parentFinished || (parentStatus !== null && TERMINAL.has(parentStatus)) ? { underFinished: true } : {}),
@@ -217,9 +233,32 @@ export function buildTree(events: GoalEvent[], now: Date, leadLastSeen: Date | u
       doing: doingOf(own, status, titles),
       children: [],
     }
+    if (external) {
+      const progress = lastOf(own, 'external_progress')
+      const phase = own.findLast((e): e is EventOf<'external_progress'> => e.type === 'external_progress' && e.phase !== undefined)?.phase ?? external.phase
+      const finished = lastOf(own, 'external_finished')
+      view.external = {
+        kind: external.kind,
+        ...(external.externalId !== undefined ? { externalId: external.externalId } : {}),
+        ...(phase !== undefined ? { phase } : {}),
+        ...(finished ? { outcome: finished.outcome } : {}),
+        stale: !isTerminal(status) && now.getTime() - new Date((progress ?? external).ts).getTime() > LEAD_SILENT_PAUSE_MS,
+      }
+      if (external.model !== undefined) view.model = external.model
+      view.children = (kids.get(id) ?? []).map((k) => node(k, status, view.underFinished === true))
+      return view
+    }
     const quote = isRoot ? start.quote : a?.quote
     if (quote) view.quote = quote
     if (a?.branch) view.branch = a.branch
+    if (a?.reviewOf) view.reviewOf = a.reviewOf
+    if (a?.schema) view.schema = a.schema
+    const report = lastOf(own, 'reported')
+    // A new run replaces the previous report; never present an old validated result as its output.
+    if (report && report.seq > Math.max(seqOf(run), seqOf(lastOf(own, 'reopened')))) {
+      if (report.result !== undefined) view.result = report.result
+      if (report.schemaError !== undefined) view.schemaError = report.schemaError
+    }
     const agent = isRoot ? undefined : defaults.get(view.provider)
     // A model marks a resolved snapshot: an absent effort there means the run used no explicit effort.
     const snapshot = run?.model !== undefined

@@ -62,6 +62,7 @@ export const ru = {
       case 'split_registry': return `Метки агентов в разбиении не учтены, реестр агентов не читается: ${detail}`
       case 'launch_registry': return `Работа в очереди ждёт исправления реестра агентов: ${detail}`
       case 'goal_idle': return 'Вся работа сделана, ждём итога ведущего'
+      case 'blocked_dependency': return `Зависимость ${detail} отменена; отмените поручение или запустите его сейчас`
       case 'worktree_setup': return `Готовлю рабочую копию: ${detail}`
     }
   },
@@ -112,6 +113,16 @@ export const ru = {
   goals: 'Цели',
   tree: 'Поручения',
   context: 'Контекст поручения',
+  external: {
+    kind: { workflow: 'Workflow', agent: 'Субагент', delegate: 'Делегирование', other: 'Внешний запуск' },
+    source: 'Источник',
+    id: 'Внешний ID',
+    phase: 'Фаза / роль',
+    stale: 'Данные устарели',
+    outcome: { success: 'Успешно', failure: 'Не удалось' },
+    controls: 'Crewboard не управляет этим запуском: уточнение, передача и аварийная остановка недоступны. Обсудите изменения с ведущим.',
+    tracked: 'Внешний запуск добавлен',
+  },
   finishedGroup: (n: number) => `Завершено ${n}`,
   usage: {
     title: 'Провайдеры',
@@ -135,8 +146,11 @@ export const ru = {
   },
   close: 'Закрыть',
   origin: 'Откуда взялось',
+  originExternal: 'Ведущий запустил эту работу вне Crewboard и отмечает её здесь.',
   originByWorker: 'Исполнитель сам выделил эту часть работы.',
   criteria: 'Критерии готовности',
+  result: 'Итог',
+  schemaError: 'Ошибка схемы',
   inside: 'Поручения внутри',
   history: 'История',
   workdir: 'Рабочая папка',
