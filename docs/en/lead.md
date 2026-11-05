@@ -19,12 +19,15 @@ The lead is the chat you talk to, connected to Crewboard over MCP: Claude Code, 
 | `crewboard_close` | Closes work that meets its criteria. |
 | `crewboard_cancel` | Cancels an assignment and everything under it, stopping their runs. |
 | `crewboard_decide_request` | Decides the owner's request from the screen: accepting carries it out, declining needs a reason the owner will read. |
+| `crewboard_goals` | Lists project goals with root status and work counts. |
 | `crewboard_status` | The goal as a tree with every status and what it is doing now. |
 | `crewboard_adopt_goal` | Takes over a goal another chat started. |
 
 Every call names `project`: the absolute path of the repository the lead works in. Crewboard uses the top of that Git repository.
 
 ## Choosing a preset
+
+For `crewboard_assign`, optional `branch` names a new branch for a `branch` result; optional `writableRoots` lists existing absolute directories inside registered projects to grant a Codex workspace-write worker. Read-only work ignores these grants.
 
 Read `crewboard_agents` before assigning: user settings may replace or disable any [preset](workers.md#presets). The built-in choices are `cheap` (DeepSeek) for routine work, `normal` (Codex `gpt-6.1-sol`, medium) for everyday coding, `hard` (the same model, high) for difficult reasoning, and `review` (Claude opus) for an independent review. Pass `preset` instead of `provider` to `crewboard_assign`; explicit `model`/`effort` take priority. `note`, when present, gives the lead guidance.
 
@@ -36,7 +39,7 @@ The lead keeps this running as a background command:
 crewboard wait --project /path/to/repo
 ```
 
-It exits with 0 as soon as there is something in the lead's inbox, 2 after `--timeout` (10 minutes by default) with nothing new, and 1 when the server is not running. On exit the lead reads `crewboard_inbox`, acts, and starts the wait again. Events stay in the inbox until the lead calls `crewboard_inbox` again, so a lead chat that drops out before acting does not lose them: the next lead gets them. While a lead waits, it counts as present on the screen.
+Without `--timeout`, it waits until there is news and exits with 0. Repeat `--project` to wait for several repositories; the output identifies the projects whose inboxes have news. With `--timeout`, it exits with 2 if there is nothing new by the deadline. It retries a temporarily unavailable server and exits with 1 if the server remains unreachable. On exit the lead reads `crewboard_inbox`, acts, and starts the wait again. Events stay in the inbox until the lead calls `crewboard_inbox` again, so a lead chat that drops out before acting does not lose them: the next lead gets them. While a lead waits, it counts as present on the screen.
 
 ## Questions
 
@@ -45,6 +48,8 @@ A worker that cannot go on ends its run with a question. The lead answers it wit
 ## Results
 
 A worker ends with a result. Crewboard shows the node as **Waiting for the lead**: the move is the lead's. It closes the work against the criteria or returns it with a note; returned work continues in the same working copy with the note in context.
+
+When the goal criteria are met, the lead closes the goal itself with `crewboard_close`, `assignmentId = goalId` and a summary. If the goal is no longer needed, it uses `crewboard_cancel` with the same id. A `goal_idle` inbox event reminds the lead when all work is finished: close the goal or assign more work.
 
 ## Requests from the owner
 

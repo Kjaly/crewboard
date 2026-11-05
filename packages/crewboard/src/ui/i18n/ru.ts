@@ -61,6 +61,7 @@ export const ru = {
       case 'split_truncated': return `Разбиение урезано, отброшено частей сверх предела: ${detail}`
       case 'split_registry': return `Метки агентов в разбиении не учтены, реестр агентов не читается: ${detail}`
       case 'launch_registry': return `Работа в очереди ждёт исправления реестра агентов: ${detail}`
+      case 'goal_idle': return 'Вся работа сделана, ждём итога ведущего'
       case 'worktree_setup': return `Готовлю рабочую копию: ${detail}`
     }
   },

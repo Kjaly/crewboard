@@ -10,6 +10,8 @@ Crewboard runs the work you hand out and shows the owner a live board at http://
 ## Before the first goal
 
 - The tools need a running server. If a `crewboard_*` call fails to connect, ask the owner to run `npx crewboard serve` (Node.js 22.15 or newer) and keep it open, then try again. `npx crewboard doctor` shows which workers can run on this machine.
+- `crewboard_goals` lists project goals, root status and work counts.
+- `crewboard_assign` accepts `branch` for a new branch and `writableRoots` for existing absolute directories inside registered projects; read-only work ignores these grants.
 - `crewboard_agents` lists the agents, their models and the effort levels each one takes. Pick from that list; do not guess ids.
 
 ## Handing out work
@@ -31,3 +33,4 @@ Crewboard runs the work you hand out and shows the owner a live board at http://
 - Check each result yourself before closing it: read the diff in the worker's worktree and run the project's checks. Workers' sandboxes may block parts of the test suite (local listeners, process listing), so their own test run is not proof.
 - If a worker could not commit from its sandbox, it leaves the changes uncommitted: commit them in its worktree yourself, then merge its `crewboard/<id>-...` branch into yours.
 - Close with a summary of what was verified, or send the work back with a note that says exactly what is missing.
+- When the goal criteria are met, close the goal itself with `crewboard_close`, `assignmentId = goalId` and a summary; cancel an unneeded goal with `crewboard_cancel` and the same id. A `goal_idle` inbox event reminds you when all work is finished: close the goal or assign more work.

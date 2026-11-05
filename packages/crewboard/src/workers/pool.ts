@@ -29,7 +29,7 @@ export function createPool(o: { backendFor: BackendFor; runsDir: string; repo?: 
       const backend = await o.backendFor(input.agent)
       // A backend that cannot launch read-only is still told so in the prompt.
       const readOnly = input.readOnly === true && backend.readOnlyLaunch === true
-      return backend.launch({ agent: input.agent, cwd: input.cwd, promptFile: await writePrompt(input.prompt), ...(input.model !== undefined ? { model: input.model } : {}), ...(input.effort !== undefined ? { effort: input.effort } : {}), ...(readOnly ? { readOnly: true } : {}), ...(input.access && !input.readOnly ? { access: input.access } : {}) })
+      return backend.launch({ agent: input.agent, cwd: input.cwd, promptFile: await writePrompt(input.prompt), ...(input.model !== undefined ? { model: input.model } : {}), ...(input.effort !== undefined ? { effort: input.effort } : {}), ...(readOnly ? { readOnly: true } : {}), ...(input.access && !input.readOnly ? { access: input.access } : {}), ...(input.writableRoots && !input.readOnly ? { writableRoots: input.writableRoots } : {}) })
     },
     async poll(agent: string, runId: string, sinceIndex: number, meta?: { startedAt: string; cwd: string }): Promise<PollResult> {
       const backend = await o.backendFor(agent)

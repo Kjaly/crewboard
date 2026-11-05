@@ -103,6 +103,38 @@ describe('lead inbox', () => {
     expect((await inbox.unseen()).length).toBe(1)
   })
 
+  it('holds a taken batch throughout a wait and releases it with its session', async () => {
+    const store = createEventStore(await repo())
+    await store.writeMeta({ goalId: 'g1', title: 'G', createdAt: new Date().toISOString() })
+    await store.append('g1', { type: 'question', goalId: 'g1', assignmentId: 'a', actor: 'worker', text: '?', options: [] })
+    let clock = 0
+    const inbox = createInbox(store, () => clock)
+    await inbox.take('s')
+    const stop = inbox.waiting()
+    clock = INBOX_HOLD_MS + 60_000
+    expect(await inbox.unseen()).toHaveLength(0)
+    inbox.release('s')
+    expect(await inbox.unseen()).toHaveLength(1)
+    stop()
+  })
+
+  it.each([
+    [{ type: 'reported', summary: 'x' }, { type: 'closed', summary: 'x' }],
+    [{ type: 'question', text: '?', options: [] as string[] }, { type: 'answered', text: 'x' }],
+    [{ type: 'question', text: '?', options: [] as string[] }, { type: 'escalated', text: '?', options: [] as string[], why: 'x' }],
+    [{ type: 'owner_requested', requestId: 'r', action: 'discuss' }, { type: 'request_decided', requestId: 'r', decision: 'accepted' }],
+    [{ type: 'progress', text: 'x', code: 'goal_idle' }, { type: 'steered', text: 'x' }],
+    [{ type: 'run_ended', runId: 'r', outcome: 'failed' }, { type: 'returned', note: 'x' }],
+  ] as const)('does not redeliver an event resolved later in the journal', async (first, resolution) => {
+    const store = createEventStore(await repo())
+    await store.writeMeta({ goalId: 'g1', title: 'G', createdAt: new Date().toISOString() })
+    const base = { goalId: 'g1', assignmentId: 'a', actor: 'lead' } as const
+    await store.append('g1', { ...base, ...first })
+    expect(await createInbox(store).take('new')).toHaveLength(1)
+    await store.append('g1', { ...base, ...resolution })
+    expect(await createInbox(store).take('new')).toHaveLength(0)
+  })
+
   it('keeps the reports of split-off parts away from the lead', async () => {
     const root = await repo()
     const store = createEventStore(root)

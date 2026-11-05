@@ -112,8 +112,22 @@ export function decideRequest(ctx: ProjectContext, i: { goalId: string; assignme
           break
         case 'start_now':
           await c.store.append(i.goalId, { type: 'unblocked', ...at, actor: 'lead' })
-          await c.supervisor.tick()
-          break
+          setTimeout(() => {
+            void (async () => {
+              try {
+                await c.tickOnce()
+                const effects = (await c.store.read(i.goalId)).filter((e) => e.seq > accepted.seq && e.assignmentId === i.assignmentId)
+                const started = effects.findLast((e) => e.type === 'run_started')
+                const failed = effects.findLast((e) => e.type === 'run_ended' && e.outcome === 'failed' && started?.type === 'run_started' && e.runId === started.runId)
+                if (failed?.type === 'run_ended') throw new Error([failed.reason, failed.text].filter(Boolean).join(': ') || 'Worker launch failed')
+                await c.store.append(i.goalId, { type: 'request_completed', ...at, actor: 'system', requestId: i.requestId, outcome: 'succeeded' })
+              } catch (error) {
+                const reason = failureText(error instanceof Error ? error.message : String(error))
+                await c.store.append(i.goalId, { type: 'request_completed', ...at, actor: 'system', requestId: i.requestId, outcome: 'failed', reason })
+              }
+            })().catch((error: unknown) => console.error('[crewboard] start_now:', error))
+          }, 0)
+          return
         case 'reopen':
         case 'revive':
           await c.store.append(i.goalId, { type: 'reopened', ...at, actor: 'owner', note: asked.text ?? '' })

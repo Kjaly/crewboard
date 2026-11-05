@@ -30,6 +30,7 @@ async function setup(opts: { now?: () => Date } = {}) {
   t.fake.setFallback({ hold: true })
   const { goalId } = await t.call<{ goalId: string }>('crewboard_start_goal', { project: t.project, title: 'Кухня', criteria: [] })
   const { assignmentId } = await t.call<{ assignmentId: string }>('crewboard_assign', { project: t.project, goalId, title: 'Короб', criteria: [], resultKind: 'local', provider: 'codex' })
+  await t.app.tick()
   const post = (path: string, body: Record<string, unknown>) =>
     fetch(`${t.server.url}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ project: t.project, goalId, ...body }) })
   const ask = async (body: Record<string, unknown>) => post('/api/request', { assignmentId, ...body })
@@ -91,7 +92,7 @@ describe('owner requests decided by the lead', () => {
     expect(after.handoffs).toEqual([{ from: 'codex', to: 'claude' }])
     expect(t.fake.launches.at(-1)).toMatchObject({ agent: 'claude/opus', model: 'opus', effort: 'high' })
     const inbox = await t.call<GoalEvent[]>('crewboard_inbox', { project: t.project })
-    expect(inbox.find((e) => e.type === 'owner_requested')).toMatchObject({ model: 'opus', effort: 'high' })
+    expect(inbox.find((e) => e.type === 'owner_requested')).toBeUndefined()
     const { requestId: back } = await (await t.ask({ action: 'handoff', provider: 'codex' })).json() as { requestId: string }
     await t.decide(back, 'accepted')
     expect(t.fake.launches.at(-1)).toMatchObject({ model: 'gpt-6.1-sol', effort: 'low' })
@@ -139,6 +140,7 @@ describe('owner requests decided by the lead', () => {
     expect((await t.node(later)).status).toBe('queued')
     const { requestId } = (await (await t.post('/api/request', { assignmentId: later, action: 'start_now' })).json()) as { requestId: string }
     await t.call('crewboard_decide_request', { project: t.project, goalId: t.goalId, assignmentId: later, requestId, decision: 'accepted' })
+    await t.app.tick()
     expect((await t.node(later)).runId).toBeTruthy()
   })
 
@@ -208,6 +210,7 @@ async function localRequest(action: Exclude<RequestAction, 'discuss'> = 'clarify
   const { goalId } = await commands.startGoal({ project: repo, title: 'Request lifecycle', criteria: [] })
   const { assignmentId: blocker } = await commands.assign({ project: repo, goalId, title: 'Blocker', criteria: [], resultKind: 'local', provider: 'codex' })
   const { assignmentId } = await commands.assign({ project: repo, goalId, title: 'Work', criteria: [], resultKind: 'local', provider: 'codex', ...(action === 'start_now' || action === 'cancel' ? { after: [blocker] } : {}) })
+  await supervisor.tick()
   const at = { goalId, assignmentId }
   if (action === 'reopen') await commands.close({ project: repo, ...at, summary: 'Done' })
   if (action === 'revive') await commands.cancel({ project: repo, ...at, reason: 'Stopped' })
@@ -225,7 +228,12 @@ describe('request lifecycle without HTTP', () => {
     else if (action === 'stop') t.fake.backend.cancel = async () => { throw new Error('Worker unavailable') }
     else if (action === 'cancel') t.ctx.supervisor.cancelTree = async () => { throw new Error('Worker unavailable') }
     else t.fake.script({ refuse: 'Worker unavailable' })
-    await expect(t.decide()).rejects.toThrow(/Worker unavailable/)
+    if (action === 'start_now') {
+      await t.decide()
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      await t.ctx.supervisor.tick()
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    } else await expect(t.decide()).rejects.toThrow(/Worker unavailable/)
     const events = await t.ctx.store.read(t.at.goalId)
     expect(events).toContainEqual(expect.objectContaining({ type: 'request_decided', requestId: t.requestId, decision: 'accepted' }))
     expect(events).toContainEqual(expect.objectContaining({ type: 'request_completed', requestId: t.requestId, outcome: 'failed', reason: expect.stringContaining('Worker unavailable') }))

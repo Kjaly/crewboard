@@ -23,8 +23,8 @@ describe('a live MCP session', () => {
       await t.call('crewboard_agents', {})
       clock += INBOX_HOLD_MS - 60_000
       expect(await wait()).toBe(204)
-      // No MCP calls for longer than the window: the event wakes the lead again.
-      clock += 2 * 60_000 + 1
+      // No MCP call or wait for longer than the window: the event wakes the lead again.
+      clock += INBOX_HOLD_MS + 1
       expect(await wait()).toBe(200)
     } finally {
       await t.close()

@@ -218,6 +218,17 @@ describe('runCliRun: codex', () => {
     expect(calls[1]).toContain('th-1')
   })
 
+  it.each([false, true])('grants extra repository roots only for writable work (readOnly=%s)', async (readOnly) => {
+    const { args, argv } = await prepare('codex', 'build it')
+    const root = await makeRepo()
+    await runCliRun({ ...args, readOnly, writableRoots: [root] })
+    const call = (await argv())[0]!
+    for (const dir of [root, join(root, '.git')]) {
+      if (readOnly) expect(call).not.toContain(dir)
+      else expect(call[call.indexOf(dir) - 1]).toBe('--add-dir')
+    }
+  })
+
   it('runs one turn with the workspace-write sandbox and uncached token accounting', async () => {
     const { runDir, args, argv } = await prepare('codex', 'build it')
     const state = await runCliRun(args)

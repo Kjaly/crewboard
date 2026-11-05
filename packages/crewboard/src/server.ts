@@ -14,7 +14,7 @@ export type Api = {
   mcp: (session: string) => McpServer
   /** An MCP request by this session: its taken inbox batch keeps hiding events for the hold window from now. */
   activity?: (session: string) => void
-  wait: (project: string, timeoutMs: number) => Promise<number>
+  wait: (projects: string[], timeoutMs: number) => Promise<Array<{ project: string; pending: number }>>
   goals: (project: string) => Promise<unknown>
   goal: (project: string, goalId: string) => Promise<unknown>
   projects: () => Promise<unknown>
@@ -159,8 +159,8 @@ export function createHttpServer(api: Api, opts: { now?: () => number; mcpIdleMs
     if (url.pathname === '/api/health') return json(res, 200, { ok: true })
     if (url.pathname === '/api/lead/wait') {
       const timeoutMs = Math.min(Number(url.searchParams.get('timeoutMs')) || MAX_WAIT_MS, MAX_WAIT_MS)
-      const pending = await api.wait(project, timeoutMs)
-      if (pending > 0) return json(res, 200, { pending })
+      const projects = await api.wait(url.searchParams.getAll('project'), timeoutMs)
+      if (projects.length > 0) return json(res, 200, { pending: projects.reduce((sum, entry) => sum + entry.pending, 0), projects })
       return res.writeHead(204).end()
     }
     if (url.pathname === '/api/projects') return json(res, 200, await api.projects())

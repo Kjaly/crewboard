@@ -58,11 +58,12 @@ async function resolveRepo(path: string): Promise<string> {
 }
 
 /** Long-polls the lead's inbox: returns as soon as something is pending, or 0 when the time is up. */
-async function waitPending(ctx: ProjectContext, timeoutMs: number): Promise<number> {
+async function waitPending(contexts: ProjectContext[], timeoutMs: number): Promise<Array<{ project: string; pending: number }>> {
   const until = Date.now() + timeoutMs
   for (;;) {
-    const pending = (await ctx.inbox.unseen()).length
-    if (pending > 0 || Date.now() >= until) return pending
+    const counts = await Promise.all(contexts.map(async (ctx) => ({ project: ctx.repo, pending: (await ctx.inbox.unseen()).length })))
+    const pending = counts.filter((entry) => entry.pending > 0)
+    if (pending.length || Date.now() >= until) return pending
     await new Promise((r) => setTimeout(r, Math.min(500, Math.max(0, until - Date.now()))))
   }
 }
@@ -159,16 +160,17 @@ export function createApp(o: { env: NodeJS.ProcessEnv; backendFor: (repo: string
     ...(o.uiDir ? { uiDir: o.uiDir } : {}),
     mcp: (session) => createLeadMcp(commands, session),
     activity: (session) => commands.touchSession(session),
-    async wait(project, timeoutMs) {
-      const ctx = await projectOf(project)
-      // A lead waiting for news is present: touch every goal of the project when the wait starts and ends.
+    async wait(projects, timeoutMs) {
+      const contexts = [...new Map((await Promise.all(projects.map(projectOf))).map((ctx) => [ctx.repo, ctx])).values()]
       const touch = async () => {
-        for (const g of await ctx.store.listGoals()) await ctx.store.touchLead(g.goalId, now())
+        for (const ctx of contexts) for (const g of await ctx.store.listGoals()) await ctx.store.touchLead(g.goalId, now())
       }
-      await touch()
+      const stops = contexts.map((ctx) => ctx.inbox.waiting())
       try {
-        return await waitPending(ctx, timeoutMs)
+        await touch()
+        return await waitPending(contexts, timeoutMs)
       } finally {
+        for (const stop of stops) stop()
         await touch()
       }
     },

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -42,6 +42,22 @@ async function start() {
 }
 
 describe('lead over MCP', () => {
+  it('lists goals and starts work with a named branch and writable root', async () => {
+    const { app, call, project, fake } = await start()
+    const { goalId } = (await call('crewboard_start_goal', { project, title: 'Goal', criteria: [] })).json() as { goalId: string }
+    const result = await call('crewboard_assign', { project, goalId, title: 'Work', criteria: [], resultKind: 'branch', provider: 'codex', branch: 'feature/example', writableRoots: [project] })
+    expect(result.isError).toBe(false)
+    await app.tick()
+    expect(fake.runs).toHaveLength(1)
+    expect(fake.launches[0]?.writableRoots).toEqual([await import('node:fs/promises').then(({ realpath }) => realpath(project))])
+    expect(execFileSync('git', ['branch', '--show-current'], { cwd: fake.runs[0]!.cwd, encoding: 'utf8' }).trim()).toBe('feature/example')
+    const goals = (await call('crewboard_goals', { project })).json() as Array<{ goalId: string }>
+    expect(goals.some((g) => g.goalId === goalId)).toBe(true)
+    for (const patch of [{ branch: 'bad branch' }, { branch: 'feature/example' }, { writableRoots: ['/does-not-exist'] }]) {
+      expect((await call('crewboard_assign', { project, goalId, title: 'Invalid', criteria: [], resultKind: 'branch', provider: 'codex', ...patch })).isError).toBe(true)
+    }
+  })
+
   it('remembers which client leads the goal, and a takeover', async () => {
     const { server, project } = await start()
     const connect = async (name: string) => {
@@ -162,6 +178,18 @@ describe('lead over MCP', () => {
     fake.stats.statusDelayMs = 50
     await Promise.all(Array.from({ length: 10 }, () => app.tick()))
     expect(fake.stats.status).toBeLessThanOrEqual(2)
+  })
+
+  it('waits for news across projects', async () => {
+    const { server, call, project } = await start()
+    const other = await gitRepo()
+    const response = await fetch(`${server.url}/api/lead/wait?project=${encodeURIComponent(project)}&project=${encodeURIComponent(other)}&timeoutMs=1`)
+    expect(response.status).toBe(204)
+    const { goalId } = (await call('crewboard_start_goal', { project: other, title: 'I', criteria: [] })).json() as { goalId: string }
+    await fetch(`${server.url}/api/request`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ project: other, goalId, assignmentId: goalId, action: 'discuss' }) })
+    const result = await fetch(`${server.url}/api/lead/wait?project=${encodeURIComponent(project)}&project=${encodeURIComponent(other)}&timeoutMs=50`)
+    expect(result.status).toBe(200)
+    expect((await result.json() as { projects: Array<{ project: string }> }).projects.map((p) => p.project)).toEqual([await realpath(other)])
   })
 
   it('registers a project only when a goal starts in it', async () => {

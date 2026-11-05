@@ -13,7 +13,7 @@ export type Actor = 'lead' | 'owner' | 'worker' | 'system'
 export const REQUEST_ACTIONS = ['clarify', 'stop', 'handoff', 'start_now', 'cancel', 'reopen', 'revive', 'discuss'] as const
 export type RequestAction = (typeof REQUEST_ACTIONS)[number]
 /** Texts Crewboard itself writes into a journal. Stored as a code, so the screen words them in the owner's language. */
-export const SYSTEM_TEXTS = ['emergency_stop', 'owner_stop', 'run_failed', 'parent_cancelled', 'no_report', 'split', 'split_truncated', 'split_registry', 'launch_registry', 'worktree_setup'] as const
+export const SYSTEM_TEXTS = ['emergency_stop', 'owner_stop', 'run_failed', 'parent_cancelled', 'no_report', 'split', 'split_truncated', 'split_registry', 'launch_registry', 'worktree_setup', 'goal_idle'] as const
 export type SystemText = (typeof SYSTEM_TEXTS)[number]
 
 const base = {
@@ -38,6 +38,8 @@ export const goalEventSchema = z.discriminatedUnion('type', [
     model: text.optional(),
     effort: text.optional(),
     access: z.enum(WORKER_ACCESS).optional(),
+    branch: text.optional(),
+    writableRoots: z.array(text).optional(),
     quote: text.optional(),
     after: z.array(z.string()),
   }),
@@ -93,6 +95,7 @@ export type AssignmentView = {
   /** A handoff awaiting its first run; keep its choices separate from the previous run's snapshot. */
   pendingRun?: { model?: string; effort?: string }
   quote?: string
+  branch?: string
   after: string[]
   status: Status
   doing: Doing

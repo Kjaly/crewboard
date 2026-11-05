@@ -1,12 +1,18 @@
+import { execFile } from 'node:child_process'
+import { realpath, stat } from 'node:fs/promises'
+import { isAbsolute, relative, sep } from 'node:path'
+import { promisify } from 'node:util'
 import { randomBytes } from 'node:crypto'
 import { flatten } from '../model/project.js'
 import type { AssignmentView, EventOf, GoalEvent, NewEvent, ProviderId, ResultKind } from '../model/types.js'
 import type { ProjectContext } from '../app.js'
 import { decideRequest } from '../requests.js'
-import { goalTree } from '../owner.js'
+import { goalTree, summarize } from '../owner.js'
 import { leadCall } from './call.js'
 import { type Agents, agentChoices, builtinAgents, validateEffort } from '../workers/agents.js'
 import type { ModelCatalog } from '../workers/catalog.js'
+
+const run = promisify(execFile)
 
 const id = (n: number) => randomBytes(n).toString('hex')
 const slug = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24)
@@ -49,7 +55,7 @@ export function createLeadCommands(projectOf: (path: string) => Promise<ProjectC
       await ctx.store.append(goalId, { type: 'goal_started', goalId, assignmentId: goalId, actor: 'lead', title: i.title, criteria: i.criteria, ...(i.quote ? { quote: i.quote } : {}), ...(lead ? { client: lead.client } : {}) })
       return { goalId }
     },
-    async assign(i: { project: string; goalId: string; parentId?: string; title: string; criteria: string[]; resultKind: ResultKind; provider?: ProviderId; preset?: string; model?: string; effort?: string; quote?: string; after?: string[] }) {
+    async assign(i: { project: string; goalId: string; parentId?: string; title: string; criteria: string[]; resultKind: ResultKind; provider?: ProviderId; preset?: string; model?: string; effort?: string; quote?: string; after?: string[]; branch?: string; writableRoots?: string[] }) {
       if (i.preset && i.provider) throw new Error('choose either preset or provider')
       const preset = i.preset ? (await agents.presets())[i.preset] : undefined
       if (i.preset && !preset) throw new Error(`unknown or disabled preset ${i.preset}`)
@@ -62,14 +68,38 @@ export function createLeadCommands(projectOf: (path: string) => Promise<ProjectC
       if (!agent) throw new Error(`unknown agent ${provider}; available: ${list.map((a) => a.id).join(', ')}`)
       validateEffort(agent, effort ?? agent.effort, model)
       return (await goalCtx(i.project, i.goalId)).exclusive(async (ctx) => {
+        if (i.branch !== undefined) {
+          if (i.resultKind !== 'branch') throw new Error('branch requires resultKind branch')
+          try { const checked = await run('git', ['check-ref-format', '--branch', i.branch], { cwd: ctx.repo }); if (checked.stdout.trim() !== i.branch) throw new Error('expanded branch') } catch { throw new Error(`invalid branch: ${i.branch}`) }
+          const exists = await run('git', ['show-ref', '--verify', '--quiet', `refs/heads/${i.branch}`], { cwd: ctx.repo }).then(() => true, () => false)
+          if (exists) throw new Error(`branch already exists: ${i.branch}`)
+        }
+        const roots: string[] = []
+        if (i.writableRoots?.length) {
+          const projects = await Promise.all((await agents.registeredProjects?.() ?? []).map((p) => realpath(p).catch(() => '')))
+          for (const root of i.writableRoots) {
+            if (!isAbsolute(root)) throw new Error(`writable root must be absolute: ${root}`)
+            const resolved = await realpath(root).catch(() => '')
+            if (!resolved || !(await stat(resolved)).isDirectory()) throw new Error(`writable root must be an existing directory: ${root}`)
+            if (!projects.some((p) => { const rel = relative(p, resolved); return p && (rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel))) })) throw new Error(`writable root is outside registered projects: ${root}`)
+            roots.push(resolved)
+          }
+        }
         const parentId = i.parentId ?? i.goalId
         await node(ctx, { project: i.project, goalId: i.goalId, assignmentId: parentId })
         const assignmentId = `a-${id(3)}`
+        // Only an explicit name is recorded; without one the worktree takes its default `crewboard/<id>-<slug>`.
+        const branch = i.resultKind === 'branch' ? i.branch : undefined
+        if (branch) {
+          for (const meta of await ctx.store.listGoals()) {
+            if ((await ctx.store.read(meta.goalId)).some((e) => e.type === 'assigned' && e.branch === branch)) throw new Error(`branch already assigned: ${branch}`)
+          }
+        }
         await ctx.store.append(i.goalId, {
           type: 'assigned', goalId: i.goalId, assignmentId, actor: 'lead', parentId, title: i.title, criteria: i.criteria, resultKind: i.resultKind, provider, after: i.after ?? [],
-          ...(model ? { model } : {}), ...(effort !== undefined ? { effort } : {}), ...(preset?.access ? { access: preset.access } : {}), ...(i.quote ? { quote: i.quote } : {}),
+          ...(branch ? { branch } : {}), ...(roots.length ? { writableRoots: roots } : {}), ...(model ? { model } : {}), ...(effort !== undefined ? { effort } : {}), ...(preset?.access ? { access: preset.access } : {}), ...(i.quote ? { quote: i.quote } : {}),
         })
-        await ctx.supervisor.tick()
+        setTimeout(() => { void ctx.tickOnce().catch((error: unknown) => console.error('[crewboard] tick:', error)) }, 0)
         return { assignmentId }
       })
     },
@@ -137,6 +167,9 @@ export function createLeadCommands(projectOf: (path: string) => Promise<ProjectC
     async decideRequest(t: Target & { requestId: string; decision: 'accepted' | 'declined'; reason?: string }) {
       const ctx = await goalCtx(t.project, t.goalId)
       await decideRequest(ctx, { goalId: t.goalId, assignmentId: t.assignmentId, requestId: t.requestId, decision: t.decision, ...(t.reason ? { reason: t.reason } : {}) }, now())
+    },
+    async goals(i: { project: string }) {
+      return (await summarize(await projectOf(i.project), now())).goals
     },
     async status(i: { project: string; goalId: string }) {
       return tree(await goalCtx(i.project, i.goalId), i.goalId)

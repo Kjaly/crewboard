@@ -1,3 +1,4 @@
+import { createRegistry } from '../store/registry.js'
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
@@ -132,6 +133,7 @@ export type Agents = {
   presets(): Promise<Record<string, AgentPreset>>
   /** ws1: the owner's setup command for a repository's new worktrees, if any. */
   setupFor?(repo: string): Promise<string | undefined>
+  registeredProjects?(): Promise<string[]>
   /** The id core's backends run: `<run>/<model>`; a dsh model may itself be `<provider>/<model>`. */
   coreId(agent: AgentEntry, model?: string): string
 }
@@ -222,6 +224,7 @@ export function createAgents(env: NodeJS.ProcessEnv): Agents & { config(): Promi
     list: async () => (await all()).filter((a) => a.enabled),
     get: async (id) => (await all()).find((a) => a.id === id && a.enabled),
     presets: async () => Object.fromEntries(Object.entries((await config()).presets).filter((e): e is [string, AgentPreset] => e[1] !== false)),
+    registeredProjects: () => createRegistry(env).list(),
     setupFor: async (repo) => (await config()).config.projects?.[repo]?.setup,
     coreId,
   }

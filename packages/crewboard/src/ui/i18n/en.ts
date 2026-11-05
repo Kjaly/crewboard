@@ -63,6 +63,7 @@ export const en: Strings = {
       case 'split_truncated': return `The split was cut short: ${detail} parts beyond the limit were dropped`
       case 'split_registry': return `Agent tags in the split were ignored, the agent registry cannot be read: ${detail}`
       case 'launch_registry': return `Queued work waits for the agent registry to be fixed: ${detail}`
+      case 'goal_idle': return 'All work is finished, waiting for the lead’s summary'
       case 'worktree_setup': return `Preparing the worktree: ${detail}`
     }
   },

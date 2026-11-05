@@ -11,7 +11,7 @@ export type WorkerOutcome =
 
 const RESULT_RULE: Record<ResultKind, string> = {
   local: 'Work right in this folder and make no commits: the owner reviews the changes.',
-  branch: 'Work in the current branch and commit the finished work.',
+  branch: 'Work in the current branch and commit the finished work before long checks (full tests or e2e). Run long commands with enough time or log to a file; report any check that did not finish.',
   answer: 'Change no files. Your result is the answer in your report.',
   decision: 'Change no files. Your result is a decision with its reasons in your report.',
 }

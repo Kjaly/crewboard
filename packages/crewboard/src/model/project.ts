@@ -219,6 +219,7 @@ export function buildTree(events: GoalEvent[], now: Date, leadLastSeen: Date | u
     }
     const quote = isRoot ? start.quote : a?.quote
     if (quote) view.quote = quote
+    if (a?.branch) view.branch = a.branch
     const agent = isRoot ? undefined : defaults.get(view.provider)
     // A model marks a resolved snapshot: an absent effort there means the run used no explicit effort.
     const snapshot = run?.model !== undefined

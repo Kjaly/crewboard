@@ -16,6 +16,7 @@ async function escalated() {
   const { goalId } = await t.call<{ goalId: string }>('crewboard_start_goal', { project: t.project, title: 'Кухня', criteria: [] })
   const { assignmentId } = await t.call<{ assignmentId: string }>('crewboard_assign', { project: t.project, goalId, title: 'Панель', criteria: [], resultKind: 'local', provider: 'claude' })
   await t.app.tick()
+  await t.app.tick()
   await t.call('crewboard_inbox', { project: t.project })
   await t.call('crewboard_escalate', { project: t.project, goalId, assignmentId, why: 'вопрос вкуса' })
   const answer = (body: Record<string, unknown>) =>
@@ -30,6 +31,7 @@ describe('project summary', () => {
     t.fake.script({ final: '<crewboard-question>Шторка или слой?</crewboard-question>' }, { hold: true })
     const { goalId } = await t.call<{ goalId: string }>('crewboard_start_goal', { project: t.project, title: 'Кухня', criteria: [] })
     const { assignmentId } = await t.call<{ assignmentId: string }>('crewboard_assign', { project: t.project, goalId, title: 'Панель', criteria: [], resultKind: 'local', provider: 'claude' })
+    await t.app.tick()
     await t.app.tick()
     const goal = async () => ((await (await fetch(`${t.server.url}/api/projects`)).json()) as ProjectSummary[])[0]!.goals[0]!
     expect(await goal()).toMatchObject({ counts: { waiting_lead: 1, running: 0, waiting_owner: 0 } })

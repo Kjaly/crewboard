@@ -67,7 +67,7 @@ export type CliRunState = {
  */
 export type ClaudeAuth = 'native' | 'isolated'
 
-export type CliRunnerArgs = { kind: CliKind; claudeAuth?: ClaudeAuth; runDir: string; cwd: string; promptFile: string; model?: string; effort?: string; command: string; commandArgs?: string[]; background?: BackgroundTiming; readOnly?: boolean; access?: WorkerAccess; commitRequired?: boolean; /** Non-secret: the resolved auth channel and policy revision, so a steer can tell a guarded run from an old child. */ authChannel?: string; policyRevision?: string }
+export type CliRunnerArgs = { kind: CliKind; claudeAuth?: ClaudeAuth; runDir: string; cwd: string; promptFile: string; model?: string; effort?: string; command: string; commandArgs?: string[]; background?: BackgroundTiming; readOnly?: boolean; access?: WorkerAccess; writableRoots?: string[]; commitRequired?: boolean; /** Non-secret: the resolved auth channel and policy revision, so a steer can tell a guarded run from an old child. */ authChannel?: string; policyRevision?: string }
 /** How long a Claude run stays open for the worker's own background work (bg1); tests shorten it. */
 export type BackgroundTiming = { limitMs?: number; wakeGraceMs?: number; noticeMs?: number }
 
@@ -420,6 +420,14 @@ async function driveCodex(args: CliRunnerArgs, s: Session, prompt: string, env: 
         } catch {
           // A non-repository draft has no Git metadata to grant; its normal preflight handles Git errors.
         }
+      }
+    }
+    if (sandbox === 'workspace-write') {
+      for (const root of args.writableRoots ?? []) {
+        writableRoots.push(root)
+        try {
+          writableRoots.push(...execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir', '--git-dir'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().split('\n'))
+        } catch { /* The extra root need not be a Git repository. */ }
       }
     }
     const writable = [...new Set(writableRoots)].flatMap((root) => ['--add-dir', root])

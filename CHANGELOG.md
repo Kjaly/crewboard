@@ -2,6 +2,29 @@
 
 All notable changes to Crewboard are documented here. This changelog follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-11-05
+
+Fixes from a day of leading Studio work through Crewboard: Codex workers built them in their branches, Claude Code led, reviewed and merged.
+
+### Added
+
+- **The lead closes the goal.** The lead's instructions, the skill and the guides now say how: `crewboard_close` with `assignmentId = goalId`. When the last open assignment under an open goal ends, the lead gets a `goal_idle` reminder in its inbox, and the screen says the work is done and the lead's summary is pending.
+- **One wait for several projects**: `crewboard wait --project A --project B` says which projects have news.
+- **`crewboard_goals`** lists a project's goals and their progress over MCP.
+- **`branch` and `writableRoots` on `crewboard_assign`.** `branch` names the worktree branch, for example to match a forge's branch rules. `writableRoots` lets a Codex worker also write to directories in other registered projects.
+
+### Changed
+
+- `crewboard wait` without `--timeout` waits until there is news and exits 0. It rides out a server restart of up to 30 seconds. `--timeout` keeps the old behaviour and exits 2.
+- `crewboard_assign` and accepting "start now" answer at once; the worker starts in the background.
+- A worker that delivers a branch is told to commit before long checks and to report any check that did not finish.
+- A setup command that times out reports the limit and the tail of its output.
+
+### Fixed
+
+- A waiting lead was woken by events it had already taken and found an empty inbox.
+- Events the lead had already acted on, such as a result it closed or a question it answered, came back after a reconnect.
+
 ## [1.4.0] - 2026-11-04
 
 Researched and built through Crewboard: four Codex researchers reviewed the screen from different sides, Codex workers built the fixes in their branches, and Claude Code led, reviewed and merged.

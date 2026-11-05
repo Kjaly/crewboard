@@ -8,7 +8,7 @@ import type { RawEvent } from '../runs/raw-event.js'
 /** How far a worker's sandbox reaches beyond `cwd` (ac1): `network` adds the network, `full` lifts the sandbox. Owner-chosen. */
 export const WORKER_ACCESS = ['network', 'full'] as const
 export type WorkerAccess = (typeof WORKER_ACCESS)[number]
-export type LaunchInput = { agent: string; promptFile: string; cwd: string; model?: string; effort?: string; readOnly?: boolean; access?: WorkerAccess }
+export type LaunchInput = { agent: string; promptFile: string; cwd: string; model?: string; effort?: string; readOnly?: boolean; access?: WorkerAccess; writableRoots?: string[] }
 
 export type RunUsage = {
   sessionId?: string

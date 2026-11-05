@@ -47,6 +47,48 @@ const statusOf = async (store: ReturnType<typeof createEventStore>, id: string) 
 const typesOf = async (store: ReturnType<typeof createEventStore>, id: string) => (await store.read('g')).filter((e) => e.assignmentId === id).map((e) => e.type)
 
 describe('supervisor', () => {
+  it('returns an assignment while its worktree is still being prepared', async () => {
+    const { root, store, pool, fake } = await setup()
+    await goal(store)
+    let release!: () => void
+    let started!: () => void
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    const preparing = new Promise<void>((resolve) => { started = resolve })
+    const supervisor = createSupervisor({ repo: root, store, pool, now: () => new Date(), worktree: async () => { started(); await blocked; return root } })
+    const ctx: ProjectContext = {
+      repo: root, store, agents: (await import('../src/workers/agents.js')).builtinAgents, supervisor, inbox: createInbox(store), steps: createStepsReader(store, async () => fake.backend),
+      exclusive: (fn) => fn(ctx), register: async () => {}, tickOnce: () => supervisor.tick(),
+    }
+    try {
+      const result = await Promise.race([
+        createLeadCommands(async () => ctx, () => new Date()).assign({ project: root, goalId: 'g', title: 'Work', criteria: [], resultKind: 'branch', provider: 'codex' }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000)),
+      ])
+      expect(result).not.toBeNull()
+      await preparing
+      expect(fake.launches).toHaveLength(0)
+    } finally { release() }
+    await supervisor.tick()
+    expect(fake.launches).toHaveLength(1)
+  })
+
+  it.each(['close', 'cancel'] as const)('notifies the lead when the last assignment ends by %s', async (action) => {
+    const { store, sup } = await setup()
+    const inbox = createInbox(store)
+    await goal(store)
+    await store.append('g', assign('a'))
+    await store.append('g', assign('b'))
+    const idle = async () => (await inbox.pending()).filter((e) => e.type === 'progress' && e.code === 'goal_idle')
+    await sup.close('g', 'a', 'done')
+    expect(await idle()).toHaveLength(0)
+    if (action === 'close') await sup.close('g', 'b', 'done')
+    else await sup.cancelTree('g', 'b', 'cancelled', 'owner')
+    expect(await idle()).toHaveLength(1)
+    await sup.close('g', 'g', 'done')
+    expect(await idle()).toHaveLength(0)
+    expect(await statusOf(store, 'g')).toBe('done')
+  })
+
   it.each([
     ['normal', {}, 'gpt-6.1-sol', 'medium'],
     ['hard', { model: 'custom', effort: 'low' }, 'custom', 'low'],
@@ -64,6 +106,7 @@ describe('supervisor', () => {
     const commands = createLeadCommands(async () => ctx, () => new Date(), agents)
     expect((await commands.agents()).presets[preset]).toBeDefined()
     await commands.assign({ project: root, goalId: 'g', title: 'a', criteria: [], resultKind: 'local', preset, ...overrides })
+    await sup.tick()
     expect(fake.launches.at(-1)?.model).toBe(model)
     expect(fake.launches.at(-1)?.effort).toBe(effort)
     await writeFile(join(home, 'agents.json'), JSON.stringify({ presets: { [preset]: false } }))
@@ -85,6 +128,7 @@ describe('supervisor', () => {
       exclusive: (fn) => fn(ctx), register: async () => {}, tickOnce: () => sup.tick(),
     }
     await createLeadCommands(async () => ctx, () => new Date(), agents).assign({ project: root, goalId: 'g', title: 'a', criteria: [], resultKind, preset: 'net' })
+    await sup.tick()
     expect(fake.launches.at(-1)?.access).toBe(access)
   })
 

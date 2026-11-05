@@ -16,17 +16,17 @@ import { type Agents, AgentsFileError, builtinAgents, validateEffort } from './w
 
 const run = promisify(execFile)
 
-export type WorktreeFn = (repo: string, assignmentId: string, title: string) => Promise<string>
+export type WorktreeFn = (repo: string, assignmentId: string, title: string, branch?: string) => Promise<string>
 export type Supervisor = ReturnType<typeof createSupervisor>
 
 const slug = (title: string): string =>
   title.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'work'
 
 /** A git worktree for work whose result is a branch: `<repo>/.crewboard/worktrees/<id>`, reused when it exists. */
-export const gitWorktree: WorktreeFn = async (repo, assignmentId, title) => {
+export const gitWorktree: WorktreeFn = async (repo, assignmentId, title, branch) => {
   const path = join(worktreesDir(repo), assignmentId)
   const exists = await access(path).then(() => true, () => false)
-  if (!exists) await run('git', ['-C', repo, 'worktree', 'add', '-q', '-b', `crewboard/${assignmentId}-${slug(title)}`, path])
+  if (!exists) await run('git', ['-C', repo, 'worktree', 'add', '-q', '-b', branch ?? `crewboard/${assignmentId}-${slug(title)}`, path])
   return path
 }
 
@@ -49,7 +49,7 @@ const runSetup = async (command: string, cwd: string): Promise<void> => {
   } catch (error) {
     const e = error as { stderr?: string; stdout?: string; message?: string; killed?: boolean }
     const output = (e.stderr?.trim() || e.stdout?.trim() || e.message || String(error)).slice(-600)
-    throw new Error(`worktree setup failed (${command}): ${e.killed ? 'timed out' : output}`)
+    throw new Error(`worktree setup failed (${command}): ${e.killed ? `timed out after ${SETUP_TIMEOUT_MS / 60_000} minutes: ${output}` : output}`)
   }
 }
 
@@ -60,8 +60,8 @@ const runSetup = async (command: string, cwd: string): Promise<void> => {
  */
 export function withSetup(worktree: WorktreeFn, setupOf: (repo: string) => Promise<string | undefined>): WorktreeFn {
   const jobs = new Map<string, { done: boolean; error?: Error }>()
-  return async (repo, assignmentId, title) => {
-    const path = await worktree(repo, assignmentId, title)
+  return async (repo, assignmentId, title, branch) => {
+    const path = await worktree(repo, assignmentId, title, branch)
     const command = (await setupOf(repo))?.trim()
     if (!command) return path
     const marker = `${path}.setup`
@@ -142,8 +142,10 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
       // An answer or a decision changes no files: the backend enforces it where it can, the prompt says it everywhere.
       const readOnly = node.resultKind === 'answer' || node.resultKind === 'decision'
       // ac1: the access the owner's preset granted belongs to the assignment and survives a handoff; read-only work keeps none.
-      const access = readOnly ? undefined : own.find((e): e is EventOf<'assigned'> => e.type === 'assigned')?.access
-      runId = await o.pool.launch({ agent, cwd, prompt, model, ...(effort !== undefined ? { effort } : {}), readOnly, ...(access ? { access } : {}) })
+      const assigned = own.find((e): e is EventOf<'assigned'> => e.type === 'assigned')
+      const access = readOnly ? undefined : assigned?.access
+      const writableRoots = readOnly ? undefined : assigned?.writableRoots
+      runId = await o.pool.launch({ agent, cwd, prompt, model, ...(effort !== undefined ? { effort } : {}), readOnly, ...(access ? { access } : {}), ...(writableRoots ? { writableRoots } : {}) })
     } catch (error) {
       // ws1: the worktree is still being prepared; the next tick tries again. The owner sees it once.
       if (error instanceof WorktreePreparing) {
@@ -230,7 +232,7 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
     await this_.deliver(goalId, node.id, `Your assignments have finished:\n${results.join('\n')}\n\nContinue your task with these results in mind.`)
   }
 
-  const cwdFor = (node: AssignmentView) => (node.resultKind === 'branch' ? o.worktree(o.repo, node.id, node.title) : Promise.resolve(o.repo))
+  const cwdFor = (node: AssignmentView) => (node.resultKind === 'branch' ? o.worktree(o.repo, node.id, node.title, node.branch) : Promise.resolve(o.repo))
 
   const load = async (goalId: string) => {
     const events = await o.store.read(goalId)
@@ -238,6 +240,14 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
     const root = buildTree(events, o.now(), meta?.leadLastSeen ? new Date(meta.leadLastSeen) : undefined)
     const nodes = flatten(root)
     return { events, nodes, byId: new Map(nodes.map((n) => [n.id, n])) }
+  }
+
+  const notifyGoalIdle = async (goalId: string, assignmentId: string, before: AssignmentView[]) => {
+    if (assignmentId === goalId || isTerminal(before[0]!.status) || !before.slice(1).some((n) => !isTerminal(n.status))) return
+    const { nodes } = await load(goalId)
+    if (!isTerminal(nodes[0]!.status) && nodes.length > 1 && nodes.slice(1).every((n) => isTerminal(n.status))) {
+      await append(goalId, { type: 'progress', goalId, assignmentId: goalId, actor: 'system', code: 'goal_idle', text: 'All work under the goal is finished. Close the goal with crewboard_close and assignmentId = goalId if its criteria are met; otherwise, assign new work.' })
+    }
   }
 
   const tickPass = async (): Promise<void> => {
@@ -343,7 +353,7 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
 
     /** Closes work the lead accepts. Runs still open on it or under it stop, so no worker keeps editing for nothing. */
     async close(goalId: string, assignmentId: string, summary: string): Promise<void> {
-      const { events, byId } = await load(goalId)
+      const { events, byId, nodes } = await load(goalId)
       const top = byId.get(assignmentId)
       if (!top) throw new Error(`no assignment ${assignmentId} in goal ${goalId}`)
       if (isTerminal(top.status)) throw new Error(`assignment ${assignmentId} is ${top.status} already`)
@@ -354,11 +364,12 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
         await append(goalId, { type: 'run_ended', goalId, assignmentId: node.id, actor: 'system', runId: live.runId, outcome: 'cancelled', reason: 'closed by the lead' })
       }
       await append(goalId, { type: 'closed', goalId, assignmentId, actor: 'lead', summary })
+      await notifyGoalIdle(goalId, assignmentId, nodes)
     },
 
     /** Cancels a node and everything under it that is not finished, stopping their open runs. */
     async cancelTree(goalId: string, assignmentId: string, reason: string, actor: 'lead' | 'owner' = 'lead', code?: SystemText): Promise<void> {
-      const { events, byId } = await load(goalId)
+      const { events, byId, nodes } = await load(goalId)
       const top = byId.get(assignmentId)
       if (!top) throw new Error(`no assignment ${assignmentId} in goal ${goalId}`)
       for (const node of flatten(top)) {
@@ -373,6 +384,7 @@ export function createSupervisor(o: { repo: string; store: EventStore; pool: Poo
         const coded = own ? (code ? { code } : {}) : { code: 'parent_cancelled' as const, detail: reason }
         await append(goalId, { type: 'cancelled', goalId, assignmentId: node.id, actor, reason: why, ...coded })
       }
+      await notifyGoalIdle(goalId, assignmentId, nodes)
     },
   }
   return this_

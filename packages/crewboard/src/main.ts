@@ -27,8 +27,8 @@ const USAGE = `crewboard — local Crewboard server
   crewboard doctor
       check which workers can run on this machine (CLI installed, version, signed in)
 
-  crewboard wait --project <path> [--port ${DEFAULT_PORT}] [--timeout 10m]
-      wait until the lead has news; exit 0 = news, 2 = timeout, 1 = server unreachable
+  crewboard wait --project <path> [--project <path> ...] [--port ${DEFAULT_PORT}] [--timeout 10m]
+      wait indefinitely for news unless --timeout is set; exit 0 = news, 2 = timeout, 1 = server unreachable
 
   crewboard statusline
       a Claude Code status line that logs your plan's limits for the providers panel:
@@ -95,25 +95,41 @@ async function serve(args: string[]): Promise<void> {
 }
 
 async function wait(args: string[]): Promise<number> {
-  const project = flag(args, 'project')
-  if (!project) {
+  if (args.includes('--help')) {
+    console.log(USAGE)
+    return 0
+  }
+  const projects = args.flatMap((arg, i) => {
+    const path = args[i + 1]
+    return arg === '--project' && path && !path.startsWith('--') ? [resolve(path)] : []
+  })
+  if (!projects.length || projects.length !== args.filter((arg) => arg === '--project').length) {
     console.error('wait: --project <path> is required')
     return 1
   }
   const port = portOrExit(args)
-  const until = Date.now() + duration(flag(args, 'timeout'), 10 * 60_000)
+  const until = args.includes('--timeout') ? Date.now() + duration(flag(args, 'timeout'), 10 * 60_000) : Infinity
+  let unreachableSince: number | undefined
   while (Date.now() < until) {
     const slice = waitSlice(until - Date.now())
     let res: Response
     try {
-      res = await fetch(`http://127.0.0.1:${port}/api/lead/wait?project=${encodeURIComponent(resolve(project))}&timeoutMs=${slice}`)
+      const query = new URLSearchParams({ timeoutMs: String(slice) })
+      for (const project of projects) query.append('project', project)
+      res = await fetch(`http://127.0.0.1:${port}/api/lead/wait?${query}`)
+      unreachableSince = undefined
     } catch {
-      console.error(`wait: no Crewboard server on port ${port}; start it with crewboard serve`)
-      return 1
+      unreachableSince ??= Date.now()
+      if (Date.now() - unreachableSince >= 30_000) {
+        console.error(`wait: Crewboard server on port ${port} has been unreachable for 30 seconds; start it with crewboard serve`)
+        return 1
+      }
+      await new Promise((r) => setTimeout(r, Math.min(1000, Math.max(0, until - Date.now()))))
+      continue
     }
     if (res.status === 200) {
-      const { pending } = (await res.json()) as { pending: number }
-      console.log(`crewboard: ${pending} new event(s) for the lead; call crewboard_inbox`)
+      const result = (await res.json()) as { projects: Array<{ project: string; pending: number }> }
+      for (const entry of result.projects) console.log(`crewboard: ${entry.project}: ${entry.pending} new event(s); call crewboard_inbox`)
       return 0
     }
     if (res.status !== 204) {

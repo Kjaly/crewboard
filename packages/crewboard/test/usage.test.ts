@@ -63,7 +63,7 @@ describe('provider usage', () => {
     const seen: Array<Record<string, string>> = []
     const account = async (_url: string, init: { headers: Record<string, string> }) => {
       seen.push(init.headers)
-      return { ok: true, status: 200, json: async () => ({ five_hour: { utilization: 10, resets_at: '2026-11-04T15:50:00Z' }, seven_day: { utilization: 52, resets_at: '2026-11-08T06:00:00Z' }, seven_day_opus: null }) }
+      return { ok: true, status: 200, json: async () => ({ five_hour: { utilization: 10, resets_at: '2100-01-01T05:00:00Z' }, seven_day: { utilization: 52, resets_at: '2100-01-07T06:00:00Z' }, seven_day_opus: null }) }
     }
     const agents = [...BUILTIN_AGENTS].filter((a) => a.id === 'claude')
     const [claude] = await readUsage({ env, agents, fetch: account, claudeCredentials: sign })

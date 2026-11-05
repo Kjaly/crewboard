@@ -10,7 +10,7 @@ import { projectDir } from './paths.js'
  * escalated question. A completed run is already told by its result or question.
  */
 export function isLeadEvent(e: GoalEvent, workerParts: ReadonlySet<string> = new Set()): boolean {
-  if (e.type === 'progress' && e.code === 'launch_registry') return true
+  if (e.type === 'progress' && (e.code === 'launch_registry' || e.code === 'goal_idle')) return true
   if (e.type === 'question') return true
   // A split-off part reports to the worker that split it off, not to the lead.
   if (e.type === 'reported' && workerParts.has(e.assignmentId)) return false
@@ -22,6 +22,23 @@ export function isLeadEvent(e: GoalEvent, workerParts: ReadonlySet<string> = new
   if (e.type === 'request_completed') return e.outcome === 'failed'
   if (e.type === 'cancelled') return e.actor === 'owner'
   return false
+}
+
+/** A later lead action makes the earlier notification obsolete, even without an inbox acknowledgement. */
+function resolved(event: GoalEvent, later: GoalEvent[]): boolean {
+  return later.some((next) => {
+    if (event.type === 'owner_requested') return (next.type === 'request_decided' || next.type === 'request_withdrawn') && next.requestId === event.requestId
+    if (event.type === 'progress' && event.code === 'goal_idle') {
+      return (next.assignmentId === event.goalId && (next.type === 'closed' || next.type === 'cancelled')) ||
+        (next.actor === 'lead' && ['assigned', 'answered', 'steered', 'returned', 'reassigned', 'reopened', 'unblocked', 'closed', 'cancelled'].includes(next.type))
+    }
+    if (event.type === 'run_ended' && event.outcome === 'failed' && next.assignmentId === event.goalId && (next.type === 'closed' || next.type === 'cancelled')) return true
+    if (next.assignmentId !== event.assignmentId) return false
+    if (event.type === 'reported') return ['closed', 'cancelled', 'returned'].includes(next.type)
+    if (event.type === 'question') return next.type === 'answered' || next.type === 'escalated'
+    if (event.type === 'run_ended' && event.outcome === 'failed') return ['closed', 'cancelled'].includes(next.type) || (next.actor === 'lead' && ['answered', 'steered', 'returned', 'reassigned', 'reopened', 'unblocked'].includes(next.type))
+    return false
+  })
 }
 
 type Delivered = { delivered: Record<string, number> }
@@ -52,6 +69,7 @@ export function createInbox(store: EventStore, now: () => number = Date.now) {
   const offered = new Map<string, Map<string, number>>()
   // The session's last MCP request (or its take): how long its unconfirmed batch still hides events.
   const activeAt = new Map<string, number>()
+  const waiters = new Set<Set<string>>()
   const highest = (events: GoalEvent[]) => {
     const top = new Map<string, number>()
     for (const e of events) top.set(e.goalId, Math.max(top.get(e.goalId) ?? 0, e.seq))
@@ -69,7 +87,7 @@ export function createInbox(store: EventStore, now: () => number = Date.now) {
           const sentBack = new Map<string, number>()
           for (const e of events) if (e.type === 'returned' && e.actor === 'lead' && !sentBack.has(e.assignmentId)) sentBack.set(e.assignmentId, e.seq)
           const afterReturn = (e: GoalEvent): boolean => e.type === 'reported' && e.seq > (sentBack.get(e.assignmentId) ?? Number.POSITIVE_INFINITY)
-          return events.filter((e) => e.seq > (delivered[g.goalId] ?? 0) && (isLeadEvent(e, parts) || afterReturn(e)))
+          return events.filter((e, index) => e.seq > (delivered[g.goalId] ?? 0) && (isLeadEvent(e, parts) || afterReturn(e)) && !resolved(e, events.slice(index + 1)))
         }),
       )
       return lists.flat()
@@ -86,8 +104,15 @@ export function createInbox(store: EventStore, now: () => number = Date.now) {
     touch(session: string): void {
       activeAt.set(session, now())
     },
+    /** Keep currently live sessions present for the lifetime of a project wait. */
+    waiting(): () => void {
+      const sessions = new Set([...offered.keys()].filter((session) => now() - (activeAt.get(session) ?? 0) <= INBOX_HOLD_MS))
+      waiters.add(sessions)
+      return () => { waiters.delete(sessions) }
+    },
     /** Unconfirmed events no live session holds: what should wake a waiting lead. */
     async unseen(): Promise<GoalEvent[]> {
+      for (const sessions of waiters) for (const session of sessions) if (offered.has(session)) activeAt.set(session, now())
       const held = new Map<string, number>()
       for (const [session, top] of offered) {
         if (now() - (activeAt.get(session) ?? 0) > INBOX_HOLD_MS) continue

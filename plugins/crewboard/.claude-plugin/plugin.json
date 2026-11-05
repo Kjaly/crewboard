@@ -1,6 +1,6 @@
 {
   "name": "crewboard",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Lead your coding agents from Claude Code through a local Crewboard server, and watch them work on one board.",
   "author": { "name": "Anton Varlamkin", "url": "https://github.com/Kjaly" },
   "homepage": "https://kjaly.github.io/crewboard/",
